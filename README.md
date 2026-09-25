@@ -87,6 +87,40 @@ python3 -m wu.cli --base $BASE analyze --subset bfs_geo_100k \
 #   ハブ重み: --hub-weight log|deg1|deg0.5
 ```
 
+## 全グラフ Leiden(全 1.45M ノードのコミュニティ分割 → 銀河/銀河団プロトタイプ)
+
+`scripts/run_full_leiden.py`(工程別サブコマンド制、各段階がディスクに保存され再開可能):
+
+```bash
+# 0) スモーク(数分): 先頭 500 万エッジで動作確認 → 本番前に membership_res*.npy を削除するか --force
+python scripts/run_full_leiden.py --base data dedup
+python scripts/run_full_leiden.py --base data detect --resolutions 1.0 --max-edges 5000000 --force
+
+# 1) 無向一意化: 142.4M 有向 → ~100-110M 無向一意(~4-6分、RAM ピーク ~4-5GB)
+python scripts/run_full_leiden.py --base data dedup
+
+# 2) 検出: igraph ネイティブ Leiden(グラフ構築 ~6-10分 + res ごと ~10-45分、RSS ~7-9GB)
+#    複数 resolution は 1 回の起動でまとめて実行(グラフ構築を共有)
+python scripts/run_full_leiden.py --base data detect --resolutions 0.5,1.0,2.0
+
+# 3) 指標(チャンク方式、~3-6分)→ 4) L2 銀河団クラスタリング(1分)→ 5) エクスポート
+python scripts/run_full_leiden.py --base data metrics --resolution 1.0
+python scripts/run_full_leiden.py --base data cluster --resolution 1.0
+python scripts/run_full_leiden.py --base data export  --resolution 1.0
+```
+
+出力は `data/community/full/`:
+`membership_res<R>.npy`(ノード→コミュニティ、compact idx 順)/ `detect_meta.json` /
+`metrics_res<R>.json`(全体指標)/ `per_community_res<R>.parquet`(コミュニティ別指標+代表記事)/
+`top_pairs_res<R>.json`(コミュニティ間エッジ top50)/ `pairs_res<R>.npz` /
+`clusters_comm_res<R>.npy`・`clusters_node_res<R>.npy`・`clusters_meta_res<R>.json`(L2=銀河団)/
+`membership_res<R>.parquet`(page_id+title+comm+cluster の結合表)。
+
+期待値の目安(実行前に共有しておくべき想定):
+- 無向一意エッジ ~100–110M(相互リンク率 ~23–30%、正確な値は `graph/dedup_meta.json`)
+- res=1.0 で コミュニティ数 ~1,000–5,000、modularity ~0.6–0.8、最大シェア <5% が望ましい
+- `cluster` の出力がそのまま **Universe → Galaxy Cluster(L2) → Galaxy(L1) → Article** の §4.2 階層
+
 ## 指標定義(評価レポート共通)
 
 コミュニティ c について(エッジはサブセット内部の無向一意リンク):
