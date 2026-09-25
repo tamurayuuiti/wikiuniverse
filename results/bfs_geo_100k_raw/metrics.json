@@ -1,0 +1,1531 @@
+{
+  "meta": {
+    "generated_at": "2026-09-25T14:24:15",
+    "subset_dir": "/tmp/arena/tenants/808e6694-2a08-4465-b094-87a2114146ff/sessions/849e32c1-a28d-4da5-8e78-be3e08cefe5f/workspace/.cache/wudata/subsets/bfs_geo_100k",
+    "seed": 42,
+    "resolution": 0.5,
+    "hub_indeg_cap": null,
+    "hub_outdeg_cap": null,
+    "hub_weight": null,
+    "engine": "igraph",
+    "hub_filter_info": null,
+    "degree_budget_info": null,
+    "resolutions_tried": [
+      0.5,
+      1.0,
+      2.0
+    ],
+    "total_secs": 104.4
+  },
+  "subset_meta": {
+    "strategy": "outlink_bfs",
+    "seeds": [
+      "東京都",
+      "大阪府",
+      "京都府",
+      "北海道",
+      "福岡県",
+      "愛知県",
+      "宮城県",
+      "広島県",
+      "新潟県",
+      "長野県",
+      "日本の地理",
+      "市町村"
+    ],
+    "seeds_missing": [],
+    "seed_page_ids": [
+      774362,
+      382164,
+      774371,
+      436,
+      254551,
+      934064,
+      1639435,
+      428,
+      424,
+      421,
+      4080,
+      33363
+    ],
+    "max_nodes": 100000,
+    "cap_per_node": 60,
+    "max_hops": 4,
+    "rng_seed": 42,
+    "bfs_info": {
+      "hops": [
+        {
+          "hop": 1,
+          "frontier": 12,
+          "new_nodes": 600,
+          "total": 612
+        },
+        {
+          "hop": 2,
+          "frontier": 600,
+          "new_nodes": 22243,
+          "total": 22855
+        },
+        {
+          "hop": 3,
+          "frontier": 22243,
+          "new_nodes": 77145,
+          "total": 100000
+        }
+      ],
+      "excluded_hubs": 165930,
+      "max_in_degree": 10000
+    },
+    "dump_date": "2026-09-02",
+    "created_at": "2026-09-25T13:41:30",
+    "n_nodes": 100000,
+    "n_edges_internal_directed": 6874293,
+    "n_edges_outgoing": 13286361,
+    "n_edges_incoming": 26024757,
+    "leak_ratio_out": 0.6590243054615192,
+    "boundary_any_nodes": 99994,
+    "boundary_any_ratio": 0.99994,
+    "build_secs": 26.9,
+    "page_id_min": 10,
+    "page_id_max": 5288953
+  },
+  "sweep": [
+    {
+      "resolution": 0.5,
+      "n_communities": 11,
+      "largest_comm_share": 0.30273,
+      "top5_comm_share": 0.97911,
+      "cross_edge_fraction": 0.2397243843536149,
+      "mean_out_ratio_edge_weighted": 0.3867381933906314,
+      "p25": 288.0,
+      "p50": 919.0,
+      "p75": 16412.0,
+      "quality": 0.6484690268941485,
+      "modularity": 0.6484690268941485,
+      "secs": 33.4
+    },
+    {
+      "resolution": 1.0,
+      "n_communities": 23,
+      "largest_comm_share": 0.15135,
+      "top5_comm_share": 0.60739,
+      "cross_edge_fraction": 0.3309106505738225,
+      "mean_out_ratio_edge_weighted": 0.497269520581491,
+      "p25": 378.5,
+      "p50": 2136.0,
+      "p75": 7857.0,
+      "quality": 0.5784305291838093,
+      "modularity": 0.5784305291838094,
+      "secs": 31.9
+    },
+    {
+      "resolution": 2.0,
+      "n_communities": 45,
+      "largest_comm_share": 0.08622,
+      "top5_comm_share": 0.33613,
+      "cross_edge_fraction": 0.39713705504225844,
+      "mean_out_ratio_edge_weighted": 0.5685012126891824,
+      "p25": 807.0,
+      "p50": 1415.0,
+      "p75": 3009.0,
+      "quality": 0.5119994149626775,
+      "modularity": 0.5119994149626778,
+      "secs": 31.2
+    }
+  ],
+  "global": {
+    "n_communities": 11,
+    "n_nodes": 100000,
+    "n_edges_internal_undirected": 5131639,
+    "n_cross_community_edges": 1230179,
+    "n_edges_to_outside_subset": 13286361,
+    "n_edges_from_outside_subset": 26024757,
+    "largest_comm_share": 0.30273,
+    "top5_comm_share": 0.97911,
+    "cross_edge_fraction": 0.2397243843536149,
+    "mean_out_ratio_edge_weighted": 0.3867381933906314,
+    "size_percentiles": {
+      "p5": 78.5,
+      "p25": 288.0,
+      "p50": 919.0,
+      "p75": 16412.0,
+      "p95": 28974.0
+    },
+    "out_ratio_percentiles": {
+      "p10": 0.22593128083007313,
+      "p25": 0.2878888527088011,
+      "p50": 0.3711584821132213,
+      "p75": 0.39752351310232836,
+      "p90": 0.43333333333333335
+    },
+    "conductance_percentiles": {
+      "p10": 0.12735204583043697,
+      "p25": 0.1694444323673217,
+      "p50": 0.22786654075146226,
+      "p75": 0.24807558308332878,
+      "p90": 0.2765957446808511
+    },
+    "node_weighted_median_out_ratio": 0.39363512234844444,
+    "secs": 0.25
+  },
+  "per_community": {
+    "comm": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "N_c": [
+      30273,
+      27675,
+      14538,
+      919,
+      437,
+      18286,
+      7139,
+      35,
+      405,
+      122,
+      171
+    ],
+    "E_in_c": [
+      1006747,
+      1122921,
+      805690,
+      36681,
+      18203,
+      663092,
+      206007,
+      595,
+      26297,
+      6133,
+      9094
+    ],
+    "E_out_c": [
+      653552,
+      671832,
+      540294,
+      11012,
+      5313,
+      391374,
+      166434,
+      455,
+      13844,
+      987,
+      5261
+    ],
+    "E_ext_c": [
+      10401354,
+      8283224,
+      6855875,
+      491131,
+      266943,
+      10423088,
+      2406450,
+      2342,
+      89932,
+      39067,
+      51712
+    ],
+    "E_ext_out_c": [
+      3314835,
+      3048686,
+      1595004,
+      249593,
+      134226,
+      4022143,
+      839640,
+      1186,
+      40744,
+      18963,
+      21341
+    ],
+    "E_ext_in_c": [
+      7086519,
+      5234538,
+      5260871,
+      241538,
+      132717,
+      6400945,
+      1566810,
+      1156,
+      49188,
+      20104,
+      30371
+    ],
+    "out_ratio_c": [
+      0.39363512234844444,
+      0.3743311753762217,
+      0.4014119038562123,
+      0.23089342251483447,
+      0.22593128083007313,
+      0.3711584821132213,
+      0.4468734645218974,
+      0.43333333333333335,
+      0.34488428290276774,
+      0.13862359550561798,
+      0.3664925113200975
+    ],
+    "conductance_c": [
+      0.24504714204404424,
+      0.23026287378233484,
+      0.25110402412261335,
+      0.13051413942683765,
+      0.12735204583043697,
+      0.22786654075146226,
+      0.28772508505518213,
+      0.2765957446808511,
+      0.20837472530780576,
+      0.0744737040670037,
+      0.22435924772911425
+    ],
+    "avg_degree_c": [
+      66.51121461368216,
+      81.15056910569106,
+      110.83918007979089,
+      79.82807399347116,
+      83.30892448512586,
+      72.524554303839,
+      57.713125087547276,
+      34.0,
+      129.86172839506173,
+      100.54098360655738,
+      106.3625730994152
+    ],
+    "boundary_nodes_c": [
+      27337,
+      25548,
+      13526,
+      918,
+      437,
+      17688,
+      6867,
+      35,
+      403,
+      120,
+      171
+    ],
+    "boundary_node_ratio_c": [
+      0.903015888745747,
+      0.9231436314363144,
+      0.9303893245288211,
+      0.998911860718172,
+      1.0,
+      0.9672973859783441,
+      0.9618994256898725,
+      1.0,
+      0.9950617283950617,
+      0.9836065573770492,
+      1.0
+    ],
+    "boundary_any_nodes_c": [
+      30272,
+      27675,
+      14536,
+      919,
+      437,
+      18286,
+      7139,
+      35,
+      405,
+      122,
+      171
+    ],
+    "ext_ratio_c": [
+      0.6662805464134233,
+      0.6294465564653545,
+      0.5423361128981146,
+      0.8395719946448874,
+      0.8509211243676383,
+      0.7922893017760477,
+      0.6927259811844257,
+      0.5304114490161002,
+      0.5037275143722569,
+      0.7270252654986006,
+      0.5978541012998655
+    ]
+  },
+  "community_labels": {
+    "0": [
+      "内閣総理大臣",
+      "日本共産党",
+      "19世紀"
+    ],
+    "1": [
+      "東京都",
+      "北海道",
+      "大阪府"
+    ],
+    "2": [
+      "明治維新",
+      "天皇",
+      "8月29日"
+    ],
+    "3": [
+      "建設省",
+      "大阪府道10号・兵庫県道100号大阪池田線",
+      "岡山県道・兵庫県道96号岡山赤穂線"
+    ],
+    "4": [
+      "長野県道・愛知県道・静岡県道1号飯田富山佐久間線",
+      "静岡県道・愛知県道173号湖西東細谷線",
+      "中部地方の道路一覧"
+    ],
+    "5": [
+      "毎日新聞社",
+      "スポーツニッポン",
+      "ジャパン・ニュース・ネットワーク"
+    ],
+    "6": [
+      "大学",
+      "文部科学省",
+      "筑波大学"
+    ],
+    "7": [
+      "アスペクト比",
+      "東京都旗",
+      "静岡県旗"
+    ],
+    "8": [
+      "日本語の方言",
+      "近畿方言",
+      "業界用語"
+    ],
+    "9": [
+      "ISO_3166",
+      "国名コード",
+      "ISO_3166-2:RU"
+    ],
+    "10": [
+      "美術館",
+      "国立文化財機構",
+      "公立"
+    ]
+  },
+  "top_inter_pairs": [
+    {
+      "comm_a": 0,
+      "comm_b": 1,
+      "edges": 260197
+    },
+    {
+      "comm_a": 0,
+      "comm_b": 2,
+      "edges": 208111
+    },
+    {
+      "comm_a": 1,
+      "comm_b": 2,
+      "edges": 204565
+    },
+    {
+      "comm_a": 1,
+      "comm_b": 5,
+      "edges": 139511
+    },
+    {
+      "comm_a": 0,
+      "comm_b": 5,
+      "edges": 121185
+    },
+    {
+      "comm_a": 2,
+      "comm_b": 5,
+      "edges": 94166
+    },
+    {
+      "comm_a": 0,
+      "comm_b": 6,
+      "edges": 55936
+    },
+    {
+      "comm_a": 1,
+      "comm_b": 6,
+      "edges": 47839
+    },
+    {
+      "comm_a": 5,
+      "comm_b": 6,
+      "edges": 34061
+    },
+    {
+      "comm_a": 2,
+      "comm_b": 6,
+      "edges": 27873
+    },
+    {
+      "comm_a": 1,
+      "comm_b": 3,
+      "edges": 9434
+    },
+    {
+      "comm_a": 0,
+      "comm_b": 8,
+      "edges": 5783
+    },
+    {
+      "comm_a": 1,
+      "comm_b": 4,
+      "edges": 4647
+    },
+    {
+      "comm_a": 1,
+      "comm_b": 8,
+      "edges": 3177
+    },
+    {
+      "comm_a": 2,
+      "comm_b": 8,
+      "edges": 2898
+    },
+    {
+      "comm_a": 1,
+      "comm_b": 10,
+      "edges": 2292
+    },
+    {
+      "comm_a": 5,
+      "comm_b": 8,
+      "edges": 1633
+    },
+    {
+      "comm_a": 2,
+      "comm_b": 10,
+      "edges": 1324
+    },
+    {
+      "comm_a": 0,
+      "comm_b": 9,
+      "edges": 947
+    },
+    {
+      "comm_a": 2,
+      "comm_b": 3,
+      "edges": 904
+    }
+  ],
+  "hub_rows": [
+    {
+      "rank": 1,
+      "idx": 45147,
+      "title": "東京都",
+      "page_id": 774362,
+      "deg_internal": 14055,
+      "deg_outside": 99989,
+      "comm": 1,
+      "flags": []
+    },
+    {
+      "rank": 2,
+      "idx": 47,
+      "title": "北海道",
+      "page_id": 436,
+      "deg_internal": 9879,
+      "deg_outside": 47250,
+      "comm": 1,
+      "flags": []
+    },
+    {
+      "rank": 3,
+      "idx": 32280,
+      "title": "大阪府",
+      "page_id": 382164,
+      "deg_internal": 7119,
+      "deg_outside": 41413,
+      "comm": 1,
+      "flags": []
+    },
+    {
+      "rank": 4,
+      "idx": 49400,
+      "title": "愛知県",
+      "page_id": 934064,
+      "deg_internal": 6479,
+      "deg_outside": 42031,
+      "comm": 1,
+      "flags": []
+    },
+    {
+      "rank": 5,
+      "idx": 25880,
+      "title": "福岡県",
+      "page_id": 254551,
+      "deg_internal": 5915,
+      "deg_outside": 30858,
+      "comm": 1,
+      "flags": []
+    },
+    {
+      "rank": 6,
+      "idx": 6081,
+      "title": "市町村",
+      "page_id": 33363,
+      "deg_internal": 3974,
+      "deg_outside": 28737,
+      "comm": 1,
+      "flags": []
+    },
+    {
+      "rank": 7,
+      "idx": 44,
+      "title": "長野県",
+      "page_id": 421,
+      "deg_internal": 4876,
+      "deg_outside": 22688,
+      "comm": 1,
+      "flags": []
+    },
+    {
+      "rank": 8,
+      "idx": 46,
+      "title": "広島県",
+      "page_id": 428,
+      "deg_internal": 4732,
+      "deg_outside": 22279,
+      "comm": 1,
+      "flags": []
+    },
+    {
+      "rank": 9,
+      "idx": 45148,
+      "title": "京都府",
+      "page_id": 774371,
+      "deg_internal": 4404,
+      "deg_outside": 22025,
+      "comm": 1,
+      "flags": []
+    },
+    {
+      "rank": 10,
+      "idx": 45,
+      "title": "新潟県",
+      "page_id": 424,
+      "deg_internal": 4513,
+      "deg_outside": 21207,
+      "comm": 1,
+      "flags": []
+    },
+    {
+      "rank": 11,
+      "idx": 63009,
+      "title": "宮城県",
+      "page_id": 1639435,
+      "deg_internal": 4604,
+      "deg_outside": 19241,
+      "comm": 1,
+      "flags": []
+    },
+    {
+      "rank": 12,
+      "idx": 41909,
+      "title": "仙台市",
+      "page_id": 658605,
+      "deg_internal": 2389,
+      "deg_outside": 8809,
+      "comm": 1,
+      "flags": []
+    },
+    {
+      "rank": 13,
+      "idx": 1113,
+      "title": "8月10日",
+      "page_id": 5428,
+      "deg_internal": 2145,
+      "deg_outside": 8963,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 14,
+      "idx": 1200,
+      "title": "10月3日",
+      "page_id": 5708,
+      "deg_internal": 2046,
+      "deg_outside": 9029,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 15,
+      "idx": 1204,
+      "title": "10月14日",
+      "page_id": 5717,
+      "deg_internal": 2132,
+      "deg_outside": 8921,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 16,
+      "idx": 1201,
+      "title": "10月6日",
+      "page_id": 5712,
+      "deg_internal": 1952,
+      "deg_outside": 9002,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 17,
+      "idx": 924,
+      "title": "4月23日",
+      "page_id": 4886,
+      "deg_internal": 1990,
+      "deg_outside": 8960,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 18,
+      "idx": 1136,
+      "title": "9月20日",
+      "page_id": 5560,
+      "deg_internal": 2106,
+      "deg_outside": 8844,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 19,
+      "idx": 928,
+      "title": "4月28日",
+      "page_id": 4891,
+      "deg_internal": 2130,
+      "deg_outside": 8809,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 20,
+      "idx": 942,
+      "title": "5月10日",
+      "page_id": 4923,
+      "deg_internal": 1989,
+      "deg_outside": 8914,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 21,
+      "idx": 97520,
+      "title": "トヨタ自動車",
+      "page_id": 4920392,
+      "deg_internal": 1715,
+      "deg_outside": 9182,
+      "comm": 1,
+      "flags": []
+    },
+    {
+      "rank": 22,
+      "idx": 60083,
+      "title": "10月27日",
+      "page_id": 1465117,
+      "deg_internal": 2086,
+      "deg_outside": 8792,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 23,
+      "idx": 84550,
+      "title": "AKB48",
+      "page_id": 3386415,
+      "deg_internal": 1281,
+      "deg_outside": 9589,
+      "comm": 5,
+      "flags": []
+    },
+    {
+      "rank": 24,
+      "idx": 603,
+      "title": "3月13日",
+      "page_id": 3557,
+      "deg_internal": 2234,
+      "deg_outside": 8629,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 25,
+      "idx": 602,
+      "title": "3月12日",
+      "page_id": 3556,
+      "deg_internal": 2161,
+      "deg_outside": 8686,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 26,
+      "idx": 690,
+      "title": "3月19日",
+      "page_id": 3997,
+      "deg_internal": 2040,
+      "deg_outside": 8799,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 27,
+      "idx": 779,
+      "title": "イスラエル",
+      "page_id": 4361,
+      "deg_internal": 1420,
+      "deg_outside": 9415,
+      "comm": 0,
+      "flags": []
+    },
+    {
+      "rank": 28,
+      "idx": 926,
+      "title": "4月26日",
+      "page_id": 4889,
+      "deg_internal": 2005,
+      "deg_outside": 8826,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 29,
+      "idx": 1186,
+      "title": "8月30日",
+      "page_id": 5635,
+      "deg_internal": 2078,
+      "deg_outside": 8735,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    },
+    {
+      "rank": 30,
+      "idx": 1280,
+      "title": "12月24日",
+      "page_id": 5949,
+      "deg_internal": 1948,
+      "deg_outside": 8846,
+      "comm": 2,
+      "flags": [
+        "date"
+      ]
+    }
+  ],
+  "hub_stats": {
+    "top1pct_internal_edge_incidence_share": 0.2550194976692632,
+    "degree_percentiles": {
+      "p50": 49.0,
+      "p75": 111.0,
+      "p90": 234.0,
+      "p99": 829.0
+    },
+    "max_internal_degree": 14055
+  },
+  "hierarchy": {
+    "clusters": [
+      {
+        "cluster": 0,
+        "n_comms": 11,
+        "N_nodes": 100000,
+        "E_in_articles": 3901460.0,
+        "E_between_comms": 1230179.0,
+        "E_out2": 0.0,
+        "E_ext_outside_subset": 39311118.0,
+        "out_ratio2": 0.0,
+        "conductance2": 0.0
+      }
+    ],
+    "global": {
+      "n_clusters": 1,
+      "resolution": 1.0,
+      "modularity_community_graph": 0.0,
+      "mean_out_ratio2_edge_weighted": 0.0,
+      "largest_cluster_share": 1.0,
+      "out_ratio2_percentiles": {}
+    },
+    "comm_to_cluster": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "full_graph_stats": {
+    "stats": {
+      "n_articles": 1516326,
+      "n_edges_directed_resolved": 142446159,
+      "endpoint_remap_failures": 4096,
+      "avg_out_degree": 93.94164513435766,
+      "degree_percentiles": {
+        "p50": 69.0,
+        "p75": 183.0,
+        "p90": 420.0,
+        "p95": 653.0,
+        "p99": 1569.0,
+        "p99.9": 6062.425000003073
+      },
+      "max_degree": 421728,
+      "n_isolated_articles": 436,
+      "edge_share_top0.1pct_nodes": 0.08634394041316293,
+      "edge_share_top1pct_nodes": 0.20123554725544798,
+      "secs": 46.4
+    },
+    "top_hubs": [
+      {
+        "rank": 1,
+        "page_id": 4821051,
+        "title": "日本",
+        "in": 420190,
+        "out": 1538,
+        "total": 421728,
+        "flags": []
+      },
+      {
+        "rank": 2,
+        "page_id": 4145,
+        "title": "ISBN",
+        "in": 225886,
+        "out": 434,
+        "total": 226320,
+        "flags": []
+      },
+      {
+        "rank": 3,
+        "page_id": 3377,
+        "title": "英語",
+        "in": 184412,
+        "out": 403,
+        "total": 184815,
+        "flags": []
+      },
+      {
+        "rank": 4,
+        "page_id": 2115245,
+        "title": "地理座標系",
+        "in": 173434,
+        "out": 101,
+        "total": 173535,
+        "flags": []
+      },
+      {
+        "rank": 5,
+        "page_id": 1698838,
+        "title": "アメリカ合衆国",
+        "in": 170043,
+        "out": 1930,
+        "total": 171973,
+        "flags": []
+      },
+      {
+        "rank": 6,
+        "page_id": 1789,
+        "title": "昭和",
+        "in": 132550,
+        "out": 2267,
+        "total": 134817,
+        "flags": []
+      },
+      {
+        "rank": 7,
+        "page_id": 774362,
+        "title": "東京都",
+        "in": 113269,
+        "out": 1326,
+        "total": 114595,
+        "flags": []
+      },
+      {
+        "rank": 8,
+        "page_id": 2904886,
+        "title": "日本の郵便番号",
+        "in": 108928,
+        "out": 1457,
+        "total": 110385,
+        "flags": [
+          "jp_geo"
+        ]
+      },
+      {
+        "rank": 9,
+        "page_id": 4931928,
+        "title": "X_(ソーシャル・ネットワーキング・サービス)",
+        "in": 103495,
+        "out": 198,
+        "total": 103693,
+        "flags": []
+      },
+      {
+        "rank": 10,
+        "page_id": 1069779,
+        "title": "2007年",
+        "in": 95910,
+        "out": 1403,
+        "total": 97313,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 11,
+        "page_id": 332554,
+        "title": "2005年",
+        "in": 95553,
+        "out": 1203,
+        "total": 96756,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 12,
+        "page_id": 2053712,
+        "title": "2010年",
+        "in": 94726,
+        "out": 1181,
+        "total": 95907,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 13,
+        "page_id": 4597053,
+        "title": "平成",
+        "in": 92033,
+        "out": 3264,
+        "total": 95297,
+        "flags": []
+      },
+      {
+        "rank": 14,
+        "page_id": 793034,
+        "title": "2006年",
+        "in": 91846,
+        "out": 1233,
+        "total": 93079,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 15,
+        "page_id": 1448844,
+        "title": "2008年",
+        "in": 90243,
+        "out": 1437,
+        "total": 91680,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 16,
+        "page_id": 1917,
+        "title": "2009年",
+        "in": 88230,
+        "out": 1341,
+        "total": 89571,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 17,
+        "page_id": 7829,
+        "title": "2011年",
+        "in": 84185,
+        "out": 1352,
+        "total": 85537,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 18,
+        "page_id": 2704707,
+        "title": "ウェイバックマシン",
+        "in": 83917,
+        "out": 83,
+        "total": 84000,
+        "flags": []
+      },
+      {
+        "rank": 19,
+        "page_id": 7831,
+        "title": "2012年",
+        "in": 81320,
+        "out": 1144,
+        "total": 82464,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 20,
+        "page_id": 935867,
+        "title": "2004年",
+        "in": 79624,
+        "out": 1150,
+        "total": 80774,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 21,
+        "page_id": 13144,
+        "title": "2015年",
+        "in": 78938,
+        "out": 1326,
+        "total": 80264,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 22,
+        "page_id": 1803,
+        "title": "明治",
+        "in": 77240,
+        "out": 1460,
+        "total": 78700,
+        "flags": []
+      },
+      {
+        "rank": 23,
+        "page_id": 1547,
+        "title": "2000年",
+        "in": 77342,
+        "out": 1142,
+        "total": 78484,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 24,
+        "page_id": 894212,
+        "title": "YouTube",
+        "in": 76922,
+        "out": 1001,
+        "total": 77923,
+        "flags": []
+      },
+      {
+        "rank": 25,
+        "page_id": 13068,
+        "title": "2013年",
+        "in": 75663,
+        "out": 1418,
+        "total": 77081,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 26,
+        "page_id": 11183,
+        "title": "2014年",
+        "in": 75720,
+        "out": 1272,
+        "total": 76992,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 27,
+        "page_id": 1491,
+        "title": "2003年",
+        "in": 74689,
+        "out": 1089,
+        "total": 75778,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 28,
+        "page_id": 13145,
+        "title": "2016年",
+        "in": 72808,
+        "out": 1410,
+        "total": 74218,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 29,
+        "page_id": 1532,
+        "title": "2002年",
+        "in": 69761,
+        "out": 1105,
+        "total": 70866,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 30,
+        "page_id": 813,
+        "title": "2001年",
+        "in": 69259,
+        "out": 1145,
+        "total": 70404,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 31,
+        "page_id": 9335,
+        "title": "レコードレーベル",
+        "in": 69590,
+        "out": 381,
+        "total": 69971,
+        "flags": []
+      },
+      {
+        "rank": 32,
+        "page_id": 13146,
+        "title": "2017年",
+        "in": 67653,
+        "out": 1903,
+        "total": 69556,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 33,
+        "page_id": 1698893,
+        "title": "イギリス",
+        "in": 68169,
+        "out": 1221,
+        "total": 69390,
+        "flags": []
+      },
+      {
+        "rank": 34,
+        "page_id": 285441,
+        "title": "デジタルオブジェクト識別子",
+        "in": 68139,
+        "out": 38,
+        "total": 68177,
+        "flags": []
+      },
+      {
+        "rank": 35,
+        "page_id": 2004,
+        "title": "4月1日",
+        "in": 65892,
+        "out": 1635,
+        "total": 67527,
+        "flags": [
+          "date"
+        ]
+      },
+      {
+        "rank": 36,
+        "page_id": 5752,
+        "title": "ポピュラー音楽のジャンル一覧",
+        "in": 66769,
+        "out": 208,
+        "total": 66977,
+        "flags": [
+          "list"
+        ]
+      },
+      {
+        "rank": 37,
+        "page_id": 13069,
+        "title": "2019年",
+        "in": 65886,
+        "out": 958,
+        "total": 66844,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 38,
+        "page_id": 13129,
+        "title": "2020年",
+        "in": 65597,
+        "out": 974,
+        "total": 66571,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 39,
+        "page_id": 2025673,
+        "title": "1995年",
+        "in": 64425,
+        "out": 1725,
+        "total": 66150,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 40,
+        "page_id": 13067,
+        "title": "2018年",
+        "in": 64336,
+        "out": 1159,
+        "total": 65495,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 41,
+        "page_id": 1548,
+        "title": "1999年",
+        "in": 63765,
+        "out": 1034,
+        "total": 64799,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 42,
+        "page_id": 1698872,
+        "title": "フランス",
+        "in": 61871,
+        "out": 1619,
+        "total": 63490,
+        "flags": []
+      },
+      {
+        "rank": 43,
+        "page_id": 2025684,
+        "title": "1998年",
+        "in": 61043,
+        "out": 1110,
+        "total": 62153,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 44,
+        "page_id": 13130,
+        "title": "2021年",
+        "in": 59319,
+        "out": 1105,
+        "total": 60424,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 45,
+        "page_id": 2025310,
+        "title": "1997年",
+        "in": 58771,
+        "out": 1136,
+        "total": 59907,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 46,
+        "page_id": 2479550,
+        "title": "Instagram",
+        "in": 59267,
+        "out": 421,
+        "total": 59688,
+        "flags": []
+      },
+      {
+        "rank": 47,
+        "page_id": 1520,
+        "title": "1996年",
+        "in": 58061,
+        "out": 1344,
+        "total": 59405,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 48,
+        "page_id": 1565,
+        "title": "1993年",
+        "in": 57147,
+        "out": 1237,
+        "total": 58384,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 49,
+        "page_id": 436,
+        "title": "北海道",
+        "in": 56293,
+        "out": 1954,
+        "total": 58247,
+        "flags": []
+      },
+      {
+        "rank": 50,
+        "page_id": 1560,
+        "title": "1994年",
+        "in": 56687,
+        "out": 1103,
+        "total": 57790,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 51,
+        "page_id": 1450076,
+        "title": "1990年",
+        "in": 54335,
+        "out": 1595,
+        "total": 55930,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 52,
+        "page_id": 1349811,
+        "title": "1992年",
+        "in": 53168,
+        "out": 1142,
+        "total": 54310,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 53,
+        "page_id": 1318700,
+        "title": "1991年",
+        "in": 52936,
+        "out": 1313,
+        "total": 54249,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 54,
+        "page_id": 13073,
+        "title": "2022年",
+        "in": 52921,
+        "out": 1166,
+        "total": 54087,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 55,
+        "page_id": 1931422,
+        "title": "1987年",
+        "in": 52774,
+        "out": 1238,
+        "total": 54012,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 56,
+        "page_id": 1578,
+        "title": "1989年",
+        "in": 51907,
+        "out": 1404,
+        "total": 53311,
+        "flags": [
+          "year"
+        ]
+      },
+      {
+        "rank": 57,
+        "page_id": 1698878,
+        "title": "ドイツ",
+        "in": 51806,
+        "out": 1375,
+        "total": 53181,
+        "flags": []
+      },
+      {
+        "rank": 58,
+        "page_id": 4058860,
+        "title": "フジテレビジョン",
+        "in": 49719,
+        "out": 1921,
+        "total": 51640,
+        "flags": []
+      },
+      {
+        "rank": 59,
+        "page_id": 2008,
+        "title": "俳優",
+        "in": 50873,
+        "out": 163,
+        "total": 51036,
+        "flags": []
+      },
+      {
+        "rank": 60,
+        "page_id": 83306,
+        "title": "シングル",
+        "in": 50008,
+        "out": 515,
+        "total": 50523,
+        "flags": []
+      }
+    ]
+  }
+}

@@ -1,0 +1,125 @@
+# wikiuniverse — jawiki 全記事グラフ「宇宙/銀河団/銀河/記事」可視化 PoC ツールキット
+
+**最重要仮説**: 「実際の jawiki グラフは、内部結合が強く・外部結合が弱く・計算的に独立させやすい単位に分割できるか?」を検証するためのパイプライン。
+
+第 1 回検証結果と数値は → [`results/SUMMARY.md`](results/SUMMARY.md)(暫定判定: **B 条件付きで有望**)
+
+## 設計原則
+
+1. **3 層分離**: 保存層(全ノード・全エッジ)/ レイアウト層(smart 剪定・ハブ抑制した近似グラフ)/ 描画層(LOD・間引き)
+2. **低 RAM ストリーミング**: 巨大 dict / NetworkX 全読み込みを避け、
+   - タイトル結合は blake2b64 ハッシュ + ソート済み配列 `searchsorted`
+   - エッジは int32 ペアの生バイナリ(`edges_ns0.bin`)+ memmap
+   - SQL ダンプはチャンク逐次解析(チェックポイント resume 付き)
+   - igraph は **バッチ add_edges + malloc_trim**、Leiden は **igraph ネイティブ engine**(leidenalg の 2 倍メモリ効率)
+3. **再現性**: dump 日付・シード(42)・パラメータ・実行時間をすべて `meta.json` / `metrics.json` に記録
+
+## ディレクトリ
+
+### コード(ワークスペース直下、構成は不変)
+
+```
+wikiuniverse/
+├── wu/                    # 本体パッケージ
+│   ├── paths.py           # ★ データレイアウトの単一の真実(Dirs クラス)
+│   ├── dumpio.py          # ダウンロード(resume/並列)、gz ストリーム、json I/O
+│   ├── sqlparse.py        # page/linktarget/redirect のストリーミング解析 → parsed/
+│   ├── buildedges.py      # pagelinks → 解決済み ns0 エッジ(ベクトル化 join、チェックポイント)
+│   ├── stats.py           # 全グラフ次数統計・ハブ検出(チャンク bincount)
+│   ├── subsets.py         # ID窓 / BFS(次数キャップ+メガハブ除外)サブセット抽出
+│   ├── analysis.py        # Leiden(igraph/leidenalg)、コミュニティ指標、ハブ解析、L2 階層化
+│   ├── pipeline.py        # 1 サブセットのエンドツーエンド解析(resolution スイープ→一次選択→レポート)
+│   ├── report.py          # プロット(matplotlib)+ Markdown レポート
+│   └── cli.py             # サブコマンド群
+├── scripts/               # 補助スクリプト(show_stats / summarize_runs / make_notebook 等)
+├── tests/test_synthetic.py# 合成データによる全経路自己テスト(ネットワーク不要)
+├── notebooks/poc_colab.ipynb
+└── results/               # 共有用レポート(SUMMARY.md と検証 run の report/metrics/plots)
+```
+
+### データ生成物(`--base data` 既定、工程別に分離 — 方針 2026-09-25)
+
+```
+data/
+├── dump/        # 元の Wikipedia ダンプ(.sql.gz)
+├── parsed/      # ダンプ→中間データ: articles.parquet, article_ids.npy,
+│                #   ns0_all_hashes.npz, lt_hash_ns0.npy, rd_map.npz, meta.json
+├── graph/       # 全 ns0 グラフ: edges_ns0.bin(1.14GB), edges_checkpoint.json,
+│   │            #   indeg.npy, outdeg.npy, full_stats.json
+│   └── subsets/ # サブセット別: nodes.parquet, edges_internal.npy, node_stats.npz, subset_meta.json
+└── community/   # Leiden・階層コミュニティ出力(analyze の既定 out-dir)
+                 #   run 別: metrics.json, communities.parquet, report.md, *.png
+
+# 将来の予約名(必要になった時点で追加、空ディレクトリは作らない):
+# data/layout/   # グローバル・ローカル 3D 座標
+# data/spatial/  # Morton/Octree・空間チャンク・LOD
+# data/final/    # Web 配信用の最終データ
+```
+
+パスの追加・変更時は必ず `wu/paths.py` の `Dirs` に集約すること(ハードコード禁止)。
+共有したいレポート類は `results/` へ明示的に `--out-dir results/<name>` で出力する運用。
+
+## 使い方
+
+```bash
+pip install numpy scipy pandas pyarrow matplotlib igraph leidenalg
+
+BASE=data   # 作業ディレクトリ(dump ~1.2GB + edges ~1.2GB が生成される)
+
+python3 -m wu.cli --base $BASE download --files page,redirect,linktarget,pagelinks  # ~1.13GB
+python3 -m wu.cli --base $BASE parse --dump-date 2026-09-02
+python3 -m wu.cli --base $BASE edges          # ~4分 (2vCPU) → edges_ns0.bin (1.14GB)
+python3 -m wu.cli --base $BASE stats          # 全グラフ次数・ハブ統計
+
+# サブセット(例: 地理系 BFS 10万ノード)
+python3 -m wu.cli --base $BASE subset-bfs \
+  --seeds "東京都,大阪府,京都府,北海道,福岡県,愛知県,宮城県,広島県,新潟県,長野県,日本の地理,市町村" \
+  --max-nodes 100000 --cap 60 --hops 4 --max-in-degree 10000 --name bfs_geo_100k
+
+# 解析(Leiden スイープ → 指標 → ハブ → L2 階層 → レポート)
+# 既定出力先: data/community/<subset名>。共有用は results/ へ明示出力。
+python3 -m wu.cli --base $BASE analyze --subset bfs_geo_100k \
+  --out-dir results/bfs_geo_100k_raw --resolutions 0.5,1.0,2.0 --engine igraph
+
+# レイアウト用グラフ実験
+#   smart 次数予算剪定(推奨): --degree-budget 40 --degree-budget-mode smart
+#   従来型(破砕するので非推奨): --degree-budget 40 --degree-budget-mode both
+#   ハブ重み: --hub-weight log|deg1|deg0.5
+```
+
+## 指標定義(評価レポート共通)
+
+コミュニティ c について(エッジはサブセット内部の無向一意リンク):
+
+```
+N_c       : ノード数
+E_in_c    : 内部エッジ数
+E_out_c   : c と他コミュニティを跨ぐエッジ数(c 側からカウント)
+out_ratio_c = E_out_c / (E_in_c + E_out_c)
+conductance_c = E_out_c / (2·E_in_c + E_out_c)   (= cut/vol)
+avg_degree_c  = 2·E_in_c / N_c
+boundary_nodes_c      : 社区間エッジを 1 本以上持つノード数
+boundary_node_ratio_c : boundary_nodes_c / N_c
+E_ext_out_c / E_ext_in_c : サブセット「外」への/外からの有向リンク数(リーク、別建て報告)
+```
+
+全体: コミュニティ数、最大シェア、top5 シア、cross_edge_fraction(=社区間エッジ/内部エッジ)、
+out_ratio・conductance・サイズの分布、コミュニティ間エッジ top20 ペア、L2 階層(コミュニティ間
+重み付きグラフへさらに Leiden)の同一指標。
+
+## スケーリングメモ(実測に基づく)
+
+| 規模 | エンジン | RAM 実測 | 備考 |
+|---|---|---|---|
+| 30k / 1.2M エッジ | igraph native | ~350MB | 1GB サンドボックスでフルパイプライン可 |
+| 100k / 5.1M エッジ | igraph native | **523MB** | leidenalg は >912MB で OOM |
+| 1.45M / 142M エッジ(全グラフ) | igraph native | **~10GB 想定**(58B/edge) | ローカル 32GB で実行可能見込み。Colab(13GB)はギリギリ → 2 段階分割を推奨 |
+
+全グラフ 2 段階案: ① smart-B 剪定グラフで粗い Leiden(res 低め)→ 銀河候補 ② 各銀河を独立バッチで精密 Leiden + ローカルレイアウト(§12 の Colab Job 001…分割)。境界情報は「隣接コミュニティ ID + 集約重み + アンカー座標」のみを渡す。
+
+## 既知の注意点
+
+- pagelinks は**テンプレート展開後**のリンクを含む(平均次数 94 の主因)。真の「本文リンクのみ」が必要なら XML ダンプ(4.7GB)の wikitext 解析が必要(未実装・次フェーズ候補)。
+- 赤リンク 15.2M は保存層でも現時点で破棄(ダンプに実体がないため)。将来「赤リンク=未誕生の星」として復元するなら linktarget 表(7M ns0 タイトル)から可能。
+- BFS サブセットの out-link 方向のみ(バックリンク BFS は未実装)。
+- `idwin`(ID 窓)サブセットは構造評価に使用禁止(リーク 95%、対照実験用)。

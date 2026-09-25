@@ -1,0 +1,23 @@
+{
+  "source": "https://dumps.wikimedia.org/jawiki/latest/",
+  "dump_date": "2026-09-02",
+  "downloaded_at": "2026-09-25T13:08-13:15+09:00 (sandbox)",
+  "files": {
+    "jawiki-latest-linktarget.sql.gz": {
+      "bytes": 140849240,
+      "sha256": "5faaec39e4e22bdc0b19b0a595d75e4a800e070dfc68c71568fd2c46db623670"
+    },
+    "jawiki-latest-page.sql.gz": {
+      "bytes": 171061922,
+      "sha256": "4d746500c94fea54c48e7706ed23665252d0224354c914b6de2e51b3fbb552f2"
+    },
+    "jawiki-latest-pagelinks.sql.gz": {
+      "bytes": 800089153,
+      "sha256": "253eb537aed635d2fee2eaa4ffde20a1223a3d3a140ca8d8cf0bd841df8b2adb"
+    },
+    "jawiki-latest-redirect.sql.gz": {
+      "bytes": 14125619,
+      "sha256": "344ea77d3198d5bbbdd0c1ddfdeb807eff3b687faa929bd7c46ab8606604981f"
+    }
+  }
+}
