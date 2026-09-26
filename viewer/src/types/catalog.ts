@@ -1,24 +1,25 @@
 // src/types/catalog.ts
-// ビューアが消費するカタログ/タイル形式の型定義(データ契約)を行う。
+// データ契約の型定義(export_viewer_tiles.py のディスク契約と完全一致)。
 //
 // 責務:
-// - bootstrap.json のスキーマを静的に型付ける
-// - 銀河タイルバイナリのデコード後表現を静的に型付ける
+// - bootstrap.json(compact)/ タイルバイナリ+サイドカーの TS 型表現
+// - ローダとビューアの共有契約
 //
 // 注意:
-// - フィール드変更時は生成側 scripts/export_viewer_tiles.py と必ず同期する。
-// - Raw 系のタプル順序は JSON/バイナリの物理配置を反映しており、並べ替え禁止。
+// - フィールド変更時は生成側 scripts/export_viewer_tiles.py と必ず同期する。
+// - タイル内配列は rank 順(pos/titles/edges/cross すべて同一順)。
+// - deg はタイル内に存在しない → デコード時にエッジから算出する。
 
-// マクロ行の生タプル。[x, y, z, radius, n_articles, rep_title]
+/** bootstrap.json のマクロ行: [x, y, z, r, n_articles, label]。 */
 export type RawMacro = [number, number, number, number, number, string]
 
-// 銀河行の生タプル。[x, y, z, radius, macroId, cls, n_articles, name, e_in, e_out]
+/** bootstrap.json の銀河行: [x, y, z, r, mid, display_class, n, name, e_in, e_out]。 */
 export type RawGalaxy = [number, number, number, number, number, number, number, string, number, number]
 
-// ペア行の生タプル。[a, b, weight]
+/** bootstrap.json のペア行: [a, b, w]。 */
 export type RawPair = [number, number, number]
 
-// bootstrap.json の生スキーマ。
+/** bootstrap.json 生フォーマット。 */
 export interface RawBootstrap {
   meta: {
     galaxy_tag: string
@@ -34,59 +35,90 @@ export interface RawBootstrap {
   galaxy_pairs: RawPair[]
 }
 
-// 表示クラス。0=galaxy / 1=medium(銀河間物質)/ 2=dust(孤立記事)。
-export type DisplayClass = 0 | 1 | 2
-
-// デコード済みマクロ。
+/** 表示用マクロ(銀河団)。 */
 export interface Macro {
-  id: number
+  mid: number
+  label: string
+  n: number
+  n_galaxies: number
   x: number
   y: number
   z: number
   r: number
-  n: number
-  rep: string
+  hue: number
 }
 
-// デコード済み銀河。
-export interface Galaxy {
-  id: number
+/** 表示用銀河。 */
+export interface GalaxyBoot {
+  gid: number
+  label: string
+  n: number
+  n_cross: number
+  display_class: number
   x: number
   y: number
   z: number
   r: number
-  macroId: number
-  cls: DisplayClass
-  n: number
-  name: string
-  eIn: number
-  eOut: number
+  macro: number
+  hue: number
 }
 
-// 重み付きペア。
+/** バンドル(pair)。 */
 export interface Pair {
   a: number
   b: number
   w: number
 }
 
-// デコード済み bootstrap。
-export interface Bootstrap {
-  meta: RawBootstrap['meta']
+/** ビューア用 bootstrap(解析後)。 */
+export interface BootstrapData {
+  version: string
+  generated_at: string
+  nArticles: number
   macros: Macro[]
-  galaxies: Galaxy[]
-  macroPairs: Pair[]
-  galaxyPairs: Pair[]
+  galaxies: GalaxyBoot[]
+  macroBundles: Pair[]
+  galaxyBundles: Pair[]
 }
 
-// 銀河タイルのメモリ内表現。pos は canon  global 座標(float32)。
-export interface Tile {
-  g: number
+/** 銀河メタ(TileIndex 値)。 */
+export interface GalaxyMeta {
+  gid: number
+  mid: number
   n: number
-  ne: number
-  nx: number
+  n_cross: number
+  display_class: number
+  x: number
+  y: number
+  z: number
+  r: number
+  hue: number
+  /** z 再構成用: アンカー z(=マクロ z、canon 配置の規約)。 */
+  gz: number
+}
+
+/** タイルインデックス。 */
+export interface TileIndex {
+  count: number
+  version: string
+  generated_at: string
+  galaxies: Map<number, GalaxyMeta>
+}
+
+/** デコード済みタイル(全て rank 順)。 */
+export interface TileData {
+  n: number
+  /** 記事のグローバル座標(n×3)。 */
   pos: Float32Array
-  edges: Uint32Array
-  cross: Uint32Array
+  /** 記事タイトル(サイドカー gal_XXXXXX.json)。 */
   titles: string[]
+  /** タイル内次数(内部エッジ+クロスから算出)。 */
+  deg: Int32Array
+  /** 内部エッジ端点(rank 空間)。 */
+  eSrc: Int32Array
+  eDst: Int32Array
+  /** クロスエッジ triple [local_u, other_g, local_v](rank 空間)。 */
+  cross: Int32Array
+  /** z 再構成の基準(canonical k=1 の z 値コピー)。 */
+  zBase: Float32Array
 }

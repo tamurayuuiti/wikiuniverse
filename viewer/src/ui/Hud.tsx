@@ -1,74 +1,144 @@
 // src/ui/Hud.tsx
-// 左上 HUD(状態表示/zスライダー/検索/トグル/back)を描画する。
+// 上部 HUD(v6): 統計・ズーム帯読み取り・視界幅・トグル・z スライダ・検索・ジャンプ。
 //
 // 責務:
-// - ビューア状態の表示とコマンド発行(描画ロジックは持たない)
+// - stats(fps/浮上数/タイル数/視界幅)とズーム帯ラベルの表示
+// - 表示トグル(星/銀河内エッジ/クロスリンク/ラベル/球殻/星屑)
+// - z-compress スライダ・検索(連続 fly-to)・ランダム/ホーム
 //
 // 注意:
-// - 毎フレーム値(fps)は 1Hz 更新の store 値のみを表示する。
+// - 検索はテレポートではなく fly-to(理想形=連続性)。
 
 import { useState } from 'react'
-import { commands } from '@/state/commands'
-import { useViewer } from '@/state/store'
-import type { Toggles } from '@/state/store'
+import { useStore } from '@/state/store'
+import type { Commands } from '@/state/commands'
 
-// トグルボタンの定義順。
-const TOGGLE_DEFS: { key: keyof Toggles; label: string }[] = [
-  { key: 'edges', label: 'edges' },
-  { key: 'cross', label: 'cross' },
-  { key: 'shells', label: 'shells' },
-  { key: 'labels', label: 'labels' },
-  { key: 'dust', label: 'dust' },
-  { key: 'stars', label: 'stars' },
-]
+// HUD の props。
+interface Props {
+  commands: Commands | null
+}
 
-// 左上 HUD コンポーネント。
-export function Hud() {
-  const s = useViewer()
+// ゾーム帯の日本語ラベル。
+const ZOOM_JA: Record<string, string> = {
+  universe: '宇宙(銀河団スケール)',
+  cluster: '銀河団(銀河スケール)',
+  galaxy: '銀河(星スケール)',
+  article: '記事(ego スケール)',
+}
+
+// 上部 HUD。
+export function Hud({ commands }: Props) {
+  const stats = useStore(s => s.stats)
+  const zoom = useStore(s => s.zoomLabel)
+  const toggles = useStore(s => s.toggles)
+  const setToggle = useStore(s => s.setToggle)
+  const zSquash = useStore(s => s.zSquash)
+  const setZSquash = useStore(s => s.setZSquash)
   const [q, setQ] = useState('')
+  const [results, setResults] = useState<{ gid: number; label: string; n: number }[]>([])
+  const [open, setOpen] = useState(false)
+
+  // 検索入力の変化を処理する。
+  const onSearch = (v: string) => {
+    setQ(v)
+    if (!commands) return
+    setResults(v.trim().length > 0 ? commands.searchGalaxies(v) : [])
+    setOpen(v.trim().length > 0)
+  }
+
+  // 結果を選択してジャンプする。
+  const pick = (gid: number) => {
+    commands?.gotoGalaxy(gid)
+    setOpen(false)
+    setQ('')
+    setResults([])
+  }
+
   return (
-    <div className="absolute left-3 top-2 z-10 font-mono text-[12px] leading-relaxed text-slate-400">
-      <div>
-        wikiuniverse <b className="text-slate-200">v4</b>(nested-scale)—{' '}
-        <span className="text-sky-300">{s.stage === 'universe' ? 'universe' : `galaxy #${s.focus}`}</span>{' '}
-        <span className="text-slate-600">{s.stats.fps}fps · tiles {s.stats.tiles}</span>
+    <div className="hud">
+      <div className="hud-group">
+        <span className="hud-title">WikiUniverse</span>
+        <span className="hud-stat zoom">{ZOOM_JA[zoom] ?? zoom}</span>
       </div>
-      <div className="mt-1 flex items-center gap-2">
-        <span>z-compress</span>
+      <div className="hud-group">
+        <span className="hud-stat">fps {stats.fps}</span>
+        <span className="hud-stat">浮上 {stats.emerged}</span>
+        <span className="hud-stat">タイル {stats.tiles}</span>
+        <span className="hud-stat">視界幅 {fmtU(stats.viewWidthU ?? 0)}</span>
+      </div>
+      <div className="hud-group">
+        <label className="hud-check">
+          <input type="checkbox" checked={toggles.stars} onChange={e => setToggle('stars', e.target.checked)} />
+          星
+        </label>
+        <label className="hud-check">
+          <input type="checkbox" checked={toggles.edges} onChange={e => setToggle('edges', e.target.checked)} />
+          バンドル
+        </label>
+        <label className="hud-check">
+          <input type="checkbox" checked={toggles.cross} onChange={e => setToggle('cross', e.target.checked)} />
+          クロス
+        </label>
+        <label className="hud-check">
+          <input type="checkbox" checked={toggles.labels} onChange={e => setToggle('labels', e.target.checked)} />
+          ラベル
+        </label>
+        <label className="hud-check">
+          <input type="checkbox" checked={toggles.shells} onChange={e => setToggle('shells', e.target.checked)} />
+          球殻
+        </label>
+      </div>
+      <div className="hud-group">
+        <span className="hud-stat">z {zSquash.toFixed(2)}</span>
         <input
-          type="range" min={0.4} max={1} step={0.05} value={s.zK}
-          onChange={e => commands?.setZ(parseFloat(e.target.value))}
-          className="w-36 accent-sky-400" />
-        <span>{s.zK.toFixed(2)}</span>
-        {s.stage === 'galaxy' && (
-          <button onClick={() => commands?.leave()}
-            className="rounded border border-slate-600 bg-slate-900 px-2 py-0.5 hover:border-sky-500">
-            &larr; back (Esc)
-          </button>
+          className="hud-slider"
+          type="range"
+          min={0.4}
+          max={1}
+          step={0.01}
+          value={zSquash}
+          onChange={e => setZSquash(Number(e.target.value))}
+        />
+      </div>
+      <div className="hud-group search-wrap">
+        <input
+          className="hud-search"
+          type="text"
+          placeholder="銀河検索…"
+          value={q}
+          onChange={e => onSearch(e.target.value)}
+          onFocus={() => q.trim().length > 0 && setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+        />
+        {open && results.length > 0 && (
+          <div className="search-results">
+            {results.map(r => (
+              <button key={r.gid} className="search-item" onMouseDown={() => pick(r.gid)}>
+                <span className="search-label">{r.label}</span>
+                <span className="search-n">{r.n}</span>
+              </button>
+            ))}
+          </div>
         )}
       </div>
-      <div className="mt-1">
-        <input
-          value={q}
-          onChange={e => setQ(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') { commands?.search(q); setQ('') } }}
-          placeholder="search galaxy / macro… (Enter)"
-          className="w-56 rounded border border-slate-700 bg-slate-950 px-2 py-0.5 text-slate-200 placeholder-slate-600" />
-      </div>
-      <div className="mt-1 flex gap-1">
-        {TOGGLE_DEFS.map(t => (
-          <button key={t.key}
-            onClick={() => commands?.toggle(t.key)}
-            className={(s.toggles[t.key]
-              ? 'rounded border border-sky-500 bg-sky-900/60 px-2 py-0.5'
-              : 'rounded border border-slate-700 bg-slate-900 px-2 py-0.5 opacity-60')}>
-            {t.label}
-          </button>
-        ))}
-      </div>
-      <div className="mt-1 text-slate-600">
-        click halo=enter · click star=links · click ring=jump · drag=orbit · wheel=zoom
+      <div className="hud-group">
+        <button className="hud-btn" onClick={() => commands?.randomGalaxy()}>
+          ランダム銀河
+        </button>
+        <button className="hud-btn" onClick={() => commands?.randomArticle()}>
+          ランダム記事
+        </button>
+        <button className="hud-btn" onClick={() => commands?.reset()}>
+          home
+        </button>
       </div>
     </div>
   )
+}
+
+// 視界幅を読みやすく整形する。
+function fmtU(u: number): string {
+  if (u >= 1000) return `${(u / 1000).toFixed(1)}k u`
+  if (u >= 10) return `${Math.round(u)} u`
+  return `${u.toFixed(1)} u`
 }

@@ -246,17 +246,43 @@ python scripts/layout_local.py --base data --galaxies all --layout-sub canon
 リンク先銀河方向のボール境界面へ。方向ベクトル集約なのでペア保存不要)+ 弾性 prior
 (FR 形状の保持)+ ボール内クランプ。銀河中心・半径は canon レイアウト由来。
 
-## ビューア(v4: React+TS+Tailwind アプリ、ブランチ feat/viewer-react-ts)
+## ビューア(v6「連続宇宙」: React+TS+Tailwind アプリ、ブランチ feat/viewer-react-ts)
 
 ```bash
-cd viewer && npm install
+cd viewer && npm install        # zustand 追加のため再 install が必要
 # 別ターミナル(リポジトリルート): python -m http.server 8000   # データサーバ
 npm run dev        # http://localhost:5173 (vite proxy が /data を :8000 へ)
 ```
 
-構成: `src/types/catalog.ts`(データ契約)/ `src/three/`(core+universeLayer+focusLayer、
-React 非依存)/ `src/state/`(store+commands)/ `src/ui/`(Hud/InfoPanel/Tooltip)/
+構成: `src/types/catalog.ts`(データ契約)/ `src/three/`(core+universeLayer+starField+lod+
+curves+textures、React 非依存)/ `src/state/`(store+commands)/ `src/ui/`(Hud/InfoPanel/Tooltip)/
 `legacy/`(v2/v3 単一 HTML、参照用)。仕様: コメント・エイリアスは docs/ の社内仕様準拠。
+
+### v6 設計: 離散 focus 廃止、単一連続空間+距離駆動 LOD
+理想形=「宇宙そのもの」(自己相似・連続・実対応)への全面移行(D19):
+- **連続性**: 段階切替/フェード/テレポートを全廃。クリックは全て fly-to(cubic ease、1.35s)、
+  Esc は ego 解除→親マクロ俯瞰→home の連続上昇。focusLayer/FocusPanel は削除済み。
+- **自己相似**: 全階層が同一 px 則 `screenPx = worldR·proj/dist`。塊スプライトは遠景で
+  最小 px clamp により「一点(星)」へ収束し、子は emerge=9px から α 平滑で湧く
+  (resolve=55px で完全出現)。宇宙:銀河団 = 銀河団:銀河 = 銀河:星。
+- **エッジの階層対応**(距離帯のクロスフェード): 遠景=マクロバンドル(α=0.55·smoothstep(700,1700,D))
+  → 中景=銀河バンドル(0.24·smoothstep(120,450,D)) → 近景=銀河内部エッジ(px 則)
+  + **実クロスリンク**(浮上銀河の実記事間アーク。隣接タイルが揃った分だけ進歩的に実位置化、
+  未着分は隣接銀河中心へのビーム) → 記事クリック=ego 網(実リンクのハイライト)。
+- **星の描画**: 次数=光度・色温度(銀河色相基準+青白/暖色の混合)、shader 瞬き(uTime+aPhase)、
+  px サイズ=親塊 px×0.071×次数係数(自己相似)。
+- **ライティング**: 無光源+加算ブレンド+UnrealBloom(strength 0.62)+FogExp2+対数深度バッファ
+  (5 桁スケール対応)。銀河ハブ星・銀河名ラベル(top42、距離 LOD α)・マクロ二層グロー。
+- **カメラ**: OrbitControls 慣性(damping 0.075)、wheel=乗算ドリー(対数ズーム)、
+  銀河クリック=r·5 へ、マクロクリック=r·2.4 へ、検索/ランダム=連続ジャンプ。
+- **タイル契約**(export_viewer_tiles.py と固定): bin = header u32×3 + pos f32 n×3 +
+  edges u32 ne×2 + cross u32 nx×3、全配列 rank 順。sidecar json = タイトル(rank 順)。
+  deg はクライアント算出。z スライダはキャッシュタイルの z を in-place 再構成
+  (gz=マクロ z アンカー、zBase=canonical コピー)。
+
+### (履歴) v5 シームレス LOD
+全階層で共通の画面 px 則と「塊→点群」の描画コスト受け渡し(同時予算 24、LRU 退避)を確立。
+v6 はこれを取り込み、離散 focus(潜入モード)を廃止して距離駆動へ一元化した。
 
 ## (過去)最小ビューアプロトタイプ(v0.1、フェーズ 3 第 4 ステップ)
 

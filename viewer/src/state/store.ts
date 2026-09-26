@@ -1,76 +1,116 @@
 // src/state/store.ts
-// ビューア全体の UI 状態を保持する最小ストアを定義する。
+// Zustand ストア: v6 連続宇宙の表示コンテキスト(選択・パネル・トグル・stats)。
 //
 // 責務:
-// - three 側(描画コア)と React 側(HUD)の間の状態共有
-// - useSyncExternalStore による購読提供
+// - 選択(selection: none/galaxy/article)と hover の保持
+// - パネル表示モデル(kind: overview/loading/galaxy/article)
+// - 表示トグル・z スライダ・ズーム帯ラベル・ジャンプ要求
 //
 // 注意:
-// - 毎フレーム変化する値(camera 等)はここへ入れない。React の再描画を誘発するため。
-// - fps 等の統計は 1 秒間隔の更新に限定する。
+// - 段階(stage)/離散 focus は存在しない。zoomLabel は表示専用読み取り値。
+// - jumpRequest は検索など UI 起点の fly-to 要求(core が購読して消費)。
 
-import { useSyncExternalStore } from 'react'
+import { create } from 'zustand'
 
-// 表示トグルの一覧。
+// 選択コンテキスト。
+export type Selection =
+  | { kind: 'none' }
+  | { kind: 'galaxy'; gid: number }
+  | { kind: 'article'; gid: number; local: number }
+
+// hover 情報。
+export interface HoverInfo {
+  kind: 'galaxy' | 'macro' | 'article'
+  gid: number
+  local?: number
+  title: string
+  x: number
+  y: number
+  info?: string
+}
+
+// パネル表示モデル。
+export type PanelModel =
+  | { kind: 'overview'; galaxies: number; macros: number }
+  | { kind: 'loading'; label: string }
+  | {
+      kind: 'galaxy'
+      gid: number
+      title: string
+      macroTitle: string
+      n: number
+      nCross: number
+      displayClass: string
+      hubTitles: string[]
+    }
+  | {
+      kind: 'article'
+      gid: number
+      local: number
+      galaxyTitle: string
+      title: string
+      deg: number
+      crossTargets: { gid: number; title: string }[]
+      macroTitle?: string
+    }
+
+// 表示トグル。
 export interface Toggles {
+  stars: boolean
   edges: boolean
   cross: boolean
-  shells: boolean
   labels: boolean
+  shells: boolean
   dust: boolean
-  stars: boolean
 }
 
-// 右パネルの表示モデル。
-export type PanelModel =
-  | { kind: 'universe' }
-  | { kind: 'loading'; g: number }
-  | { kind: 'galaxy'; g: number; neighbors: { g: number; cnt: number }[] }
-  | { kind: 'article'; title: string; deg: number; targets: { g: number; local: number; title: string }[] }
+// パフォーマンス統計。
+export interface Stats {
+  fps: number
+  emerged: number
+  tiles: number
+  zK: number
+  viewWidthU?: number
+}
 
-// ビューア UI 状態。
+// ストアの状態。
 export interface ViewerState {
   ready: boolean
-  stage: 'universe' | 'galaxy'
-  focus: number
-  hover: { text: string; x: number; y: number } | null
-  toggles: Toggles
-  zK: number
+  selection: Selection
+  hover: HoverInfo | null
   panel: PanelModel
-  stats: { fps: number; tiles: number }
+  toggles: Toggles
+  zSquash: number
+  zoomLabel: string
+  jumpRequest: { pos: [number, number, number]; dist: number; seq: number } | null
+  stats: Stats
 }
 
-let state: ViewerState = {
+// ストアの状態とアクション。
+interface ViewerActions {
+  setHover: (h: HoverInfo | null) => void
+  setPanel: (p: PanelModel) => void
+  setToggle: (k: keyof Toggles, v: boolean) => void
+  setZSquash: (k: number) => void
+  requestJump: (pos: [number, number, number], dist: number) => void
+}
+
+let jumpSeq = 0
+
+// アプリ全体のストア。
+export const useStore = create<ViewerState & ViewerActions>((set, get) => ({
   ready: false,
-  stage: 'universe',
-  focus: -1,
+  selection: { kind: 'none' },
   hover: null,
-  toggles: { edges: true, cross: true, shells: true, labels: true, dust: true, stars: true },
-  zK: 1.0,
-  panel: { kind: 'universe' },
-  stats: { fps: 0, tiles: 0 },
-}
-
-const listeners = new Set<() => void>()
-
-// 現在状態のスナップショットを返す。
-export function getState(): ViewerState {
-  return state
-}
-
-// 状態を部分更新して購読者へ通知する。
-export function setState(patch: Partial<ViewerState>): void {
-  state = { ...state, ...patch }
-  listeners.forEach(l => l())
-}
-
-// ストアの購読登録(useSyncExternalStore 用)。
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
-}
-
-// React から状態を購読するフック。
-export function useViewer(): ViewerState {
-  return useSyncExternalStore(subscribe, getState)
-}
+  panel: { kind: 'overview', galaxies: 0, macros: 0 },
+  toggles: { stars: true, edges: true, cross: true, labels: true, shells: true, dust: true },
+  zSquash: 1,
+  zoomLabel: 'universe',
+  jumpRequest: null,
+  stats: { fps: 0, emerged: 0, tiles: 0, zK: 1 },
+  setHover: (h) => set({ hover: h }),
+  setPanel: (p) => set({ panel: p }),
+  setToggle: (k, v) => set({ toggles: { ...get().toggles, [k]: v } }),
+  setZSquash: (k) => set({ zSquash: k }),
+  requestJump: (pos, dist) => set({ jumpRequest: { pos, dist, seq: ++jumpSeq } }),
+}))

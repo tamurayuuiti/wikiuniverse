@@ -1,23 +1,24 @@
 // src/ui/Tooltip.tsx
-// ホバー時のフロートチップを描画する。
+// ホバー時のフロートチップ(v6): 記事/銀河/マクロの名称と補足。
 //
 // 責務:
-// - store.hover のテキストと座標の表示
+// - store.hover の表示(タイトル+info)
 //
 // 注意:
-// - pointer-events なし( picking を妨げない)。
+// - pointer-events なし(picking を妨げない)。
 
-import { useViewer } from '@/state/store'
+import { useStore } from '@/state/store'
 
 // ホバーチップコンポーネント。
 export function Tooltip() {
-  const s = useViewer()
-  if (!s.hover) return null
+  const hover = useStore(s => s.hover)
+  if (!hover) return null
+  const kindJa = hover.kind === 'article' ? '記事' : hover.kind === 'galaxy' ? '銀河' : '銀河団'
   return (
-    <div
-      className="pointer-events-none absolute z-20 rounded border border-slate-700 bg-slate-950/90 px-2 py-0.5 font-mono text-[11px] text-slate-200"
-      style={{ left: s.hover.x + 14, top: s.hover.y + 10 }}>
-      {s.hover.text}
+    <div className="tooltip" style={{ left: hover.x + 14, top: hover.y + 10 }}>
+      <span className="tooltip-kind">{kindJa}</span>
+      <span className="tooltip-title">{hover.title}</span>
+      {hover.info && <span className="tooltip-info">{hover.info}</span>}
     </div>
   )
 }

@@ -1,47 +1,96 @@
 // src/App.tsx
-// ビューアのルートコンポーネント。canvas と HUD 群を合成する。
+// 連続宇宙ビューア(v6)のルート: bootstrap ロード → ViewerCore 生成 → HUD/パネル配置。
 //
 // 責務:
-// - ViewerCore の生成/破棄とリサイズ追従
-// - グローバルキー(Esc)の bind
+// - bootstrap.json の取得と TileIndex 構築
+// - canvas と ViewerCore のライフサイクル管理
+// - Commands の生成と HUD/InfoPanel への受け渡し
 //
 // 注意:
-// - three の描画ループは React 管理外。ここは mount/unmount のみを行う。
+// - StrictMode の二重マウントに備え、dispose で確実に破棄する。
+// - ロード失敗はエラー表示(旧 fade 機構は廃止、連続宇宙に切替はない)。
 
-import { useEffect, useRef } from 'react'
-import { commands } from '@/state/commands'
+import { useEffect, useRef, useState } from 'react'
+import { loadBootstrap, buildIndex } from '@/data/bootstrap'
 import { ViewerCore } from '@/three/core'
-import { Hud } from './ui/Hud'
-import { InfoPanel } from './ui/InfoPanel'
-import { Tooltip } from './ui/Tooltip'
+import { Commands } from '@/state/commands'
+import { useStore } from '@/state/store'
+import { Hud } from '@/ui/Hud'
+import { InfoPanel } from '@/ui/InfoPanel'
+import { Tooltip } from '@/ui/Tooltip'
+import type { BootstrapData, TileIndex } from '@/types/catalog'
 
-// ルートコンポーネント。
+// アプリのルートコンポーネント。
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const fadeRef = useRef<HTMLDivElement>(null)
+  const coreRef = useRef<ViewerCore | null>(null)
+  const [cmds, setCmds] = useState<Commands | null>(null)
+  const [boot, setBoot] = useState<BootstrapData | null>(null)
+  const [index, setIndex] = useState<TileIndex | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const ready = useStore(s => s.ready)
 
-  // 描画コアの生命周期管理。
+  // bootstrap をロードし、core を生成する。
   useEffect(() => {
-    const core = new ViewerCore(canvasRef.current as HTMLCanvasElement, fadeRef.current)
-    void core.init()
-    const onResize = () => core.resize()
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') commands?.leave() }
-    addEventListener('resize', onResize)
-    addEventListener('keydown', onKey)
+    let cancelled = false
+    let core: ViewerCore | null = null
+    ;(async () => {
+      try {
+        const boot = await loadBootstrap()
+        const index = buildIndex(boot)
+        if (cancelled) return
+        setBoot(boot)
+        setIndex(index)
+        setCmds(new Commands(boot, index))
+        if (canvasRef.current) {
+          core = new ViewerCore(canvasRef.current, boot, index)
+          coreRef.current = core
+        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+      }
+    })()
     return () => {
-      removeEventListener('resize', onResize)
-      removeEventListener('keydown', onKey)
+      cancelled = true
+      core?.dispose()
+      coreRef.current?.dispose()
+      coreRef.current = null
     }
   }, [])
 
+  // canvas 準備後に core が未生成なら生成する(初回マウント順序の保険)。
+  useEffect(() => {
+    if (boot && index && canvasRef.current && !coreRef.current) {
+      const core = new ViewerCore(canvasRef.current, boot, index)
+      coreRef.current = core
+    }
+  }, [boot, index])
+
   return (
-    <div className="relative h-full w-full bg-black">
-      <canvas ref={canvasRef} className="block h-full w-full" />
-      <Hud />
-      <InfoPanel />
+    <div className="app">
+      <div id="viewer-root" className="viewer-root">
+        <canvas ref={canvasRef} className="viewer-canvas" />
+      </div>
+      {!ready && !error && (
+        <div className="loading-overlay">
+          <div className="loading-text">loading universe…</div>
+        </div>
+      )}
+      {error && (
+        <div className="loading-overlay">
+          <div className="loading-text error">
+            bootstrap の読み込みに失敗しました。
+            <br />
+            リポジトリルートで <code>python -m http.server 8000</code> を起動し、
+            <code>viewer/</code> で <code>npm run dev</code> を実行してください。
+            <br />
+            <small>{error}</small>
+          </div>
+        </div>
+      )}
+      <Hud commands={cmds} />
+      <InfoPanel commands={cmds} />
       <Tooltip />
-      <div ref={fadeRef}
-        className="pointer-events-none absolute inset-0 bg-black opacity-0 transition-opacity duration-300" />
     </div>
   )
 }
