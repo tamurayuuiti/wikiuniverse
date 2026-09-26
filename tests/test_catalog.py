@@ -105,6 +105,19 @@ def main():
 
     # ---- global layout smoke (dim=2 for speed)
     out2 = run_script("layout_global.py", "--dim", "2", "--galaxy-tag", "res1_s")
+
+    # ---- version-skew regression: pre-v2 catalog (macros without is_dust,
+    #      galaxies without display_class) must still lay out with a warning
+    import pyarrow as _pa
+    _mpath = os.path.join(final, "macros.parquet")
+    _mt = pq.read_table(_mpath)
+    pq.write_table(_mt.drop(["is_dust"]), _mpath)
+    _gpath = os.path.join(final, "galaxies.parquet")
+    _gt = pq.read_table(_gpath)
+    pq.write_table(_gt.drop(["display_class"]), _gpath)
+    out_skew = run_script("layout_global.py", "--dim", "2", "--galaxy-tag", "res1_s")
+    assert "pre-v2" in out_skew, "skew warning not emitted"
+
     lay = os.path.join(BASE, "layout")
     for f in ("galaxy_positions.parquet", "macro_positions.parquet",
               "layout_meta.json", "preview.png"):

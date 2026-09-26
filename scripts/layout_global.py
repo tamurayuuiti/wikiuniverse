@@ -129,9 +129,29 @@ def main():
     n_art_g = np.asarray(gal["n_articles"], np.int64)
     n_art_m = np.asarray(mac["n_articles"], np.int64)
     macro_of = np.asarray(gal["macro_id"], np.int64)
-    dust_g = np.asarray(gal["is_dust"], bool)
-    dust_m = np.asarray(mac["is_dust"], bool)
-    cls = gal.get("display_class", ["galaxy"] * G)
+
+    # --- defensive reads: tolerate catalogs built by the pre-v2 builder ---
+    skew = []
+    if "is_dust" in gal:
+        dust_g = np.asarray(gal["is_dust"], bool)
+    else:
+        dust_g = n_art_g <= 1
+        skew.append("galaxies.is_dust")
+    if "is_dust" in mac:
+        dust_m = np.asarray(mac["is_dust"], bool)
+    else:
+        dust_m = n_art_m <= 1
+        skew.append("macros.is_dust")
+    if "display_class" in gal:
+        cls = gal["display_class"]
+    else:
+        cls = ["dust" if dust_g[i] else "galaxy" for i in range(G)]
+        skew.append("galaxies.display_class")
+    if skew:
+        print(f"[layout][warn] catalog is pre-v2 (missing: {', '.join(skew)}); "
+              f"derived from n_articles. Re-run scripts/build_galaxy_catalog.py "
+              f"(v2) for curated names / display_class (medium galaxies won't be "
+              f"flagged in this run).")
 
     # ---------- 1. macro layout ----------
     eff_m = np.flatnonzero(~dust_m & (n_art_m > 0))
