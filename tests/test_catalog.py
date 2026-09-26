@@ -181,6 +181,23 @@ def main():
     d = _np.linalg.norm(P - C3[gid], axis=1)
     assert (d <= _np.maximum(R3[gid] * 1.25, 1e-6)).all(), "article outside galaxy ball"
 
+    # ---- recompose: new global params -> article positions without re-run
+    # NOTE: z_squash has no effect on tiny synthetic graphs (igraph FR init is
+    # planar for n<=~6), so we vary --pack to force a radius/scale change.
+    run_script("layout_global.py", "--dim", "2", "--pack", "0.3",
+               "--out-sub", "c2", "--galaxy-tag", "res1_s")
+    run_script("recompose_articles.py", "--from-sub", "", "--to-sub", "c2")
+    p_old = pq.read_table(os.path.join(BASE, "layout", "article_positions.parquet")).to_pydict()
+    p_new = pq.read_table(os.path.join(BASE, "layout", "c2", "article_positions.parquet")).to_pydict()
+    assert len(p_new["x"]) == 60
+    moved = sum(1 for i in range(60) if abs(p_new["z"][i] - p_old["z"][i]) > 1e-6
+                or abs(p_new["x"][i] - p_old["x"][i]) > 1e-6)
+    assert moved > 0, "recompose produced identical positions"
+
+    # ---- parallel launcher: all-done branch -> merge only
+    run_script("run_local_parallel.py", "--jobs", "2", "--galaxy-tag", "res1_s",
+               "--layout-sub", "")
+
     # ---- viewer tiles export
     run_script("export_viewer_tiles.py", "--galaxy-tag", "res1_s", "--layout-sub", "")
     sp = os.path.join(BASE, "spatial")

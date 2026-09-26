@@ -276,8 +276,13 @@ def main():
     ap.add_argument("--base", default="data")
     ap.add_argument("--dim", type=int, default=3, choices=[2, 3])
     ap.add_argument("--pack", type=float, default=0.6)
-    ap.add_argument("--z-squash", type=float, default=0.35,
-                    help="z compression of galaxy lens inside macro disks")
+    ap.add_argument("--z-squash", type=float, default=0.85,
+                    help="z compression of galaxy lens inside macro disks "
+                         "(0.35 = pancake clusters [old default], 0.85-1.0 = round "
+                         "clusters [canonical since 2026-09-27])")
+    ap.add_argument("--r-spacing", type=float, default=1.5,
+                    help="min article spacing for galaxy radius floor: "
+                         "r_g >= r_spacing * n_g^(1/3)")
     ap.add_argument("--macro-dim", type=int, default=2, choices=[2, 3],
                     help="2 = 2.5D universe map (macros packed in plane), "
                          "3 = full 3D sphere packing")
@@ -390,7 +395,15 @@ def main():
             continue
         Rm = R_m[m_i]
         n_m = n_art_m[m]
-        g_radius[members] = a.pack * Rm * np.sqrt(n_art_g[members] / max(1, n_m))
+        r_form = a.pack * Rm * np.sqrt(n_art_g[members] / max(1, n_m))
+        r_floor = a.r_spacing * np.maximum(1, n_art_g[members]) ** (1.0 / 3.0)
+        r_g = np.maximum(r_form, r_floor)
+        # keep summed disk areas inside the macro disk
+        cap = 0.9 * Rm
+        tot = np.sqrt(np.sum(r_g ** 2))
+        if tot > cap:
+            r_g *= cap / tot
+        g_radius[members] = r_g
         local_idx = {int(g): i for i, g in enumerate(members)}
         sel = same_macro & (mac_a == m)
         e_local = [(local_idx[int(gp_a[i])], local_idx[int(gp_b[i])]) for i in np.flatnonzero(sel)]

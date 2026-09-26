@@ -49,6 +49,18 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
 const col = c => new THREE.Color().setHSL(((c*137.508)%360)/360, .75, .62);
+function starTexture(){
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const gr = g.createRadialGradient(32,32,0, 32,32,32);
+  gr.addColorStop(0.0,'rgba(255,255,255,1)');
+  gr.addColorStop(0.25,'rgba(255,255,255,.85)');
+  gr.addColorStop(0.6,'rgba(200,220,255,.25)');
+  gr.addColorStop(1.0,'rgba(200,220,255,0)');
+  g.fillStyle = gr; g.fillRect(0,0,64,64);
+  return new THREE.CanvasTexture(c);
+}
+const STAR_TEX = starTexture();
 let zK = 1.0;
 const gPos = B.galaxies.map(g=>new THREE.Vector3(g[0],g[1],g[2]));
 const mPos = B.macros.map(m=>new THREE.Vector3(m[0],m[1],m[2]));
@@ -138,7 +150,9 @@ async function enterGalaxy(g){
   for (let i=0;i<t.n;i++){ arr[3*i]=t.pos[3*i]; arr[3*i+1]=t.pos[3*i+1]; arr[3*i+2]=t.pos[3*i+2]*zK; }
   pts.setAttribute('position', new THREE.BufferAttribute(arr,3));
   artPoints = new THREE.Points(pts, new THREE.PointsMaterial({
-      color: 0x9ecbff, size: Math.max(bg[3]/60,1.2), sizeAttenuation:true }));
+      color: 0x9ecbff, size: Math.max(bg[3]/140, 0.35), sizeAttenuation:true,
+      map: STAR_TEX, transparent:true, depthWrite:false,
+      blending: THREE.AdditiveBlending }));
   artPoints.material.color = col(bg[4]);
   gGal.add(artPoints);
   const ne = t.ne, stride = Math.max(1, Math.floor(ne/60000));
@@ -154,7 +168,10 @@ async function enterGalaxy(g){
   for (let i=0;i<t.nx;i+=3){ const og=t.cross[i+1]; agg.set(og,(agg.get(og)||0)+1); }
   const bp = [];
   for (const [og,cnt] of agg){ const o=B.galaxies[og];
-    bp.push(bg[0],bg[1],bg[2]*zK, o[0],o[1],o[2]*zK); }
+    const dx=o[0]-bg[0], dy=o[1]-bg[1], dz=(o[2]-bg[2])*zK;
+    const L=Math.hypot(dx,dy,dz)||1;
+    const sx=bg[0]+dx/L*bg[3]*0.85, sy=bg[1]+dy/L*bg[3]*0.85, sz=bg[2]*zK+dz/L*bg[3]*0.85;
+    bp.push(sx,sy,sz, o[0],o[1],o[2]*zK); }
   if (bp.length){ const bgeo = new THREE.BufferGeometry();
     bgeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(bp),3));
     gGal.add(new THREE.LineSegments(bgeo,

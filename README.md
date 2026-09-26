@@ -206,7 +206,9 @@ python scripts/build_galaxy_catalog.py --base data --galaxy-tag res1_sub --macro
 銀河カタログから階層レイアウトを生成する(§4.1 の「上位コミュニティ配置 → 下位配置 → 座標合成」):
 
 ```bash
-python scripts/layout_global.py --base data --dim 3 --pack 0.6 --seed 42
+python scripts/layout_global.py --base data --macro-dim 3 --pack 0.6 --seed 42
+#   既定 z-squash=0.85(球状クラスタ。0.35 は旧パンケーキ既定)、--r-spacing 1.5
+#   (銀河半径フロア r>=1.5*n^(1/3)、小銀河の記事詰まり防止)
 #   → data/layout/galaxy_positions.parquet  (galaxy_id, macro_id, x,y,z, radius, display_class)
 #   → data/layout/macro_positions.parquet   (マクロ円盤の中心と半径)
 #   → data/layout/layout_meta.json / preview.png(xy 投影プレビュー)
@@ -257,8 +259,10 @@ python -m http.server 8000                            # リポジトリルート
 配信原型: 宇宙+銀河ビューは `bootstrap.json` の 1 fetch、記事データはズームインした
 銀河のタイル(`spatial/tiles/gal_XXXXXX.bin` + `.json`)だけを on-demand fetch(§8「見える
 範囲だけ読む」のプロトタイプ。file:// は CORS で不可のため http サーバ必須)。
+v0.1.1: 星は丸スプライト(加算ブレンドのグロー)、サイズは銀河半径比例(床 0.35)、
+銀河間バンドルは中心ではなく境界面起点。
 v0.1 制約: 銀河内リンク描画は 6 万本/銀河で間引き、記事間クロスリンクは記事当たり 4 本まで
-(タイル側 cap)、ホバーラベルなし(クリック panel のみ)。
+(タイル側 cap)、ホバーラベルなし(クリック panel のみ)、ステージ切替型(シームレス zoom は未)。
 
 ## 指標定義(評価レポート共通)
 
