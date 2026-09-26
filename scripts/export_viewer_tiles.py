@@ -39,7 +39,7 @@ def main():
     ap.add_argument("--base", default="data")
     ap.add_argument("--galaxy-tag", default="res1_sub")
     ap.add_argument("--layout-sub", default="canon")
-    ap.add_argument("--cross-cap", type=int, default=4)
+    ap.add_argument("--cross-cap", type=int, default=8)
     a = ap.parse_args()
     dirs = Dirs(a.base)
     t0 = time.time()
@@ -194,7 +194,8 @@ def main():
         "galaxies": [[round(gpos["x"][i], 2), round(gpos["y"][i], 2), round(gpos["z"][i], 2),
                       round(max(gpos["radius"][i], 0.5), 2), int(gpos["macro_id"][i]),
                       cls_code.get(str(cat["display_class"][i]), 0),
-                      int(cat["n_articles"][i]), str(cat["name"][i] or "")]
+                      int(cat["n_articles"][i]), str(cat["name"][i] or ""),
+                      int(cat["e_in"][i]), int(cat["e_out"][i])]
                      for i in range(G)],
         "macro_pairs": [[int(mpq["macro_a"][i]), int(mpq["macro_b"][i]), int(mpq["w"][i])]
                         for i in range(min(400, len(mpq["w"])))],

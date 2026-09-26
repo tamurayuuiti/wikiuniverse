@@ -3,18 +3,26 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<title>wikiuniverse viewer v0.1</title>
+<title>wikiuniverse viewer v2</title>
 <style>
   body{margin:0;background:#000;overflow:hidden;font-family:system-ui,sans-serif}
-  #ui{position:absolute;top:10px;left:12px;color:#9ab;font:12px/1.6 monospace;z-index:5}
-  #panel{position:absolute;top:10px;right:12px;width:300px;max-height:70vh;overflow:auto;
-         background:rgba(10,12,18,.82);color:#cde;font:12px/1.5 monospace;
-         padding:10px 12px;border:1px solid #333;border-radius:6px;z-index:5}
-  #panel h3{margin:0 0 6px;font-size:13px;color:#fff}
-  #ui input{width:180px;vertical-align:middle}
-  button{background:#223;color:#cde;border:1px solid #445;border-radius:4px;
-         padding:3px 10px;font:12px monospace;cursor:pointer}
-  .dim{color:#789}
+  #ui{position:absolute;top:10px;left:12px;color:#9ab;font:12px/1.7 monospace;z-index:5}
+  #ui div{margin-bottom:2px}
+  #panel{position:absolute;top:10px;right:12px;width:330px;max-height:78vh;overflow:auto;
+         background:rgba(8,10,16,.86);color:#cde;font:12px/1.55 monospace;
+         padding:10px 14px;border:1px solid #2a3040;border-radius:8px;z-index:5}
+  #panel h3{margin:0 0 6px;font-size:14px;color:#fff}
+  #tip{position:absolute;pointer-events:none;background:rgba(10,14,22,.9);color:#def;
+       font:11px monospace;padding:3px 8px;border:1px solid #345;border-radius:4px;
+       display:none;z-index:9;white-space:nowrap}
+  #ui input[type=range]{width:150px;vertical-align:middle}
+  #q{background:#10141c;color:#cde;border:1px solid #345;border-radius:4px;
+     padding:2px 6px;font:12px monospace;width:170px}
+  button{background:#1a2230;color:#cde;border:1px solid #345;border-radius:4px;
+         padding:2px 9px;font:12px monospace;cursor:pointer}
+  button.on{background:#2a4a6a;border-color:#5af}
+  .dim{color:#678}
+  a.j{color:#8cf;cursor:pointer;text-decoration:underline}
 </style>
 <script type="importmap">
 {"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js",
@@ -23,250 +31,418 @@
 </head>
 <body>
 <div id="ui">
-  <div>wikiuniverse v0.1 — <span id="stage">universe</span></div>
-  <div>z-compress: <input id="zsq" type="range" min="0.40" max="1" step="0.05" value="1">
-       <span id="zv">1.00</span></div>
-  <div><button id="back" style="display:none">&larr; back (Esc)</button></div>
-  <div class="dim">click galaxy = enter / click star = article links / drag = orbit</div>
+  <div>wikiuniverse <b>v2</b> — <span id="stage">universe</span> <span id="stats" class="dim"></span></div>
+  <div>z-compress <input id="zsq" type="range" min="0.40" max="1" step="0.05" value="1"> <span id="zv">1.00</span>
+       <button id="bAuto" class="on">auto-reveal</button></div>
+  <div><input id="q" placeholder="search galaxy name… (Enter)">
+       <button id="back" style="display:none">&larr; back (Esc)</button></div>
+  <div>
+    <button id="tEdges" class="on">edges</button>
+    <button id="tBundles" class="on">bundles</button>
+    <button id="tMacros" class="on">macros</button>
+    <button id="tLabels" class="on">labels</button>
+    <button id="tDust" class="on">dust</button>
+  </div>
+  <div class="dim">click galaxy=enter · click star=its links · hover=name · drag=orbit · wheel=zoom</div>
 </div>
-<div id="panel"><h3>wikiuniverse</h3><div id="pbody">loading bootstrap…</div></div>
+<div id="panel"><h3>wikiuniverse</h3><div id="pbody">loading…</div></div>
+<div id="tip"></div>
 <script type="module">
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 
 const BASE = '../data/spatial/';
 const B = await (await fetch(BASE+'bootstrap.json')).json();
-const G = B.galaxies.length;
+const G = B.galaxies.length, NM = B.macros.length;
+const col = c => new THREE.Color().setHSL(((c*137.508)%360)/360, .72, .60);
 
+// ---------- renderer / scene ----------
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x000000, 0.00012);
-const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.5, 200000);
-camera.position.set(0, -3400, 1900);
-const renderer = new THREE.WebGLRenderer({antialias:true});
+scene.fog = new THREE.FogExp2(0x000000, 0.00009);
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.5, 300000);
+camera.position.set(0, -3600, 2100);
+const renderer = new THREE.WebGLRenderer({antialias:true, powerPreference:'high-performance'});
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
+controls.enableDamping = true; controls.dampingFactor = .08;
 
-const col = c => new THREE.Color().setHSL(((c*137.508)%360)/360, .75, .62);
-function starTexture(){
-  const c = document.createElement('canvas'); c.width = c.height = 64;
-  const g = c.getContext('2d');
-  const gr = g.createRadialGradient(32,32,0, 32,32,32);
-  gr.addColorStop(0.0,'rgba(255,255,255,1)');
-  gr.addColorStop(0.25,'rgba(255,255,255,.85)');
-  gr.addColorStop(0.6,'rgba(200,220,255,.25)');
-  gr.addColorStop(1.0,'rgba(200,220,255,0)');
-  g.fillStyle = gr; g.fillRect(0,0,64,64);
-  return new THREE.CanvasTexture(c);
-}
-const STAR_TEX = starTexture();
+// ---------- textures ----------
+function radialTex(stops){ const c=document.createElement('canvas'); c.width=c.height=64;
+  const g=c.getContext('2d'), gr=g.createRadialGradient(32,32,0,32,32,32);
+  stops.forEach(s=>gr.addColorStop(s[0],s[1])); g.fillStyle=gr; g.fillRect(0,0,64,64);
+  return new THREE.CanvasTexture(c); }
+const STAR_TEX  = radialTex([[0,'rgba(255,255,255,1)'],[.25,'rgba(255,255,255,.9)'],
+                             [.55,'rgba(210,230,255,.28)'],[1,'rgba(210,230,255,0)']]);
+const HALO_TEX  = radialTex([[0,'rgba(255,255,255,.55)'],[.4,'rgba(180,200,255,.16)'],
+                             [1,'rgba(180,200,255,0)']]);
+function labelTex(text){ const c=document.createElement('canvas');
+  const g=c.getContext('2d'); g.font='28px monospace';
+  const w=Math.ceil(g.measureText(text).width)+16; c.width=w; c.height=40;
+  const g2=c.getContext('2d'); g2.font='28px monospace'; g2.fillStyle='rgba(220,230,255,.95)';
+  g2.fillText(text,8,28); const t=new THREE.CanvasTexture(c); t.minFilter=THREE.LinearFilter;
+  return [t, w/40]; }
+
 let zK = 1.0;
 const gPos = B.galaxies.map(g=>new THREE.Vector3(g[0],g[1],g[2]));
 const mPos = B.macros.map(m=>new THREE.Vector3(m[0],m[1],m[2]));
 
-// ---------------- universe stage ----------------
+// ---------- background starfield ----------
+{ const N=2600, p=new Float32Array(N*3);
+  for(let i=0;i<N;i++){ const v=new THREE.Vector3().randomDirection()
+      .multiplyScalar(40000+Math.random()*40000); p.set([v.x,v.y,v.z], i*3); }
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(p,3));
+  scene.add(new THREE.Points(g,new THREE.PointsMaterial({size:26,map:STAR_TEX,transparent:true,
+      depthWrite:false,blending:THREE.AdditiveBlending,color:0x8899bb,opacity:.5,sizeAttenuation:true}))); }
+
+// ---------- universe layer ----------
 const gUni = new THREE.Group(); scene.add(gUni);
-const gGeo = new THREE.SphereGeometry(1, 12, 12);
-const gMat = new THREE.MeshBasicMaterial();
-const inst = new THREE.InstancedMesh(gGeo, gMat, G);
+const haloGeo = new THREE.SphereGeometry(1, 14, 10);
+const haloMat = new THREE.MeshBasicMaterial({transparent:true, opacity:.13,
+    blending:THREE.AdditiveBlending, depthWrite:false});
+const halo = new THREE.InstancedMesh(haloGeo, haloMat, G);
+const core = new THREE.InstancedMesh(new THREE.SphereGeometry(1,10,8),
+    new THREE.MeshBasicMaterial(), G);
 const m4 = new THREE.Matrix4();
 function paintGalaxies(){
   B.galaxies.forEach((g,i)=>{
-    const r = Math.max(g[3], .8);
-    m4.makeScale(r,r,r); m4.setPosition(g[0],g[1],g[2]*zK);
-    inst.setMatrixAt(i,m4);
-    inst.setColorAt(i, g[5]===1 ? new THREE.Color(0x888888)
-                     : g[5]===2 ? new THREE.Color(0x222222)
-                     : col(g[4]));
+    const r=Math.max(g[3],.8);
+    m4.makeScale(r*1.55,r*1.55,r*1.55); m4.setPosition(g[0],g[1],g[2]*zK);
+    halo.setMatrixAt(i,m4);
+    halo.setColorAt(i, g[5]===1?new THREE.Color(0x666666):g[5]===2?new THREE.Color(0x222222):col(g[4]));
+    const cr = r*.30;
+    m4.makeScale(cr,cr,cr); m4.setPosition(g[0],g[1],g[2]*zK);
+    core.setMatrixAt(i,m4);
+    core.setColorAt(i, g[5]===1?new THREE.Color(0x999999):g[5]===2?new THREE.Color(0x333333):col(g[4]));
   });
-  inst.instanceMatrix.needsUpdate = true;
-  if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+  halo.instanceMatrix.needsUpdate=true; core.instanceMatrix.needsUpdate=true;
+  if(halo.instanceColor) halo.instanceColor.needsUpdate=true;
+  if(core.instanceColor) core.instanceColor.needsUpdate=true;
 }
-paintGalaxies(); gUni.add(inst);
-B.macros.forEach(m=>{
-  if (m[4] <= 1) return;  // skip dust macros
-  const w = new THREE.LineSegments(
-    new THREE.WireframeGeometry(new THREE.SphereGeometry(m[3],14,9)),
-    new THREE.LineBasicMaterial({color:0x445566,transparent:true,opacity:.10}));
-  w.position.set(m[0],m[1],m[2]*zK); w.scale.set(1,1,zK);
-  w.userData.m = m; gUni.add(w);
-});
-function lineSegs(pairs, get, opac, color){
-  const pos = new Float32Array(pairs.length*6);
-  pairs.forEach((p,i)=>{ const a=get(p[0]), b=get(p[1]);
-    pos.set([a.x,a.y,a.z*zK,b.x,b.y,b.z*zK], i*6); });
-  const g2 = new THREE.BufferGeometry();
-  g2.setAttribute('position', new THREE.BufferAttribute(pos,3));
-  return new THREE.LineSegments(g2,
-    new THREE.LineBasicMaterial({color,transparent:true,opacity:opac}));
-}
-let mpLines = lineSegs(B.macro_pairs, i=>mPos[i], .35, 0x6688aa);
-gUni.add(mpLines);
-let gpLines = lineSegs(B.galaxy_pairs, i=>gPos[i], .10, 0x88aaff);
-gUni.add(gpLines);
-function rebuildLines(){
-  gUni.remove(mpLines); gUni.remove(gpLines);
-  mpLines.geometry.dispose(); gpLines.geometry.dispose();
-  gUni.add(lineSegs(B.macro_pairs, i=>mPos[i], .35, 0x6688aa));
-  gUni.add(lineSegs(B.galaxy_pairs, i=>gPos[i], .10, 0x88aaff));
-}
+paintGalaxies(); gUni.add(halo); gUni.add(core);
 
-// ---------------- tiles ----------------
+const gMacros = new THREE.Group(); gUni.add(gMacros);
+const macroLabels = new THREE.Group(); gUni.add(macroLabels);
+function buildMacros(){
+  gMacros.clear(); macroLabels.clear();
+  B.macros.forEach((m,i)=>{
+    if (m[4]<=1) return;
+    const w=new THREE.LineSegments(new THREE.WireframeGeometry(new THREE.SphereGeometry(m[3],12,8)),
+        new THREE.LineBasicMaterial({color:0x334455,transparent:true,opacity:.07}));
+    w.position.set(m[0],m[1],m[2]*zK); w.scale.set(1,1,zK); gMacros.add(w);
+  });
+  const top = B.macros.map((m,i)=>[m[4],i]).sort((a,b)=>b[0]-a[0]).slice(0,10);
+  top.forEach(([n,i])=>{
+    const m=B.macros[i]; const lbl=(m[5]||('macro#'+i)).slice(0,14);
+    const [t,ar]=labelTex(lbl);
+    const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,opacity:.75,depthWrite:false}));
+    sp.scale.set(46*ar,46,1); sp.position.set(m[0],m[1]+m[3]*zK*1.06,m[2]*zK);
+    macroLabels.add(sp);
+  });
+}
+buildMacros();
+
+function curvedLines(pairs, get, color, opac, bow=.18){
+  const pos=[];
+  pairs.forEach(p=>{ const a=get(p[0]), b=get(p[1]);
+    const wgt = p[2]||1;
+    const mid=a.clone().add(b).multiplyScalar(.5);
+    const dir=b.clone().sub(a); const L=dir.length();
+    const up=new THREE.Vector3(0,0,1);
+    const perp=new THREE.Vector3().crossVectors(dir,up).normalize();
+    if (perp.lengthSq()<1e-6) perp.set(1,0,0);
+    mid.addScaledVector(perp, L*bow*((wgt%7)-3)/3);
+    const cur=new THREE.QuadraticBezierCurve3(
+      new THREE.Vector3(a.x,a.y,a.z*zK), new THREE.Vector3(mid.x,mid.y,mid.z*zK),
+      new THREE.Vector3(b.x,b.y,b.z*zK));
+    cur.getPoints(10).forEach((v,i,arr)=>{ if(i) pos.push(arr[i-1].x,arr[i-1].y,arr[i-1].z,v.x,v.y,v.z); });
+  });
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(pos),3));
+  return new THREE.LineSegments(g,new THREE.LineBasicMaterial({color,transparent:true,
+      opacity:opac,blending:THREE.AdditiveBlending,depthWrite:false}));
+}
+let bundleLines = new THREE.Group(); gUni.add(bundleLines);
+function buildBundles(){
+  bundleLines.clear();
+  bundleLines.add(curvedLines(B.macro_pairs.slice(0,400), i=>mPos[i], 0x557799, .5));
+  bundleLines.add(curvedLines(B.galaxy_pairs.slice(0,6000), i=>gPos[i], 0x335577, .16));
+}
+buildBundles();
+
+const dustIdx = B.galaxies.map((g,i)=>i).filter(i=>B.galaxies[i][5]===2);
+let dustPts=null;
+{ const p=new Float32Array(dustIdx.length*3);
+  dustIdx.forEach((gi,k)=>{ const g=B.galaxies[gi]; p.set([g[0],g[1],g[2]*zK],k*3); });
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(p,3));
+  dustPts=new THREE.Points(g,new THREE.PointsMaterial({size:3,map:STAR_TEX,transparent:true,
+     depthWrite:false,blending:THREE.AdditiveBlending,color:0x445566,opacity:.55}));
+  gUni.add(dustPts); }
+
+// ---------- tiles ----------
 const tileCache = new Map();
 async function tile(g){
   if (tileCache.has(g)) return tileCache.get(g);
-  const buf = await (await fetch(BASE+`tiles/gal_${String(g).padStart(6,'0')}.bin`)).arrayBuffer();
-  const dv = new DataView(buf);
-  const n = dv.getUint32(0,true), ne = dv.getUint32(4,true), nx = dv.getUint32(8,true);
-  const pos = new Float32Array(buf, 12, n*3);
-  const edges = new Uint32Array(buf, 12+n*12, ne*2);
-  const cross = new Uint32Array(buf, 12+n*12+ne*8, nx*3);
-  const tj = await (await fetch(BASE+`tiles/gal_${String(g).padStart(6,'0')}.json`)).json();
-  const t = {n, ne, nx, pos, edges, cross, titles: tj.t};
-  if (tileCache.size > 24) tileCache.delete(tileCache.keys().next().value);
-  tileCache.set(g, t);
-  return t;
+  const pad = String(g).padStart(6,'0');
+  const [buf, tj] = await Promise.all([
+    (await fetch(BASE+`tiles/gal_${pad}.bin`)).arrayBuffer(),
+    (await fetch(BASE+`tiles/gal_${pad}.json`)).json()]);
+  const dv=new DataView(buf);
+  const n=dv.getUint32(0,true), ne=dv.getUint32(4,true), nx=dv.getUint32(8,true);
+  const t={n,ne,nx, pos:new Float32Array(buf,12,n*3),
+           edges:new Uint32Array(buf,12+n*12,ne*2),
+           cross:new Uint32Array(buf,12+n*12+ne*8,nx*3), titles:tj.t, objs:[]};
+  if (tileCache.size>40) tileCache.delete(tileCache.keys().next().value);
+  tileCache.set(g,t); return t;
 }
 
-// ---------------- galaxy stage ----------------
-const gGal = new THREE.Group(); gGal.visible = false; scene.add(gGal);
-let curG = -1, artPoints = null, curTile = null;
+// ---------- galaxy(article) layer ----------
+const gGal = new THREE.Group(); scene.add(gGal);
+let focus = -1, curTile = null, artPts = null;
 const panel = document.getElementById('pbody');
 const stageEl = document.getElementById('stage');
-const backBtn = document.getElementById('back');
+const statsEl = document.getElementById('stats');
+const tip = document.getElementById('tip');
 
 function clearGroup(gr){ while(gr.children.length){ const c=gr.children.pop();
   c.geometry&&c.geometry.dispose(); c.material&&c.material.dispose(); } }
 
-async function enterGalaxy(g){
-  curG = g; stageEl.textContent = `galaxy #${g}`;
-  backBtn.style.display = '';
-  clearGroup(gGal); clearGroup(gArt); gGal.visible = true; gUni.visible = false;
-  const t = curTile = await tile(g);
-  const bg = B.galaxies[g];
-  const pts = new THREE.BufferGeometry();
-  const arr = new Float32Array(t.n*3);
-  for (let i=0;i<t.n;i++){ arr[3*i]=t.pos[3*i]; arr[3*i+1]=t.pos[3*i+1]; arr[3*i+2]=t.pos[3*i+2]*zK; }
-  pts.setAttribute('position', new THREE.BufferAttribute(arr,3));
-  artPoints = new THREE.Points(pts, new THREE.PointsMaterial({
-      color: 0x9ecbff, size: Math.max(bg[3]/140, 0.35), sizeAttenuation:true,
-      map: STAR_TEX, transparent:true, depthWrite:false,
-      blending: THREE.AdditiveBlending }));
-  artPoints.material.color = col(bg[4]);
-  gGal.add(artPoints);
-  const ne = t.ne, stride = Math.max(1, Math.floor(ne/60000));
-  const lp = [];
-  for (let i=0;i<ne;i+=stride){ const a=t.edges[2*i], b=t.edges[2*i+1];
-    lp.push(t.pos[3*a],t.pos[3*a+1],t.pos[3*a+2]*zK, t.pos[3*b],t.pos[3*b+1],t.pos[3*b+2]*zK); }
-  const lg = new THREE.BufferGeometry();
-  lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lp),3));
-  gGal.add(new THREE.LineSegments(lg,
-    new THREE.LineBasicMaterial({color:0x335577,transparent:true,opacity:.28})));
-  // cross bundles to neighbour galaxies
-  const agg = new Map();
-  for (let i=0;i<t.nx;i+=3){ const og=t.cross[i+1]; agg.set(og,(agg.get(og)||0)+1); }
-  const bp = [];
-  for (const [og,cnt] of agg){ const o=B.galaxies[og];
-    const dx=o[0]-bg[0], dy=o[1]-bg[1], dz=(o[2]-bg[2])*zK;
-    const L=Math.hypot(dx,dy,dz)||1;
-    const sx=bg[0]+dx/L*bg[3]*0.85, sy=bg[1]+dy/L*bg[3]*0.85, sz=bg[2]*zK+dz/L*bg[3]*0.85;
-    bp.push(sx,sy,sz, o[0],o[1],o[2]*zK); }
-  if (bp.length){ const bgeo = new THREE.BufferGeometry();
-    bgeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(bp),3));
-    gGal.add(new THREE.LineSegments(bgeo,
-      new THREE.LineBasicMaterial({color:0xaa66aa,transparent:true,opacity:.5}))); }
-  controls.target.set(bg[0],bg[1],bg[2]*zK);
-  camera.position.set(bg[0]+bg[3]*2.2, bg[1]-bg[3]*2.6, bg[2]*zK+bg[3]*1.8);
-  panel.innerHTML = `<h3>${bg[7]||('galaxy #'+g)}</h3>
-    <div>articles: ${bg[6].toLocaleString()} / internal links: ${t.ne.toLocaleString()}</div>
-    <div>cross links (cap4/article): ${t.nx.toLocaleString()} → ${agg.size} galaxies</div>
-    <div class="dim">macro #${bg[4]} · ${bg[5]===1?'MEDIUM (intergalactic medium)':bg[5]===2?'dust':'galaxy'}</div>
-    <div class="dim">click a star for its real links</div>`;
+function arcBetween(a, b, color, opac, bow=.25){
+  return curvedLines([[a,b,1]], ()=>a, color, opac, bow);
 }
-function exitGalaxy(){
-  curG = -1; stageEl.textContent = 'universe'; backBtn.style.display='none';
-  clearGroup(gGal); clearGroup(gArt); gGal.visible = false; gUni.visible = true;
-  panel.innerHTML = `<h3>wikiuniverse</h3><div>${B.meta.n_articles.toLocaleString()} articles /
-    ${G.toLocaleString()} galaxies / ${B.macros.length} macros</div>
-    <div class="dim">click a galaxy to enter</div>`;
-}
-backBtn.onclick = exitGalaxy;
-addEventListener('keydown', e=>{ if(e.key==='Escape') exitGalaxy(); });
 
-// ---------------- article stage ----------------
-const gArt = new THREE.Group(); scene.add(gArt);
-async function showArticle(local){
-  clearGroup(gArt);
-  const t = curTile, bg = B.galaxies[curG];
-  const title = t.titles[local] || '?';
-  const deg = countDeg(t, local);
-  const lp = [];
-  for (let i=0;i<t.ne;i++){ const a=t.edges[2*i], b=t.edges[2*i+1];
-    if (a===local||b===local) lp.push(t.pos[3*a],t.pos[3*a+1],t.pos[3*a+2]*zK,
-                                      t.pos[3*b],t.pos[3*b+1],t.pos[3*b+2]*zK); }
-  if (lp.length){ const g2 = new THREE.BufferGeometry();
-    g2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lp),3));
-    gArt.add(new THREE.LineSegments(g2,
-      new THREE.LineBasicMaterial({color:0x88ddff,transparent:true,opacity:.9}))); }
-  const x = [];
-  for (let i=0;i<t.nx;i+=3){ if (t.cross[i]!==local) continue;
-    const og=t.cross[i+1], ov=t.cross[i+2];
-    try { const ot = await tile(og);
-      x.push(t.pos[3*local],t.pos[3*local+1],t.pos[3*local+2]*zK,
-             ot.pos[3*ov],ot.pos[3*ov+1],ot.pos[3*ov+2]*zK);
-    } catch(e){} }
-  if (x.length){ const g3 = new THREE.BufferGeometry();
-    g3.setAttribute('position', new THREE.BufferAttribute(new Float32Array(x),3));
-    gArt.add(new THREE.LineSegments(g3,
-      new THREE.LineBasicMaterial({color:0xff66cc,transparent:true,opacity:.9}))); }
-  panel.innerHTML = `<h3>${title}</h3>
-    <div>galaxy: ${bg[7]||('#'+curG)} · internal deg: ${deg}</div>
-    <div class="dim">cyan = intra-galaxy links, magenta = inter-galaxy (real articles)</div>
-    <div><button onclick="document.dispatchEvent(new Event('back-art'))">close</button></div>`;
-}
-function countDeg(t, local){ let d=0;
-  for (let i=0;i<t.ne;i++) if (t.edges[2*i]===local||t.edges[2*i+1]===local) d++;
-  return d; }
-document.addEventListener('back-art', ()=>clearGroup(gArt));
-
-// ---------------- picking ----------------
-const ray = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
-renderer.domElement.addEventListener('click', async ev=>{
-  mouse.x = (ev.clientX/innerWidth)*2-1; mouse.y = -(ev.clientY/innerHeight)*2+1;
-  ray.setFromCamera(mouse, camera);
-  if (curG === -1){
-    ray.params.Points = {threshold: 1};
-    const hit = ray.intersectObject(inst);
-    if (hit.length) enterGalaxy(hit[0].instanceId);
-  } else if (artPoints){
-    const bg = B.galaxies[curG];
-    ray.params.Points = {threshold: Math.max(bg[3]/50, 1)};
-    const hit = ray.intersectObject(artPoints);
-    if (hit.length) showArticle(hit[0].index);
+async function enterGalaxy(g, fly=true){
+  if (focus===g) return;
+  if (focus>=0) leaveGalaxy(false);
+  focus=g; curTile=await tile(g);
+  const bg=B.galaxies[g], t=curTile;
+  stageEl.textContent=`galaxy #${g} ${bg[7]||''}`;
+  document.getElementById('back').style.display='';
+  // article stars, size+brightness by internal degree
+  const deg=new Uint16Array(t.n);
+  for(let i=0;i<t.ne;i++){ deg[t.edges[2*i]]++; deg[t.edges[2*i+1]]++; }
+  const posA=new Float32Array(t.n*3), szA=new Float32Array(t.n), colA=new Float32Array(t.n*3);
+  const base=col(bg[4]); const c2=new THREE.Color();
+  for(let i=0;i<t.n;i++){ posA.set([t.pos[3*i],t.pos[3*i+1],t.pos[3*i+2]*zK],i*3);
+    szA[i]=Math.max(bg[3]/220,0.25)*(0.6+Math.min(deg[i],40)/40*1.8);
+    c2.copy(base).offsetHSL(0,0,Math.min(.35,deg[i]/60)); colA.set([c2.r,c2.g,c2.b],i*3); }
+  const pg=new THREE.BufferGeometry();
+  pg.setAttribute('position',new THREE.BufferAttribute(posA,3));
+  pg.setAttribute('aSize',new THREE.BufferAttribute(szA,1));
+  artPts=new THREE.Points(pg,new THREE.PointsMaterial({size:Math.max(bg[3]/150,.3),
+     map:STAR_TEX,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,
+     vertexColors:true}));
+  gGal.add(artPts); t.objs.push(artPts);
+  // internal links
+  if (show.edges){
+    const stride=Math.max(1,Math.floor(t.ne/150000)); const lp=[];
+    for(let i=0;i<t.ne;i+=stride){ const a=t.edges[2*i],b=t.edges[2*i+1];
+      lp.push(t.pos[3*a],t.pos[3*a+1],t.pos[3*a+2]*zK,t.pos[3*b],t.pos[3*b+1],t.pos[3*b+2]*zK); }
+    const lg=new THREE.BufferGeometry();
+    lg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(lp),3));
+    const ll=new THREE.LineSegments(lg,new THREE.LineBasicMaterial({color:0x2a4a66,
+        transparent:true,opacity:.30,blending:THREE.AdditiveBlending,depthWrite:false}));
+    gGal.add(ll); t.objs.push(ll);
   }
-});
-
-// ---------------- z slider ----------------
-const zsl = document.getElementById('zsq');
-zsl.addEventListener('input', ()=>{
-  zK = parseFloat(zsl.value);
-  document.getElementById('zv').textContent = zK.toFixed(2);
+  // REAL inter-galaxy links as curved arcs (cap 2500)
+  if (show.bundles){
+    const xp=[]; let cnt=0;
+    for(let i=0;i<t.nx && cnt<2500;i+=3){
+      const og=t.cross[i+1], ov=t.cross[i+2]; const ob=B.galaxies[og];
+      const a=new THREE.Vector3(t.pos[3*t.cross[i]],t.pos[3*t.cross[i]+1],t.pos[3*t.cross[i]+2]*zK);
+      const b=new THREE.Vector3(ob[0],ob[1],ob[2]*zK);
+      const mid=a.clone().add(b).multiplyScalar(.5);
+      const dir=b.clone().sub(a); const L=dir.length();
+      const perp=new THREE.Vector3().crossVectors(dir,new THREE.Vector3(0,0,1)).normalize();
+      if(perp.lengthSq()<1e-6) perp.set(1,0,0);
+      mid.addScaledVector(perp,L*.12);
+      const cur=new THREE.QuadraticBezierCurve3(a,mid,b);
+      cur.getPoints(8).forEach((v,i,arr)=>{ if(i) xp.push(arr[i-1].x,arr[i-1].y,arr[i-1].z,v.x,v.y,v.z); });
+      cnt++;
+    }
+    if (xp.length){ const xg=new THREE.BufferGeometry();
+      xg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(xp),3));
+      const xl=new THREE.LineSegments(xg,new THREE.LineBasicMaterial({color:0xbb55bb,
+          transparent:true,opacity:.30,blending:THREE.AdditiveBlending,depthWrite:false}));
+      gGal.add(xl); t.objs.push(xl); }
+  }
+  // hide own halo/core instance while inside
+  m4.makeScale(.001,.001,.001); m4.setPosition(gPos[g].x,gPos[g].y,gPos[g].z*zK);
+  halo.setMatrixAt(g,m4); core.setMatrixAt(g,m4);
+  halo.instanceMatrix.needsUpdate=true; core.instanceMatrix.needsUpdate=true;
+  if (fly) flyTo(new THREE.Vector3(bg[0],bg[1],bg[2]*zK), bg[3]*3.1);
+  panelGalaxy(g, deg);
+}
+function leaveGalaxy(back=true){
+  if (focus<0) return;
+  const g=focus;
+  curTile.objs.forEach(o=>{ o.geometry&&o.geometry.dispose(); o.material&&o.material.dispose(); });
+  curTile.objs=[]; clearGroup(gGal); artPts=null; curTile=null; focus=-1;
   paintGalaxies();
-  gUni.children.forEach(c=>{ if (c.userData.m){ c.position.z = c.userData.m[2]*zK; c.scale.set(1,1,zK); } });
-  rebuildLines();
-  if (curG >= 0 && curTile){
-    const pa = artPoints.geometry.attributes.position;
-    for (let i=0;i<curTile.n;i++) pa.array[3*i+2] = curTile.pos[3*i+2]*zK;
-    pa.needsUpdate = true;
-  }
+  stageEl.textContent='universe';
+  document.getElementById('back').style.display='none';
+  if (back){ const bg=B.galaxies[g]; flyTo(new THREE.Vector3(0,0,0), 3600); }
+  panelUniverse();
+}
+function panelUniverse(){
+  panel.innerHTML=`<h3>wikiuniverse</h3>
+   <div>${B.meta.n_articles.toLocaleString()} articles / ${G.toLocaleString()} galaxies /
+   ${B.macros.length} macros</div>
+   <div class="dim">click a galaxy halo to enter · search by name · wheel to zoom ·
+   auto-reveal turns articles on when you get close</div>`;
+}
+function panelGalaxy(g, deg){
+  const bg=B.galaxies[g], t=curTile;
+  const nb=new Map();
+  for(let i=0;i<t.nx;i+=3) nb.set(t.cross[i+1],(nb.get(t.cross[i+1])||0)+1);
+  const nbs=[...nb.entries()].sort((a,b)=>b[1]-a[1]).slice(0,6);
+  panel.innerHTML=`<h3>${bg[7]||('galaxy #'+g)}</h3>
+   <div>articles ${bg[6].toLocaleString()} · internal links ${t.ne.toLocaleString()} ·
+   cross ${t.nx.toLocaleString()}</div>
+   <div class="dim">macro #${bg[4]} · ${bg[5]===1?'MEDIUM (intergalactic medium)':bg[5]===2?'dust':'galaxy'}
+   · e_in ${bg[8]?.toLocaleString?.()||''} / e_out ${bg[9]?.toLocaleString?.()||''}</div>
+   <div style="margin-top:6px">${nbs.map(([og,c])=>
+      `<span class="j" data-g="${og}">${B.galaxies[og][7]||('#'+og)}</span>(${c}) `).join('')}</div>
+   <div class="dim">click a star for its real links · click a neighbour name to jump</div>`;
+  panel.querySelectorAll('[data-g]').forEach(el=>el.onclick=()=>enterGalaxy(+el.dataset.g));
+}
+async function showArticle(local){
+  const t=curTile, bg=B.galaxies[focus];
+  clearGroup(gArt);
+  const title=t.titles[local]||'?';
+  let deg=0; const lp=[];
+  for(let i=0;i<t.ne;i++){ const a=t.edges[2*i],b=t.edges[2*i+1];
+    if(a===local||b===local){ deg++;
+      lp.push(t.pos[3*a],t.pos[3*a+1],t.pos[3*a+2]*zK,t.pos[3*b],t.pos[3*b+1],t.pos[3*b+2]*zK); } }
+  if(lp.length){ const g2=new THREE.BufferGeometry();
+    g2.setAttribute('position',new THREE.BufferAttribute(new Float32Array(lp),3));
+    gArt.add(new THREE.LineSegments(g2,new THREE.LineBasicMaterial({color:0x88ddff,
+        transparent:true,opacity:.95,blending:THREE.AdditiveBlending,depthWrite:false}))); }
+  const xlines=[]; const targets=[];
+  for(let i=0;i<t.nx;i+=3){ if(t.cross[i]!==local) continue;
+    const og=t.cross[i+1], ov=t.cross[i+2];
+    let ot; try{ ot=await tile(og); }catch(e){ continue; }
+    const a=new THREE.Vector3(t.pos[3*local],t.pos[3*local+1],t.pos[3*local+2]*zK);
+    const b=new THREE.Vector3(ot.pos[3*ov],ot.pos[3*ov+1],ot.pos[3*ov+2]*zK);
+    xlines.push(a,b); targets.push([og,ov,ot.titles[ov]]); }
+  if(xlines.length){ const pos=[]; xlines.forEach(v=>pos.push(v.x,v.y,v.z));
+    const g3=new THREE.BufferGeometry();
+    g3.setAttribute('position',new THREE.BufferAttribute(new Float32Array(pos),3));
+    gArt.add(new THREE.LineSegments(g3,new THREE.LineBasicMaterial({color:0xff66cc,
+        transparent:true,opacity:.95,blending:THREE.AdditiveBlending,depthWrite:false}))); }
+  panel.innerHTML=`<h3>${title}</h3>
+    <div>galaxy: ${bg[7]||('#'+focus)} · internal deg ${deg} · cross ${targets.length}</div>
+    <div style="margin-top:6px">${targets.map(([og,ov,tt],i)=>
+       `<div><span class="j" data-t="${i}">${tt||'?'} → ${B.galaxies[og][7]||('#'+og)}</span></div>`).join('')}</div>
+    <div class="dim" style="margin-top:6px"><span class="j" data-close="1">close</span></div>`;
+  panel.querySelectorAll('[data-t]').forEach(el=>el.onclick=async()=>{
+    const [og,ov]=targets[+el.dataset.t]; await enterGalaxy(og); showArticle(ov); });
+  panel.querySelector('[data-close]').onclick=()=>clearGroup(gArt);
+}
+const gArt = new THREE.Group(); scene.add(gArt);
+
+// ---------- camera fly + auto reveal ----------
+let anim=null;
+function flyTo(target, dist){
+  const dir=camera.position.clone().sub(controls.target).normalize();
+  anim={t0:performance.now(), dur:900,
+        p0:camera.position.clone(), p1:target.clone().addScaledVector(dir,dist),
+        q0:controls.target.clone(), q1:target.clone()};
+}
+let autoReveal=true, lastAuto=0;
+function autoCheck(now){
+  if(!autoReveal||anim) return;
+  if(now-lastAuto<500) return; lastAuto=now;
+  if(focus>=0){ const bg=B.galaxies[focus];
+    if(camera.position.distanceTo(new THREE.Vector3(bg[0],bg[1],bg[2]*zK))>bg[3]*14) leaveGalaxy(false);
+    return; }
+  let best=-1,bd=1e18;
+  for(let i=0;i<G;i++){ const g=B.galaxies[i]; if(g[5]===2||g[6]<=1) continue;
+    const d=camera.position.distanceTo(gPos[i].clone().setZ(g[2]*zK));
+    if(d<g[3]*4.5&&d<bd){bd=d;best=i;} }
+  if(best>=0) enterGalaxy(best,false);
+}
+
+// ---------- picking / hover ----------
+const ray=new THREE.Raycaster(); const mouse=new THREE.Vector2();
+let hoverT=0;
+renderer.domElement.addEventListener('pointermove',ev=>{
+  const now=performance.now(); if(now-hoverT<90) return; hoverT=now;
+  mouse.x=(ev.clientX/innerWidth)*2-1; mouse.y=-(ev.clientY/innerHeight)*2+1;
+  ray.setFromCamera(mouse,camera);
+  let txt='';
+  if(focus>=0&&artPts){ ray.params.Points={threshold:Math.max(B.galaxies[focus][3]/60,.4)};
+    const h=ray.intersectObject(artPts);
+    if(h.length) txt=curTile.titles[h[0].index]||''; }
+  if(!txt){ const h=ray.intersectObject(halo);
+    if(h.length){ const i=h[0].instanceId; const g=B.galaxies[i];
+      txt=`${g[7]||'galaxy #'+i}  (${g[6].toLocaleString()} articles)`; } }
+  if(txt){ tip.style.display='block'; tip.style.left=(ev.clientX+14)+'px';
+    tip.style.top=(ev.clientY+10)+'px'; tip.textContent=txt; }
+  else tip.style.display='none';
+});
+renderer.domElement.addEventListener('click',async ev=>{
+  mouse.x=(ev.clientX/innerWidth)*2-1; mouse.y=-(ev.clientY/innerHeight)*2+1;
+  ray.setFromCamera(mouse,camera);
+  if(focus>=0&&artPts){ ray.params.Points={threshold:Math.max(B.galaxies[focus][3]/60,.4)};
+    const h=ray.intersectObject(artPts);
+    if(h.length){ showArticle(h[0].index); return; } }
+  const h=ray.intersectObject(halo);
+  if(h.length) enterGalaxy(h[0].instanceId);
 });
 
-addEventListener('resize', ()=>{ camera.aspect = innerWidth/innerHeight;
-  camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
-(function loop(){ requestAnimationFrame(loop); controls.update(); renderer.render(scene,camera); })();
-exitGalaxy();
+// ---------- UI ----------
+const show={edges:true,bundles:true,macros:true,labels:true,dust:true};
+function bindToggle(id,key,fn){ const el=document.getElementById(id);
+  el.onclick=()=>{ show[key]=!show[key]; el.classList.toggle('on',show[key]); fn(); }; }
+bindToggle('tMacros','macros',()=>{ gMacros.visible=show.macros; });
+bindToggle('tLabels','labels',()=>{ macroLabels.visible=show.labels; });
+bindToggle('tDust','dust',()=>{ dustPts.visible=show.dust; });
+bindToggle('tBundles','bundles',()=>{ bundleLines.visible=show.bundles;
+   if(focus>=0){ const g=focus; leaveGalaxy(false); enterGalaxy(g,false); } });
+bindToggle('tEdges','edges',()=>{ if(focus>=0){ const g=focus; leaveGalaxy(false); enterGalaxy(g,false); } });
+document.getElementById('bAuto').onclick=e=>{ autoReveal=!autoReveal;
+  e.target.classList.toggle('on',autoReveal); };
+document.getElementById('back').onclick=()=>leaveGalaxy(true);
+addEventListener('keydown',e=>{ if(e.key==='Escape'){ clearGroup(gArt); leaveGalaxy(true); } });
+document.getElementById('q').addEventListener('keydown',e=>{
+  if(e.key!=='Enter') return;
+  const q=e.target.value.trim().toLowerCase(); if(!q) return;
+  let bi=-1; B.galaxies.forEach((g,i)=>{ if(bi<0&&g[7]&&g[7].toLowerCase().includes(q)) bi=i; });
+  if(bi<0) B.macros.forEach((m,i)=>{ if(bi<0&&m[5]&&m[5].toLowerCase().includes(q)) bi=100000+i; });
+  if(bi<0){ panel.innerHTML='<h3>not found</h3>'; return; }
+  if(bi>=100000){ const m=B.macros[bi-100000]; flyTo(new THREE.Vector3(m[0],m[1],m[2]*zK), m[3]*2.6); }
+  else enterGalaxy(bi);
+});
+const zsl=document.getElementById('zsq');
+zsl.addEventListener('input',()=>{ zK=parseFloat(zsl.value);
+  document.getElementById('zv').textContent=zK.toFixed(2);
+  paintGalaxies(); buildMacros(); buildBundles();
+  if(dustPts){ const p=dustPts.geometry.attributes.position;
+    dustIdx.forEach((gi,k)=>{ p.array[k*3+2]=B.galaxies[gi][2]*zK; }); p.needsUpdate=true; }
+  if(focus>=0&&curTile){ const pa=artPts.geometry.attributes.position;
+    for(let i=0;i<curTile.n;i++) pa.array[3*i+2]=curTile.pos[3*i+2]*zK; pa.needsUpdate=true;
+    const g=focus; leaveGalaxy(false); enterGalaxy(g,false); }
+});
+
+// ---------- loop ----------
+let frames=0,fpsT=performance.now(),fps=0;
+function loop(){
+  requestAnimationFrame(loop);
+  const now=performance.now();
+  if(anim){ const k=Math.min(1,(now-anim.t0)/anim.dur); const e=k*k*(3-2*k);
+    camera.position.lerpVectors(anim.p0,anim.p1,e);
+    controls.target.lerpVectors(anim.q0,anim.q1,e);
+    if(k>=1) anim=null; }
+  autoCheck(now);
+  controls.update(); renderer.render(scene,camera);
+  frames++; if(now-fpsT>1000){ fps=frames; frames=0; fpsT=now;
+    statsEl.textContent=`${fps}fps · tiles ${tileCache.size} · ${focus>=0?('in #'+focus):'universe'}`; }
+}
+loop();
+addEventListener('resize',()=>{ camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+panelUniverse();
 </script>
 </body>
 </html>
