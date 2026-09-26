@@ -12,7 +12,8 @@ import { DATA_BASE } from './base'
 
 // bootstrap.json を取得してデコードする。
 export async function loadBootstrap(): Promise<Bootstrap> {
-  const res = await fetch(DATA_BASE + 'bootstrap.json')
+  // bootstrap は常に鮮なものを取る(タイル版本の版元)。
+  const res = await fetch(DATA_BASE + 'bootstrap.json', { cache: 'no-store' })
   if (!res.ok) throw new Error(`bootstrap fetch failed: ${res.status}`)
   const raw = (await res.json()) as RawBootstrap
   return {

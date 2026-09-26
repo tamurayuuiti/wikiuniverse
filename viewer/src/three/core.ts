@@ -18,6 +18,7 @@ import { TileCache } from '@/data/tileCache'
 import { registerCommands } from '@/state/commands'
 import { getState, setState } from '@/state/store'
 import { FocusLayer, FOCUS_R } from './focusLayer'
+import { StarField } from './starField'
 import { UniverseLayer } from './universeLayer'
 
 // fly-to アニメーションの状態。
@@ -37,6 +38,7 @@ export class ViewerCore {
   private renderer: THREE.WebGLRenderer
   private controls: OrbitControls
   private uni: UniverseLayer | null = null
+  private stars: StarField | null = null
   private foc = new FocusLayer()
   private tiles = new TileCache()
   private b: Bootstrap | null = null
@@ -73,8 +75,11 @@ export class ViewerCore {
   // bootstrap 取得と宇宙層構築を行う。
   async init(): Promise<void> {
     this.b = await loadBootstrap()
+    this.tiles.setVersion(this.b.meta.generated_at)
     this.uni = new UniverseLayer(this.b)
     this.scene.add(this.uni.group)
+    this.stars = new StarField(this.tiles, this.b)
+    this.scene.add(this.stars.group)
     this.addStarfield()
     setState({ ready: true })
     this.loop()
@@ -166,6 +171,7 @@ export class ViewerCore {
   private setZ(k: number): void {
     setState({ zK: k })
     this.uni?.setZ(k)
+    this.stars?.clear()
     if (getState().focus >= 0) {
       const g = getState().focus
       this.leaveGalaxy(false)
@@ -174,10 +180,11 @@ export class ViewerCore {
   }
 
   // 表示トグルを切り替える。
-  private toggle(key: 'edges' | 'cross' | 'shells' | 'labels' | 'dust'): void {
+  private toggle(key: 'edges' | 'cross' | 'shells' | 'labels' | 'dust' | 'stars'): void {
     const t = { ...getState().toggles }
     t[key] = !t[key]
     setState({ toggles: t })
+    if (key === 'stars') return
     if (key !== 'edges' && key !== 'cross' && this.uni) this.uni.setToggle(key, t[key])
     if (key === 'cross' && this.uni) this.uni.setToggle('cross', t.cross)
     if (getState().focus >= 0) {
@@ -220,10 +227,17 @@ export class ViewerCore {
           if (ai !== null) text = this.focTitle(ai)
         }
       } else if (this.uni) {
-        const gi = this.uni.pick(this.ray)
-        if (gi !== null && this.b) {
-          const g = this.b.galaxies[gi]
-          text = `${g.name || 'galaxy #' + gi}  (${g.n.toLocaleString()} articles)`
+        const sp = this.stars?.pick(this.ray)
+        if (sp) {
+          const t = this.tiles.peek(sp.g)
+          text = t ? (t.titles[sp.local] ?? '') : ''
+        }
+        if (!text) {
+          const gi = this.uni.pick(this.ray)
+          if (gi !== null && this.b) {
+            const g = this.b.galaxies[gi]
+            text = `${g.name || 'galaxy #' + gi}  (${g.n.toLocaleString()} articles)`
+          }
         }
       }
       setState({ hover: text ? { text, x: ev.clientX, y: ev.clientY } : null })
@@ -237,6 +251,11 @@ export class ViewerCore {
         if (rg !== null) { void this.enterGalaxy(rg, true); return }
         const ai = this.foc.pickArticle(this.ray)
         if (ai !== null) void this.showArticle(ai)
+        return
+      }
+      const sp = this.stars?.pick(this.ray)
+      if (sp) {
+        void this.enterGalaxy(sp.g, true).then(() => this.showArticle(sp.local))
         return
       }
       const gi = this.uni?.pick(this.ray)
@@ -266,8 +285,15 @@ export class ViewerCore {
       this.controls.target.lerpVectors(this.anim.q0, this.anim.q1, e)
       if (k >= 1) this.anim = null
     }
-    if (getState().stage === 'universe' && this.uni) {
-      this.uni.updateDynamicSizes(this.camera, innerHeight)
+    if (getState().stage === 'universe' && this.uni && this.stars) {
+      const st = getState()
+      // px/dist を計算し、前フレームの fade でハロー減衰を適用する。
+      this.uni.updateDynamicSizes(this.camera, innerHeight, this.stars.fadeArray())
+      // 当フレームの LOD 同期(浮上/退避/α)を行う。
+      this.stars.sync(this.uni.px, {
+        zK: st.zK, pr: this.renderer.getPixelRatio(),
+        showEdges: st.toggles.edges, enabled: st.toggles.stars,
+      })
     }
     this.controls.update()
     this.renderer.render(this.scene, this.camera)

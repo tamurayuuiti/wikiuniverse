@@ -69,6 +69,8 @@ def main():
           f"({time.time()-t0:.0f}s)")
 
     order = np.argsort(memb, kind="stable")
+    rank = np.empty(n, np.int64)
+    rank[order] = np.arange(n)
     starts = np.searchsorted(memb[order], np.arange(G), side="left")
     ends = np.searchsorted(memb[order], np.arange(G), side="right")
     starts_arr = starts
@@ -124,11 +126,11 @@ def main():
             cs = c[oc]
             uniq, first = np.unique(cs, return_index=True)
             ui = np.searchsorted(uniq, cs)
-            rank = np.arange(len(cs)) - first[ui]
-            pos = e_fill[uniq][ui] + rank
+            rnk = np.arange(len(cs)) - first[ui]
+            pos = e_fill[uniq][ui] + rnk
             us, vs = u[same][oc], v[same][oc]
-            e_buf[pos, 0] = local_idx(order, us, gu[same][oc], starts_arr)
-            e_buf[pos, 1] = local_idx(order, vs, gu[same][oc], starts_arr)
+            e_buf[pos, 0] = local_idx(rank, us, gu[same][oc], starts_arr)
+            e_buf[pos, 1] = local_idx(rank, vs, gu[same][oc], starts_arr)
             e_fill[uniq] += np.diff(np.append(first, len(cs)))
         cr = ~same
         if cr.any():
@@ -150,9 +152,9 @@ def main():
                 ui_x = np.searchsorted(uniq_x, gs)
                 rank_x = np.arange(len(gs)) - first_x[ui_x]
                 posx = x_fill[uniq_x][ui_x] + rank_x
-                x_buf[posx, 0] = local_idx(order, src_p[ocx], gs, starts_arr)
+                x_buf[posx, 0] = local_idx(rank, src_p[ocx], gs, starts_arr)
                 x_buf[posx, 1] = dst_g[ocx].astype(np.uint32)
-                x_buf[posx, 2] = local_idx(order, dst_p[ocx], dst_g[ocx], starts_arr)
+                x_buf[posx, 2] = local_idx(rank, dst_p[ocx], dst_g[ocx], starts_arr)
                 x_fill[uniq_x] += cnt_x
         if (i // CH) % 5 == 0:
             print(f"  tiles pass2 {i + len(blk):,}/{len(E):,} ({time.time()-t0:.0f}s)", flush=True)
@@ -213,10 +215,10 @@ def main():
     print(f"[tiles] bootstrap.json + tiles_meta.json: {meta}")
 
 
-def local_idx(order, pids, gids, starts_arr):
-    """local index of article pids within their galaxy (members sorted by idx)."""
-    opos = np.searchsorted(order, pids)
-    return (opos - starts_arr[gids]).astype(np.uint32)
+def local_idx(rank, pids, gids, starts_arr):
+    """記事 pid の銀河内ローカル索引。rank は順列 order の逆写像であること
+    (order 自体は非単調なので searchsorted は使えない — 2026-09-27 バグの根因)。"""
+    return (rank[pids] - starts_arr[gids]).astype(np.uint32)
 
 
 if __name__ == "__main__":

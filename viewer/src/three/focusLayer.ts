@@ -24,6 +24,15 @@ const CROSS_ARC_CAP = 1500
 // 内部リンク描画の上限本数(超えると間引く)。
 const EDGE_CAP = 150000
 
+// position 配列の非有限値を 0 置換して報告する(NaN は boundingSphere/picking を壊す)。
+function sanitizePos(name: string, g: number, arr: Float32Array): void {
+  let bad = 0
+  for (let i = 0; i < arr.length; i++) {
+    if (!Number.isFinite(arr[i])) { arr[i] = 0; bad++ }
+  }
+  if (bad) console.warn(`[focus] galaxy ${g}: sanitized ${bad} non-finite values in ${name}`)
+}
+
 // 潜入オプション。
 export interface FocusOptions {
   zK: number
@@ -75,6 +84,7 @@ export class FocusLayer {
       c2.copy(base).offsetHSL(0, 0, Math.min(0.35, deg[i] / 60))
       colA.set([c2.r, c2.g, c2.b], i * 3)
     }
+    sanitizePos('article-pos', g, posA)
     const pg = new THREE.BufferGeometry()
     pg.setAttribute('position', new THREE.BufferAttribute(posA, 3))
     pg.setAttribute('aSize', new THREE.BufferAttribute(szA, 1))
@@ -89,8 +99,10 @@ export class FocusLayer {
       for (let i = 0; i < tile.ne; i += stride) {
         lp.push(...this.local(tile.edges[2 * i], opts.zK), ...this.local(tile.edges[2 * i + 1], opts.zK))
       }
+      const larr = new Float32Array(lp)
+      sanitizePos('internal-lines', g, larr)
       const lg = new THREE.BufferGeometry()
-      lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lp), 3))
+      lg.setAttribute('position', new THREE.BufferAttribute(larr, 3))
       this.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({
         color: 0x2a4a66, transparent: true, opacity: 0.3,
         blending: THREE.AdditiveBlending, depthWrite: false })))
@@ -141,8 +153,10 @@ export class FocusLayer {
         cnt2++
       }
       if (xp.length) {
+        const xarr = new Float32Array(xp)
+        sanitizePos('cross-arcs', g, xarr)
         const xg = new THREE.BufferGeometry()
-        xg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(xp), 3))
+        xg.setAttribute('position', new THREE.BufferAttribute(xarr, 3))
         this.add(new THREE.LineSegments(xg, new THREE.LineBasicMaterial({
           color: 0xbb55bb, transparent: true, opacity: 0.34,
           blending: THREE.AdditiveBlending, depthWrite: false })))
@@ -227,8 +241,10 @@ export class FocusLayer {
       if (a === local || b === local) lp.push(...this.local(a, zK), ...this.local(b, zK))
     }
     if (!lp.length) return null
+    const larr = new Float32Array(lp)
+    sanitizePos('ego-internal', 0, larr)
     const g = new THREE.BufferGeometry()
-    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lp), 3))
+    g.setAttribute('position', new THREE.BufferAttribute(larr, 3))
     const ls = new THREE.LineSegments(g, new THREE.LineBasicMaterial({
       color: 0x88ddff, transparent: true, opacity: 0.95,
       blending: THREE.AdditiveBlending, depthWrite: false }))
@@ -263,8 +279,10 @@ export class FocusLayer {
       }
     })
     if (xp.length) {
+      const xarr = new Float32Array(xp)
+      sanitizePos('ego-cross', 0, xarr)
       const g3 = new THREE.BufferGeometry()
-      g3.setAttribute('position', new THREE.BufferAttribute(new Float32Array(xp), 3))
+      g3.setAttribute('position', new THREE.BufferAttribute(xarr, 3))
       this.add(new THREE.LineSegments(g3, new THREE.LineBasicMaterial({
         color: 0xff66cc, transparent: true, opacity: 0.95,
         blending: THREE.AdditiveBlending, depthWrite: false })))

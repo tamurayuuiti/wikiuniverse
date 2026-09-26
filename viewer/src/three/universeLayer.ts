@@ -1,19 +1,21 @@
 // src/three/universeLayer.ts
-// 宇宙ビュー(マクロ殻+銀河ハロー+バンドル+dust)の描画層を管理する。
+// 宇宙ビュー(マクロ塊+銀河ハロー+バンドル+dust)の描画層を管理する。
 //
 // 責務:
-// - 銀河ハロー/コアのインスタンス描画と毎フレームの最小角サイズ clamp
-// - マクロ殻・ラベル・ペアバンドル・dust の生成と z 圧縮追従
-// - 銀河ハローに対するレイキャスト提供
+// - 毎フレームの画面 px 計算(px/dist 配列の公開=LOD 制御器への入力)
+// - 銀河ハロー/コアの最小角サイズ clamp と StarField α 連動の減衰
+// - マクロ塊スプライト(遠景でマクロを「一つの塊」へ受け渡す役)
+// - 銀河ハローへのレイキャスト提供
 //
 // 注意:
-// - 毎フレームのインスタンス行列更新は 1,971 個までに限定する(それ以上は LOD 側へ委譲)。
-// - z 圧縮は物理座標を変更せず、描画時の z 乗算のみで行う。
+// - 加算ブレンドでは色乗算が α 乗算と等価であるため、フェードは setColorAt で行う。
+// - z 圧縮は物理座標を変更せず描画時の z 乗算のみで行う。
 
 import * as THREE from 'three'
 import type { Bootstrap } from '@/types/catalog'
 import { curvedLines } from './curves'
-import { labelTex, macroColor, STAR_TEX } from './textures'
+import { screenPx, smoothstep, LOD } from './lod'
+import { HALO_TEX, labelTex, macroColor } from './textures'
 
 // 銀河ハローの最小ピクセルサイズ(視認性保証)。
 const HALO_MIN_PX = 4.5
@@ -21,29 +23,40 @@ const HALO_MIN_PX = 4.5
 const DUST_MIN_PX = 1.2
 // マクロ殻の最小ピクセルサイズ。
 const MACRO_MIN_PX = 9
+// マクロ塊スプライトの最小ピクセルサイズ。
+const MACRO_CLUMP_MIN_PX = 7
 
 // 宇宙ビュー描画層。
 export class UniverseLayer {
   readonly group = new THREE.Group()
+  // 毎フレーム計算する銀河の画面 px 半径とカメラ距離(LOD 制御器への入力)。
+  readonly px: Float32Array
+  readonly dist: Float32Array
   private halo: THREE.InstancedMesh
   private coreI: THREE.InstancedMesh
   private haloR: Float32Array
   private coreR: Float32Array
+  private haloCol: Float32Array
   private macroGroup = new THREE.Group()
   private labelGroup = new THREE.Group()
   private bundleGroup = new THREE.Group()
   private macroObjs: { obj: THREE.LineSegments; r: number }[] = []
+  private macroClumps: { sp: THREE.Sprite; r: number }[] = []
   private dust: THREE.Points | null = null
   private b: Bootstrap
   private zK = 1
   private m4 = new THREE.Matrix4()
   private v = new THREE.Vector3()
+  private c = new THREE.Color()
 
   constructor(b: Bootstrap) {
     this.b = b
     const G = b.galaxies.length
+    this.px = new Float32Array(G)
+    this.dist = new Float32Array(G)
     this.haloR = new Float32Array(G)
     this.coreR = new Float32Array(G)
+    this.haloCol = new Float32Array(G * 3)
     this.halo = new THREE.InstancedMesh(
       new THREE.SphereGeometry(1, 12, 9),
       new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.14, blending: THREE.AdditiveBlending, depthWrite: false }),
@@ -56,13 +69,14 @@ export class UniverseLayer {
     this.buildDust()
   }
 
-  // 銀河ハロー/コアの基底サイズと色を設定する。
+  // 銀河ハロー/コアの基底サイズと色を設定する(基底色はフェード計算用に保持)。
   private paintGalaxies(): void {
     this.b.galaxies.forEach((g, i) => {
       const r = Math.max(g.r, 0.8)
       this.haloR[i] = r * 1.55
       this.coreR[i] = r * 0.3
       const c = g.cls === 1 ? new THREE.Color(0x666666) : g.cls === 2 ? new THREE.Color(0x222222) : macroColor(g.macroId)
+      this.haloCol.set([c.r, c.g, c.b], i * 3)
       this.m4.makeScale(this.haloR[i], this.haloR[i], this.haloR[i])
       this.m4.setPosition(g.x, g.y, g.z * this.zK)
       this.halo.setMatrixAt(i, this.m4)
@@ -78,11 +92,12 @@ export class UniverseLayer {
     if (this.coreI.instanceColor) this.coreI.instanceColor.needsUpdate = true
   }
 
-  // マクロ殻と上位マクロラベルを生成する。
+  // マクロ殻・塊スプライト・上位ラベルを生成する。
   private buildMacros(): void {
     this.macroGroup.clear()
     this.labelGroup.clear()
     this.macroObjs = []
+    this.macroClumps = []
     this.b.macros.forEach(m => {
       if (m.n <= 1) return
       const w = new THREE.LineSegments(
@@ -91,6 +106,13 @@ export class UniverseLayer {
       w.position.set(m.x, m.y, m.z * this.zK)
       this.macroGroup.add(w)
       this.macroObjs.push({ obj: w, r: m.r })
+      // 遠景でマクロを「一つの塊」へ受け渡す加算スプライト。
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: HALO_TEX, color: 0x6688aa, transparent: true, opacity: 0.4,
+        depthWrite: false, blending: THREE.AdditiveBlending }))
+      sp.position.set(m.x, m.y, m.z * this.zK)
+      this.macroGroup.add(sp)
+      this.macroClumps.push({ sp, r: m.r })
     })
     this.b.macros.slice().sort((a, b2) => b2.n - a.n).slice(0, 10).forEach(m => {
       const [t, ar] = labelTex((m.rep || `macro#${m.id}`).slice(0, 14))
@@ -122,7 +144,7 @@ export class UniverseLayer {
     geo.setAttribute('position', new THREE.BufferAttribute(p, 3))
     this.dust = new THREE.Points(geo, new THREE.PointsMaterial({
       size: 1.6, sizeAttenuation: false, transparent: true, depthWrite: false,
-      blending: THREE.AdditiveBlending, color: 0x445566, opacity: 0.55, map: STAR_TEX }))
+      blending: THREE.AdditiveBlending, color: 0x445566, opacity: 0.55, map: HALO_TEX }))
     this.group.add(this.dust)
   }
 
@@ -152,26 +174,45 @@ export class UniverseLayer {
     if (key === 'dust' && this.dust) this.dust.visible = on
   }
 
-  // 距離に応じた最小角サイズを毎フレーム適用する(遠景での視認性保証)。
-  updateDynamicSizes(camera: THREE.Camera, innerH: number): void {
-    const tan = Math.tan(THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov / 2))
-    const pxWorld = (d: number, px: number) => (2 * d * tan * px) / innerH
+  // px/dist を計算し、fade(星の出現 α)を連動させて見かけを更新する。
+  updateDynamicSizes(camera: THREE.Camera, innerH: number, fade: Float32Array): void {
+    const fov = (camera as THREE.PerspectiveCamera).fov
+    let upd = false
     for (let i = 0; i < this.b.galaxies.length; i++) {
       const g = this.b.galaxies[i]
       this.v.set(g.x, g.y, g.z * this.zK)
       const d = camera.position.distanceTo(this.v)
-      const minH = pxWorld(d, g.cls === 2 ? DUST_MIN_PX : HALO_MIN_PX)
+      this.dist[i] = d
+      this.px[i] = screenPx(this.haloR[i], d, innerH, fov)
+      // 塊←→星の受け渡し: 星が出た分だけハローをリムへ減衰する。
+      const f = 1 - 0.88 * fade[i]
+      this.c.setRGB(this.haloCol[i * 3] * f, this.haloCol[i * 3 + 1] * f, this.haloCol[i * 3 + 2] * f)
+      this.halo.setColorAt(i, this.c)
+      const minH = screenPx(1, d, innerH, fov) * (g.cls === 2 ? DUST_MIN_PX : HALO_MIN_PX)
       const eh = Math.max(this.haloR[i], minH)
       const ec = Math.max(this.coreR[i], minH * 0.45)
       this.m4.makeScale(eh, eh, eh); this.m4.setPosition(this.v); this.halo.setMatrixAt(i, this.m4)
       this.m4.makeScale(ec, ec, ec); this.m4.setPosition(this.v); this.coreI.setMatrixAt(i, this.m4)
+      upd = true
     }
-    this.halo.instanceMatrix.needsUpdate = true
-    this.coreI.instanceMatrix.needsUpdate = true
+    if (upd) {
+      this.halo.instanceMatrix.needsUpdate = true
+      this.coreI.instanceMatrix.needsUpdate = true
+      if (this.halo.instanceColor) this.halo.instanceColor.needsUpdate = true
+    }
     this.macroObjs.forEach(({ obj, r }) => {
       const d = camera.position.distanceTo(obj.position)
-      const s = Math.max(r, pxWorld(d, MACRO_MIN_PX)) / r
+      const s = Math.max(r, screenPx(1, d, innerH, fov) * MACRO_MIN_PX) / r
       obj.scale.set(s, s, s)
+    })
+    // マクロ塊スプライト: 銀河が塊へ溶ける距離でマクロ塊が主役になる(自己相似)。
+    this.macroClumps.forEach(({ sp, r }) => {
+      const d = camera.position.distanceTo(sp.position)
+      const pxM = screenPx(r, d, innerH, fov)
+      const a = (1 - smoothstep(LOD.emerge, LOD.resolve, pxM)) * 0.5 + 0.06
+      ;(sp.material as THREE.SpriteMaterial).opacity = a
+      const sc = Math.max(r * 2.0, screenPx(1, d, innerH, fov) * MACRO_CLUMP_MIN_PX * 2.2)
+      sp.scale.set(sc, sc, 1)
     })
   }
 

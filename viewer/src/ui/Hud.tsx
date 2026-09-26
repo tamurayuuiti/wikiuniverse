@@ -19,6 +19,7 @@ const TOGGLE_DEFS: { key: keyof Toggles; label: string }[] = [
   { key: 'shells', label: 'shells' },
   { key: 'labels', label: 'labels' },
   { key: 'dust', label: 'dust' },
+  { key: 'stars', label: 'stars' },
 ]
 
 // 左上 HUD コンポーネント。

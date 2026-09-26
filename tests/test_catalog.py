@@ -213,6 +213,28 @@ def main():
     assert os.path.exists(os.path.join(sp, "tiles", "gal_000000.json"))
     assert os.path.exists(os.path.join(sp, "tiles_meta.json"))
 
+    # ---- tile CONTENT round-trip: local idx must map back to the exact global
+    #      undirected internal edges of the galaxy (catches searchsorted-on-
+    #      permutation class bugs, 2026-09-27)
+    import struct as _st
+    with open(t0f, "rb") as fh:
+        raw = fh.read()
+    nn, ne, nx = _st.unpack("<III", raw[:12])
+    ed = np.frombuffer(raw, offset=12 + nn * 12, count=ne * 2, dtype=np.uint32).reshape(-1, 2)
+    cr = np.frombuffer(raw, offset=12 + nn * 12 + ne * 8, count=nx * 3, dtype=np.uint32).reshape(-1, 3)
+    memb_s = np.load(os.path.join(BASE, "community", "full", "membership_res1_s.npy"))
+    ord_s = np.argsort(memb_s, kind="stable")
+    st0 = np.searchsorted(memb_s[ord_s], 0, side="left")
+    en0 = np.searchsorted(memb_s[ord_s], 0, side="right")
+    members0 = ord_s[st0:en0]
+    assert ed.max(initial=0) < nn and cr[:, 0].max(initial=0) < nn
+    got = sorted(tuple(sorted((int(members0[a]), int(members0[b])))) for a, b in ed.tolist())
+    Eu = np.fromfile(os.path.join(BASE, "graph", "edges_undirected_unique.bin"),
+                     dtype=np.int32).reshape(-1, 2)
+    in0 = (memb_s[Eu[:, 0]] == 0) & (memb_s[Eu[:, 1]] == 0)
+    exp = sorted(tuple(sorted((int(a), int(b)))) for a, b in Eu[in0].tolist())
+    assert got == exp, f"tile edges mismatch: got={got} exp={exp} members0={members0.tolist()} ed={ed.tolist()}"
+
 
     # purity v2 outputs present with new schema
     pur = pq.read_table(os.path.join(dirs.community, "full", "purity_res1_s.parquet")).to_pydict()

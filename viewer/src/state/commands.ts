@@ -12,7 +12,7 @@ export interface ViewerCommands {
   enterGalaxy(g: number): void
   leave(): void
   setZ(k: number): void
-  toggle(key: 'edges' | 'cross' | 'shells' | 'labels' | 'dust'): void
+  toggle(key: 'edges' | 'cross' | 'shells' | 'labels' | 'dust' | 'stars'): void
   search(q: string): void
   jumpToArticle(g: number, local: number): void
 }

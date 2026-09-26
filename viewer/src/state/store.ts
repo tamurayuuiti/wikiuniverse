@@ -18,6 +18,7 @@ export interface Toggles {
   shells: boolean
   labels: boolean
   dust: boolean
+  stars: boolean
 }
 
 // 右パネルの表示モデル。
@@ -44,7 +45,7 @@ let state: ViewerState = {
   stage: 'universe',
   focus: -1,
   hover: null,
-  toggles: { edges: true, cross: true, shells: true, labels: true, dust: true },
+  toggles: { edges: true, cross: true, shells: true, labels: true, dust: true, stars: true },
   zK: 1.0,
   panel: { kind: 'universe' },
   stats: { fps: 0, tiles: 0 },

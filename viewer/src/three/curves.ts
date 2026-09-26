@@ -25,6 +25,8 @@ export function curvedLines(
 ): THREE.LineSegments {
   const pos: number[] = []
   arcs.forEach(({ a, b, w }) => {
+    // 非有限端点は NaN ジオメトリとなるため描画対象から除外する。
+    if (!Number.isFinite(a.x + a.y + a.z + b.x + b.y + b.z)) return
     const mid = a.clone().add(b).multiplyScalar(0.5)
     const dir = b.clone().sub(a)
     const len = dir.length()
