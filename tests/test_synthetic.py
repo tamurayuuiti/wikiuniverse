@@ -47,6 +47,7 @@ def build_fixtures():
     rows.append("(2004,1,'Sandbox_r',1,0,0.5,'20260101000000','20260101000000',1,50,'wikitext',NULL)")
     rows.append("(3000,1,'ノートX',0,0,0.5,'20260101000000','20260101000000',1,50,'wikitext',NULL)")
     rows.append("(3001,14,'Category:テスト',0,0,0.5,'20260101000000','20260101000000',1,50,'wikitext',NULL)")
+    rows.append("(3002,14,'Category:テスト2',0,0,0.5,'20260101000000','20260101000000',1,50,'wikitext',NULL)")
     with gzip.open(os.path.join(dump, "jawiki-latest-page.sql.gz"), "wb") as f:
         f.write(b"CREATE TABLE `page` (\n `page_id` int\n) ENGINE=InnoDB;\nINSERT INTO `page` VALUES\n")
         f.write((",\n".join(rows) + ";\n").encode())
@@ -57,6 +58,7 @@ def build_fixtures():
     for t in list(art_titles.values()) + list(redir.values()) + ["存在しない記事X", "赤リンクA", "赤リンクB"]:
         lt[t] = nxt; nxt += 1
     lt["Category:テスト"] = nxt; nxt += 1
+    lt["Category:テスト2"] = nxt; nxt += 1
     lt["ノートX"] = nxt; nxt += 1
     rows = []
     for t, i in lt.items():
@@ -113,6 +115,21 @@ def build_fixtures():
     with gzip.open(os.path.join(dump, "jawiki-latest-pagelinks.sql.gz"), "wb") as f:
         f.write(b"CREATE TABLE `pagelinks` (\n `pl_from` int\n) ENGINE=InnoDB;\nINSERT INTO `pagelinks` VALUES\n")
         f.write((",\n".join(rows) + ";\n").encode())
+    # --- categorylinks fixture
+    def CLT(t):
+        return lt[t]
+    cl_rows = []
+    def cl(src, cat, typ="page"):
+        cl_rows.append(f"({src},'あんはさんと\\nソート','2026-01-01 00:00:00','あんはさんと','{typ}',1,{CLT(cat)})")
+    cl(1000, "Category:テスト"); cl(1001, "Category:テスト"); cl(1004, "Category:テスト")
+    cl(1002, "Category:テスト2"); cl(1003, "Category:テスト2")
+    cl(2000, "Category:テスト")                      # redirect src -> not article
+    cl(1005, "Category:テスト", typ="subcat")        # skipped
+    cl(1006, "Category:テスト", typ="file")          # skipped
+    with gzip.open(os.path.join(dump, "jawiki-latest-categorylinks.sql.gz"), "wb") as f:
+        f.write(b"CREATE TABLE `categorylinks` (\n `cl_from` int\n) ENGINE=InnoDB;\nINSERT INTO `categorylinks` VALUES\n")
+        f.write((",\n".join(cl_rows) + ";\n").encode())
+
     return kept_expect, len(edges)
 
 

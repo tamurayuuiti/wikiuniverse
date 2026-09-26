@@ -105,6 +105,16 @@ def cmd_subset_bfs(a):
     extract_subset(dirs.edges_bin, nodes, out, meta, parsed_dir=dirs.parsed)
 
 
+def cmd_categories(a):
+    from .catparse import build_category_artifacts
+    from .dumpio import FILES
+    dirs = Dirs(a.base)
+    dirs.ensure(dirs.graph)
+    build_category_artifacts(dirs.dump_file(FILES["categorylinks"]),
+                             dirs.dump_file(FILES["linktarget"]),
+                             dirs.parsed, dirs.graph, meta_path=dirs.meta)
+
+
 def cmd_body_edges(a):
     from .xmlparse import build_body_edges
     from .dumpio import FILES
@@ -168,6 +178,8 @@ def main():
     p.add_argument("--max-in-degree", type=int, default=10000)
     p.add_argument("--seed", type=int, default=42); p.add_argument("--name", default=None)
     p.set_defaults(fn=cmd_subset_bfs)
+
+    p = sub.add_parser("categories"); p.set_defaults(fn=cmd_categories)
 
     p = sub.add_parser("body-edges")
     p.add_argument("--source", default="pages-articles",

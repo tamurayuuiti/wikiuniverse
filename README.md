@@ -165,6 +165,21 @@ python scripts/compare_body_vs_pagelinks.py --base data
 #   部分 XML で検証した場合は --max-pid 114794 を付ける
 ```
 
+## カテゴリ整合性(E4: 銀河は主題と一致しているか)
+
+リンク由来のコミュニティ(銀河)がカテゴリ=主題とどれだけ一致するかを定量する。
+純度(top1_share)が高いほど「銀河の名前」をカテゴリから自動付与できる。
+
+```bash
+python -m wu.cli --base data download --files categorylinks   # 176MB
+python -m wu.cli --base data categories                       # ~2-5分
+#   → graph/categories.parquet + graph/article_categories.bin
+
+python scripts/community_purity.py --base data --tag res1_sub        # 生グラフ銀河の純度
+python scripts/community_purity.py --base data --tag res1_body_sub   # 本文グラフ銀河の純度
+#   → community/full/purity_<tag>.parquet / purity_<tag>.json + コンソール表
+```
+
 ## 指標定義(評価レポート共通)
 
 コミュニティ c について(エッジはサブセット内部の無向一意リンク):
