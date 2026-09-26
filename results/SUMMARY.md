@@ -299,3 +299,11 @@ python scripts\compare_body_vs_pagelinks.py --base data                # フル�
 **compare フル統計**: pagelinks outdeg p50=46/p90=222 vs body p50=28/p90=93。**膨張率 p50=×1.23**(中央値記事は僅か)/ p90=×4.99 / p99=×22.8 = **ヘビーテール**(地理 Stub・芸能・年表に集中)。pure_template(本文0・pl50+)= 115 記事。→ 記事ズームの間引きは「本文リンク優先」ポリシーが有効。
 
 **銀河カタログ(D16 のデータ契約)**: `scripts/build_galaxy_catalog.py` 実装 — 既存成果物から `data/final/` に galaxies/macros/galaxy_pairs_topK/macro_pairs/catalog_meta を生成。銀河→マクロの**厳密包含チェック**、dust(孤立)フラグ、tf-idf 命名列、top 近傍銀河(集約重み付き)を含む。合成 E2E テスト(tests/test_catalog.py)で包含 0 違反・ペア集約の整合を検証済み。
+
+### フェーズ 2f: purity v2 実行結果・銀河カタログ生成・グローバルレイアウト実装(2026-09-26)
+
+**purity v2(res1_sub)**: メタカテゴリ除外は 17 個(>2万記事)のみだが、フィルタ後 top1_share は mean **0.301**(p50 0.245 / p90 0.623)。**nameable_share: ノード比 37.8% / 実効コミュニティ比 63.8%**(閾値 0.30)。純度は銀河サイズと逆相関(最大級 8–10k 銀河は 0.06–0.48)。中頻度の技術系カテゴリ(座標タグ誤り/allcinema識別子/Titlestyle 等)が頻度フィルタをすり抜けるため、**カタログ側でブラックリスト+代表記事フォールバックの命名キュレーション**を追加。本文銀河の nameable は 31.2%/44.7% とやや低く、学術系(数学 0.754、バスケットボール 0.778)が最も純度が高い。
+
+**銀河カタログ生成**(data/final/): galaxies=1,971(dust 436 / named 1,769)、macros=499(実効 63+dust 436)、galaxy_pairs=408,734 組(topK 30,000)、macro_pairs=1,118。**containment_violations=0**(厳密包含ツリー確認)。**macro_pairs_weight_sum=29,855,565 が res1 マクロの cross エッジ数と完全一致** = 集約パイプラインの自己整合検証 OK。display_class(galaxy/medium/dust)分類を実装 — 年代銀河(oR 0.965)・元号銀河(0.924)・汎用ハブ銀河(0.925)・学術識別子銀河は **medium(銀河間物質)** として特別描画対象に。
+
+**グローバルレイアウト実装**(scripts/layout_global.py): マクロ円盤配置(macro_pairs 重み付き FR、半径∝√記事数)→ 円盤重なり緩和 → マクロ内銀河配置(galaxy_pairs 重み付き FR、半径=pack·R_M·√(n_g/n_M))→ 緩和 → dust シェル。出力: galaxy_positions / macro_positions / layout_meta / preview.png(xy 投影)。数秒で完走する規模。合成 E2E テスト(tests/test_catalog.py)にレイアウト検証を含め、テスト計 5 本全パス。

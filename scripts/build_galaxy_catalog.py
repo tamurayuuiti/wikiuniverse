@@ -36,6 +36,38 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wu.dumpio import write_json  # noqa: E402
 from wu.paths import Dirs  # noqa: E402
+import re  # noqa: E402
+
+# カテゴリ名のブラックリスト(技術・保守系。頻度フィルタをすり抜ける中頻度メタ)
+NAME_BLACKLIST = [
+    r"を使用しているページ", r"^ウィキデータにある", r"^ウィキデータにない",
+    r"誤りがあるページ", r"仮リンク", r"保護中のページ", r"翻訳を必要とする",
+    r"にbackgroundと", r"^すべての", r"曖昧さ回避$", r"不明$", r"名目録$",
+    r"^Template", r"^Pages ", r"^Articles ", r"^Use dmy",
+]
+NAME_BLACKLIST_RE = [re.compile(x) for x in NAME_BLACKLIST]
+
+# 媒介銀河(medium)判定: 代表記事が年・元号・汎用ハブ
+MEDIUM_REP_PATTERNS = [
+    re.compile(r"^\d{1,4}年"), re.compile(r"^(昭和|平成|大正|明治|慶応|江戸時代|19世紀|20世紀|21世紀)$"),
+]
+MEDIUM_HUBS = {"日本", "英語", "ISBN", "地理座標系", "ウェイバックマシン", "YouTube",
+               "X_(ソーシャル・ネットワーキング・サービス)", "デジタルオブジェクト識別子",
+               "ISSN", "PubMed", "国立国会図書館", "アメリカ合衆国", "日本の郵便番号",
+               "NDL", "VIAF", "LCCN", "CiNii", "GND"}
+
+
+def _blacklisted(title: str) -> bool:
+    return any(r.search(title) for r in NAME_BLACKLIST_RE)
+
+
+def _parse_top3(s3: str):
+    out = []
+    for part in (s3 or "").split(" / "):
+        m = re.match(r"(.+)\(([\d.]+)\)$", part.strip())
+        if m:
+            out.append((m.group(1), float(m.group(2))))
+    return out
 
 
 def main():
@@ -114,8 +146,47 @@ def main():
     cluster_of = (np.asarray(cl_node)[any_node].astype(np.int32)
                   if cl_node is not None else np.full(G, -1, np.int32))
 
-    names = (purity["name"] if purity else [""] * G)
+    # ---- curated naming + display class
+    raw_names = (purity["name"] if purity else [""] * G)
     name_shares = (purity["top1_share_filt"] if purity else [None] * G)
+    top3_filt = (purity.get("top3_filt") if purity else None)
+    reps = per_g["rep_titles"]
+    out_ratio = np.asarray(per_g["out_ratio_c"], np.float64)
+
+    names, name_sources, display_classes = [], [], []
+    for g_i in range(G):
+        n_art = int(n_c[g_i])
+        rep_list = [x.strip() for x in str(reps[g_i]).split(",") if x.strip()]
+        # 1) dust
+        if n_art <= 1:
+            display_classes.append("dust")
+        # 2) medium: hub-ish reps or extreme out_ratio
+        elif ((rep_list and (any(p_.search(rep_list[0]) for p_ in MEDIUM_REP_PATTERNS)
+                             or rep_list[0] in MEDIUM_HUBS
+                             or sum(1 for r in rep_list[:3] if r in MEDIUM_HUBS) >= 2))
+              or (n_art >= 1000 and not np.isnan(out_ratio[g_i]) and out_ratio[g_i] >= 0.90)):
+            display_classes.append("medium")
+        else:
+            display_classes.append("galaxy")
+        # 3) name: filtered category (non-blacklisted, share>=0.15) -> rep fallback
+        chosen, src = "", "none"
+        cands = _parse_top3(top3_filt[g_i]) if top3_filt is not None else []
+        if raw_names[g_i] and not _blacklisted(raw_names[g_i]) and \
+                (name_shares[g_i] or 0) >= 0.15:
+            cands = [(raw_names[g_i], name_shares[g_i])] + cands
+        for t, sh in cands:
+            if sh >= 0.15 and not _blacklisted(t):
+                chosen, src = t, "category"
+                break
+        if not chosen and rep_list:
+            chosen, src = (rep_list[0] + ("等" if len(rep_list) > 1 else "")), "rep"
+        names.append(chosen)
+        name_sources.append(src)
+    n_medium = display_classes.count("medium")
+    n_by_cat = name_sources.count("category")
+    print(f"[catalog] display_class: galaxy={display_classes.count('galaxy')} "
+          f"medium={n_medium} dust={display_classes.count('dust')}; "
+          f"name_source: category={n_by_cat} rep={name_sources.count('rep')}")
 
     galaxies = pa.table({
         "galaxy_id": pa.array(np.arange(G, dtype=np.int32)),
@@ -126,7 +197,9 @@ def main():
         "e_out": pa.array(np.asarray(per_g["E_out_c"], np.int64)),
         "out_ratio": pa.array(np.asarray(per_g["out_ratio_c"], np.float64), type=pa.float64()),
         "is_dust": pa.array(is_dust),
+        "display_class": pa.array(display_classes, type=pa.string()),
         "name": pa.array([str(x) if x else "" for x in names], type=pa.string()),
+        "name_source": pa.array(name_sources, type=pa.string()),
         "name_share": pa.array([float(x) if x is not None else None for x in name_shares],
                                type=pa.float64()),
         "rep_titles": pa.array(per_g["rep_titles"], type=pa.string()),
@@ -155,9 +228,11 @@ def main():
             seen[m].append(int(g))
     for m in range(Mac):
         top_gal_str.append(",".join(str(x) for x in seen[m]))
+    macro_dust = nodes_per_macro <= 1
     macros = pa.table({
         "macro_id": pa.array(np.arange(Mac, dtype=np.int32)),
         "n_articles": pa.array(nodes_per_macro.astype(np.int32)),
+        "is_dust": pa.array(macro_dust),
         "n_galaxies": pa.array(gal_per_macro.astype(np.int32)),
         "e_in": pa.array(np.asarray(macro_stats.get("e_in", np.zeros(Mac, np.int64)), np.int64)),
         "e_out": pa.array(np.asarray(macro_stats.get("e_out", np.zeros(Mac, np.int64)), np.int64)),
@@ -199,7 +274,9 @@ def main():
         "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "galaxy_tag": a.galaxy_tag, "macro_tag": a.macro_tag,
         "n_articles": n, "n_galaxies": G, "n_galaxies_nontrivial": int((~is_dust).sum()),
-        "n_macros": Mac, "n_dust": int(is_dust.sum()),
+        "n_macros": Mac, "n_macros_effective": int((~macro_dust).sum()),
+        "n_dust": int(is_dust.sum()), "n_medium_galaxies": n_medium,
+        "named_by_category": n_by_cat,
         "containment_violations": containment_violations,
         "n_galaxy_pairs_total": int(len(pw_)),
         "n_galaxy_pairs_topK": int(k),

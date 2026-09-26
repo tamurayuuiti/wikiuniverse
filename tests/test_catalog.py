@@ -98,6 +98,26 @@ def main():
     if len(gp["w"]):
         assert gp["w"][0] >= gp["w"][-1]  # sorted desc
 
+    # ---- catalog v2 curation columns
+    assert "display_class" in g and "name_source" in g
+    assert set(g["display_class"]) <= {"galaxy", "medium", "dust"}
+    assert sum(g["display_class"][i] == "dust" for i in range(G)) == meta["n_dust"]
+
+    # ---- global layout smoke (dim=2 for speed)
+    out2 = run_script("layout_global.py", "--dim", "2", "--galaxy-tag", "res1_s")
+    lay = os.path.join(BASE, "layout")
+    for f in ("galaxy_positions.parquet", "macro_positions.parquet",
+              "layout_meta.json", "preview.png"):
+        assert os.path.exists(os.path.join(lay, f)), f
+    gpos = pq.read_table(os.path.join(lay, "galaxy_positions.parquet")).to_pydict()
+    assert len(gpos["galaxy_id"]) == G
+    import numpy as _np
+    xyz = _np.stack([gpos["x"], gpos["y"]])
+    assert _np.isfinite(xyz).all(), "non-finite coords"
+    assert _np.asarray(gpos["radius"]).min() >= 0
+    lm = json.load(open(os.path.join(lay, "layout_meta.json"), encoding="utf-8"))
+    assert lm["n_galaxies"] == G
+
     # purity v2 outputs present with new schema
     pur = pq.read_table(os.path.join(dirs.community, "full", "purity_res1_s.parquet")).to_pydict()
     assert "name" in pur and "top1_share_filt" in pur

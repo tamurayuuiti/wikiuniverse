@@ -196,7 +196,27 @@ python scripts/build_galaxy_catalog.py --base data --galaxy-tag res1_sub --macro
 #   → data/final/galaxy_pairs_topK.parquet  中景用バンドル(重み top-K)
 #   → data/final/macro_pairs.parquet     遠景用「数本」(マクロ間集約重み)
 #   → data/final/catalog_meta.json       件数・包含チェック(containment_violations)
+#   銀河台帳の name はキュレーション済み: メタカテゴリのブラックリスト除外 →
+#   tf-idf カテゴリ名(share>=0.15)→ 代表記事フォールバック。display_class 列で
+#   galaxy / medium(年代・元号・汎用ハブ等の媒介銀河)/ dust(孤立)を分類
 ```
+
+## グローバルレイアウト(フェーズ 3: 宇宙の空間配置)
+
+銀河カタログから階層レイアウトを生成する(§4.1 の「上位コミュニティ配置 → 下位配置 → 座標合成」):
+
+```bash
+python scripts/layout_global.py --base data --dim 3 --pack 0.6 --seed 42
+#   → data/layout/galaxy_positions.parquet  (galaxy_id, macro_id, x,y,z, radius, display_class)
+#   → data/layout/macro_positions.parquet   (マクロ円盤の中心と半径)
+#   → data/layout/layout_meta.json / preview.png(xy 投影プレビュー)
+```
+
+アルゴリズム: ①マクロを macro_pairs 重み付き FR レイアウトで配置(半径 ∝ √記事数)
+→ ②マクロ円盤の重なり緩和 → ③マクロごとに内部銀河を galaxy_pairs 重み付き FR で
+円盤内配置(半径 = pack·R_M·√(n_g/n_M))→ ④銀河円盤の重なり緩和 → ⑤dust は遠方シェル。
+1,971 銀河 + 63 マクロなら数秒。銀河「内部」の記事座標は次のフェーズ(アンカーバネ付き
+ローカルレイアウト、銀河単位バッチ)で合成する。
 
 ## 指標定義(評価レポート共通)
 
