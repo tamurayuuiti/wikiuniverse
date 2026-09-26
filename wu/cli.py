@@ -105,6 +105,21 @@ def cmd_subset_bfs(a):
     extract_subset(dirs.edges_bin, nodes, out, meta, parsed_dir=dirs.parsed)
 
 
+def cmd_body_edges(a):
+    from .xmlparse import build_body_edges
+    from .dumpio import FILES
+    dirs = Dirs(a.base)
+    dirs.ensure(dirs.graph)
+    xml = a.xml or dirs.dump_file(FILES[a.source])
+    if not os.path.exists(xml):
+        sys.exit(f"XML dump not found: {xml}\n"
+                 f"download: python -m wu.cli --base {a.base} download --files {a.source}")
+    build_body_edges(xml, dirs.parsed,
+                     os.path.join(dirs.graph, a.out_name),
+                     os.path.join(dirs.graph, "body_checkpoint.json"),
+                     limit_pages=a.limit_pages, strip_refs=a.strip_refs)
+
+
 def cmd_analyze(a):
     from .pipeline import analyze_subset
     dirs = Dirs(a.base)
@@ -153,6 +168,17 @@ def main():
     p.add_argument("--max-in-degree", type=int, default=10000)
     p.add_argument("--seed", type=int, default=42); p.add_argument("--name", default=None)
     p.set_defaults(fn=cmd_subset_bfs)
+
+    p = sub.add_parser("body-edges")
+    p.add_argument("--source", default="pages-articles",
+                   choices=["pages-articles", "pages-articles1"],
+                   help="which dump file key to use when --xml is not given")
+    p.add_argument("--xml", default=None, help="explicit path to pages-articles*.xml.bz2")
+    p.add_argument("--out-name", default="edges_body_directed.bin")
+    p.add_argument("--limit-pages", type=int, default=0, help="process at most N pages (0=all)")
+    p.add_argument("--strip-refs", action="store_true",
+                   help="also remove <ref>...</ref> citation links")
+    p.set_defaults(fn=cmd_body_edges)
 
     p = sub.add_parser("analyze")
     p.add_argument("--subset", default=None, help="subset name under <base>/graph/subsets/")

@@ -136,13 +136,15 @@ def _leiden_once(n: int, edges: np.ndarray, objective: str, resolution: float,
 
 # ------------------------------------------------------------------- dedup --
 
-def cmd_dedup(dirs: Dirs, chunk: int = 10_000_000):
+def cmd_dedup(dirs: Dirs, chunk: int = 10_000_000, edges_in: str = "edges_ns0.bin",
+              out_name: str = "edges_undirected_unique.bin",
+              meta_name: str = "dedup_meta.json"):
     t0 = time.time()
     article_ids = _load_article_ids(dirs)
     n = len(article_ids)
     if n >= (1 << SHIFT):
         raise RuntimeError(f"too many articles ({n}) for SHIFT={SHIFT}; bump SHIFT")
-    E = load_edges_mmap(dirs.edges_bin)
+    E = load_edges_mmap(os.path.join(dirs.graph, edges_in))
     m = len(E)
     keys = np.empty(m, dtype=np.int64)
     bad = 0
@@ -166,13 +168,13 @@ def cmd_dedup(dirs: Dirs, chunk: int = 10_000_000):
     print(f"[dedup] sorting {len(keys):,} keys ...", flush=True)
     uq = np.unique(keys)
     del keys
-    out_path = os.path.join(dirs.graph, "edges_undirected_unique.bin")
+    out_path = os.path.join(dirs.graph, out_name)
     out = np.empty(len(uq) * 2, dtype=np.int32)
     out[0::2] = (uq >> SHIFT).astype(np.int32)
     out[1::2] = (uq & ((1 << SHIFT) - 1)).astype(np.int32)
     out.tofile(out_path)
     meta = {
-        "stage": "dedup", "created_at": _now(),
+        "stage": "dedup", "created_at": _now(), "in_file": edges_in,
         "n_articles": n, "n_directed_edges": m,
         "n_endpoint_remap_failures": bad, "n_self_loops_dropped": n_self,
         "n_undirected_unique_edges": int(len(uq)),
@@ -181,7 +183,7 @@ def cmd_dedup(dirs: Dirs, chunk: int = 10_000_000):
         "out_file": out_path, "out_bytes": os.path.getsize(out_path),
         **_versions(),
     }
-    write_json(os.path.join(dirs.graph, "dedup_meta.json"), meta)
+    write_json(os.path.join(dirs.graph, meta_name), meta)
     print(f"[dedup] {m:,} directed -> {len(uq):,} undirected unique "
           f"({meta['secs']}s) -> {out_path}")
     return meta
@@ -735,6 +737,10 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("dedup"); p.add_argument("--chunk", type=int, default=10_000_000)
+    p.add_argument("--edges-in", default="edges_ns0.bin",
+                   help="directed edge bin in graph/ (e.g. edges_body_directed.bin)")
+    p.add_argument("--out-name", default="edges_undirected_unique.bin")
+    p.add_argument("--meta-name", default="dedup_meta.json")
 
     p = sub.add_parser("detect")
     p.add_argument("--resolutions", default="0.5,1.0,2.0")
@@ -784,7 +790,8 @@ def main():
     a = ap.parse_args()
     dirs = Dirs(a.base)
     if a.cmd == "dedup":
-        cmd_dedup(dirs, chunk=a.chunk)
+        cmd_dedup(dirs, chunk=a.chunk, edges_in=a.edges_in,
+                  out_name=a.out_name, meta_name=a.meta_name)
     elif a.cmd == "detect":
         cmd_detect(dirs, [float(x) for x in a.resolutions.split(",")],
                    max_edges=a.max_edges, seed=a.seed, force=a.force, objective=a.objective,

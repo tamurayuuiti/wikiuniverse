@@ -139,6 +139,32 @@ tag は `res<R>`(一括)または `res<R>_sub`(2 段階)。
 - res=1.0 で コミュニティ数 ~1,000–5,000、modularity ~0.6–0.8、最大シェア <5% が望ましい
 - `cluster` の出力がそのまま **Universe → Galaxy Cluster(L2) → Galaxy(L1) → Article** の §4.2 階層
 
+## 本文リンクグラフ(E3: テンプレート由来リンクの除去)
+
+pagelinks 表はトランスクルード(ナビボックス等)由来リンクを含む(平均次数 94 の主因)。
+記事自身の wikitext 内の [[リンク]] のみから「真の記事グラフ」を構築する:
+
+```bash
+python -m wu.cli --base data download --files pages-articles   # 4.7GB(resume 対応)
+python -m wu.cli --base data body-edges                        # 15-40分、checkpoint resume 対応
+#   派生実験: --strip-refs(引用内リンクも除去)/ --limit-pages N(スモーク)
+#   再実行したい場合は graph/body_checkpoint.json を削除
+
+python scripts/run_full_leiden.py --base data dedup --edges-in edges_body_directed.bin \
+    --out-name edges_body_undirected.bin --meta-name dedup_body_meta.json
+python scripts/run_full_leiden.py --base data detect --resolutions 1.0 \
+    --edges edges_body_undirected.bin --suffix _body --force
+python scripts/run_full_leiden.py --base data subdivide --tag res1_body \
+    --edges edges_body_undirected.bin --max-galaxy 10000
+python scripts/run_full_leiden.py --base data metrics --tag res1_body_sub --edges edges_body_undirected.bin
+python scripts/run_full_leiden.py --base data cluster --tag res1_body_sub
+python scripts/run_full_leiden.py --base data export  --tag res1_body_sub
+
+# pagelinks 次数 vs 本文次数の対比較(テンプレート膨張率の定量)
+python scripts/compare_body_vs_pagelinks.py --base data
+#   部分 XML で検証した場合は --max-pid 114794 を付ける
+```
+
 ## 指標定義(評価レポート共通)
 
 コミュニティ c について(エッジはサブセット内部の無向一意リンク):

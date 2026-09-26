@@ -18,6 +18,8 @@ FILES = {
     "linktarget": "jawiki-latest-linktarget.sql.gz",
     "pagelinks": "jawiki-latest-pagelinks.sql.gz",
     "categorylinks": "jawiki-latest-categorylinks.sql.gz",
+    "pages-articles": "jawiki-latest-pages-articles.xml.bz2",
+    "pages-articles1": "jawiki-latest-pages-articles1.xml-p1p114794.bz2",
 }
 
 

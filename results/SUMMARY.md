@@ -215,6 +215,42 @@ python3 -m wu.cli --base data analyze --subset bfs_geo_100k --out-dir results/bf
 
 **解釈**: 階層構造・サイズ分布・上位レベルの独立性は銀河方式の要件を満たす。一方、**生グラフ(テンプレート膨張、平均次数 143)の銀河レベル out_ratio 0.74 は「銀河を完全独立バッチとしてレイアウトする」ことの不可能さ**を示す — ただしこれは §4.3 が最初から想定していた状況であり、(a) レイアウト用グラフ(剪定/重み付け)、(b) 近傍アンカー制約付きローカルレイアウト、(c) 描画時のエッジバンドリング、の 3 点セットが「条件」として確定した。フェーズ 1 の 30k 実験(smart 剪定では crossF がほぼ不変)を踏まえると、**銀河独立性を根本改善する最大のレバーはテンプレート由来リンクの除去(XML ダンプから本文リンクのみ抽出)**と推定される(未検証、次の実験 E3)。
 
+### フェーズ 2c: E1/E2(剪定実験)と E3(本文リンクグラフ)実装・部分検証(2026-09-26)
+
+**E1(既存銀河分割 × smart 剪定グラフ評価)**: prune B=40 → 108,164,716 → **57,346,660 辺(53.0% 保持、平均次数 75.6)**、114 秒。同一分割(res1_sub)の評価: crossF 0.578(生 0.568)、oR p50 **0.715**(生 0.738)、oR<0.5 ノードシェア 8.3%(生 7.7%)。
+
+**E2(剪定グラフで再分割)**: detect res1.0(igraph 構築 622s + Leiden 116s)→ C=499、mod 0.629、**largest 24.5%(371,065 ノードのブロブ化)**。subdivide 83s → 実効 1,494 銀河(中央値 320.5)。評価: crossF 0.574、oR p50 **0.722**。L2: K=457、modL2 0.422、oR2_w **0.361**(生 0.391 から微改善)。
+
+**E1/E2 の結論**:
+1. **銀河の out_ratio ≈ 0.72±0.02 は剪定・再分割に対して頑健** → 分割手法の artifact ではなく、トランスクルード膨張したリンクグラフ自体の性質。銀河独立性のレバーは剪定ではない
+2. 副次発見: smart 剪定は**マクロ分離を弱める**(largest 16.2%→24.5%)。ハブ間「高速道路」はマクロコミュニティの境界維持にも寄与していた
+3. 剪定の価値は**レイアウト/描画コスト削減**(-47% 辺)と L2 の微改善として残る
+4. → **E3(本文リンクのみグラフ)が銀河独立性の決定的実験**と確定
+
+**E3 実装**(`wu/xmlparse.py` + CLI `body-edges`): pages-articles XML から記事自身の wikitext 内の [[リンク]] のみを抽出(トランスクルード由来はソースに含まれないため自動除去)。コメント/nowiki/includeonly 除去、`--strip-refs` オプション、別名/アンカー/ucfirst/ns prefix/リダイレクト解決/記事内 dedupe 対応、チェックポイント resume 付き。dedup は `--edges-in/--out-name` で汎用化。合成 XML テスト(tests/test_bodylinks.py)全経路パス。
+
+**E3 部分検証**(サンドボックス、pages-articles1 = pageID 1–114,794 の最古記事群 403MB):
+- 59,617 記事 → **7,890,263 本文エッジ**、193 秒(~280 pages/s。フル 4.7GB なら **15–40 分**の見込み)
+- avg_body_outdeg=132.3 だが**サンプルは生存者バイアス強**(現存する最古記事 = 20 年分蓄積の長大記事)。全体平均は大きく下がると予想
+- **同一記事の pagelinks 次数 vs 本文次数の対比較**(`scripts/compare_body_vs_pagelinks.py`、~44k 記事):
+  - 膨張比(pl/body): p50 **×1.42** / p75 ×2.35 / p90 **×4.67** / p99 ×17.0 / mean ×2.47
+  - 相関: Pearson 0.84 / Spearman 0.80(本文リンクが全リンクの背骨)
+  - pure_template(本文 0 かつ全リンク 50+)= **0 件**(旧記事群ゆえ。フルランでは現代 Stub での大量出現が見込み = 最重要観測点)
+  - top 膨張: 化学に関する記事の一覧(pl 6,377/body 3,963)、扇千景 ×7.4、新珠三千代 ×10.7、中原誠 ×11.1、アメトーーク! ×5.0 — 出演作品・放映リスト等の**トランスクルード navbox が「銀河間高速道路」の正体**であることを実証
+- 含意: 本文グラフでは平均次数が低下し、芸能/TV/地理 Stub 系のハブ的接続が激減する見込み。銀河 oR の 0.4–0.6 級への改善が期待される(フルランで検証)
+
+**次のステップ(E3 フルラン、ユーザーローカル)**:
+```
+python -m wu.cli --base data download --files pages-articles          # 4.7GB
+python -m wu.cli --base data body-edges                                # 15-40分
+python scripts\run_full_leiden.py --base data dedup --edges-in edges_body_directed.bin --out-name edges_body_undirected.bin --meta-name dedup_body_meta.json
+python scripts\run_full_leiden.py --base data detect --resolutions 1.0 --edges edges_body_undirected.bin --suffix _body --force
+python scripts\run_full_leiden.py --base data subdivide --tag res1_body --edges edges_body_undirected.bin --max-galaxy 10000
+python scripts\run_full_leiden.py --base data metrics --tag res1_body_sub --edges edges_body_undirected.bin
+python scripts\run_full_leiden.py --base data cluster --tag res1_body_sub
+python scripts\compare_body_vs_pagelinks.py --base data                # フル対比較
+```
+
 - 本 PoC のサブセットは BFS 誘導部分グラフであり、全体代表性は限定的(リーク 66–78% が示す通り「切り身」)。ただし community 独立性評価は内部エッジのみで実施済み。
 - 未検証: ①**subdivide 後のフルスケール指標(次回の最重要課題)** ②カテゴリ基準サブセット(categorylinks.sql.gz 176MB、パーサ未実装)③METIS 系との比較 ④CPM 目的関数(解像度限界なし)の一括適用 ⑤有向/重み付き版 ⑥レイアウト実計算(FM³/GPU)との接続。
 - エッジの重複(相互リンク)は無向一意化して評価。有向性の扱い(引用方向の意味)は次フェーズの検討事項。
