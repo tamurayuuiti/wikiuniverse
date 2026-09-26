@@ -195,6 +195,8 @@ python3 -m wu.cli --base data analyze --subset bfs_geo_100k --out-dir results/bf
 
 **対策(実装済み)**: `run_full_leiden.py subdivide` — 各マクロコミュニティの誘導部分グラフ内で Leiden を再帰実行し、全断片が max_galaxy 以下になるまで分割(解像度限界は部分グラフ規模が縮むため回避される)。→ `metrics/cluster/export --tag res1_sub` で 2 段階版の評価・銀河団(L2)生成・エクスポート。
 
+> **注記(2026-09-26)**: subdivide 初版には誘導エッジのバケット詰めにおける重複インデックス scatter バグがあり、部分グラフがほぼエッジなし状態で Leiden に渡され**全シングルトン化**した(C_final=1,514,995)。修正済み(チャンク内コミュニティ順安定ソート+ランク方式、fill 完全性 assert 追加)。回帰テスト `tests/test_subdivide.py` を追加(修正前: singleton 42/60 → 修正後: 0、チェーンの隣接保持を検証)。修正前の `membership_res1_sub.npy` は再実行で上書きされる。
+
 - 本 PoC のサブセットは BFS 誘導部分グラフであり、全体代表性は限定的(リーク 66–78% が示す通り「切り身」)。ただし community 独立性評価は内部エッジのみで実施済み。
 - 未検証: ①**subdivide 後のフルスケール指標(次回の最重要課題)** ②カテゴリ基準サブセット(categorylinks.sql.gz 176MB、パーサ未実装)③METIS 系との比較 ④CPM 目的関数(解像度限界なし)の一括適用 ⑤有向/重み付き版 ⑥レイアウト実計算(FM³/GPU)との接続。
 - エッジの重複(相互リンク)は無向一意化して評価。有向性の扱い(引用方向の意味)は次フェーズの検討事項。

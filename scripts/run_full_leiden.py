@@ -303,7 +303,11 @@ def cmd_subdivide(dirs: Dirs, tag: str, min_size: int = 100, max_galaxy: int = 2
     print(f"[subdivide] induced edges total: {total_ind:,} "
           f"(pass1 {time.time()-t0:.0f}s)", flush=True)
 
-    # ---- pass 2: bucket induced edges (CSR-style)
+    # ---- pass 2: bucket induced edges (CSR-style scatter)
+    # NOTE: `fill[c] = pos + 1` with duplicate community ids in a chunk is WRONG
+    # (fancy-index assignment keeps only the last write). Instead: stable-sort the
+    # chunk's same-community edges by community, compute each edge's rank within
+    # its community group, and place it at (current head + rank).
     buf = np.empty((total_ind, 2), np.int32)
     fill = offs[:-1].copy()
     for i in range(0, len(E), chunk):
@@ -312,11 +316,22 @@ def cmd_subdivide(dirs: Dirs, tag: str, min_size: int = 100, max_galaxy: int = 2
         v = blk[:, 1].astype(np.int64)
         mu = memb[u]
         same = mu == memb[v]
+        if not same.any():
+            continue
         c = mu[same]
-        pos = fill[c]
-        fill[c] = pos + 1
-        buf[pos, 0] = u[same].astype(np.int32)
-        buf[pos, 1] = v[same].astype(np.int32)
+        us = u[same].astype(np.int32)
+        vs = v[same].astype(np.int32)
+        oc = np.argsort(c, kind="stable")
+        cs = c[oc]
+        uniq, first = np.unique(cs, return_index=True)
+        uniq_idx = np.searchsorted(uniq, cs)
+        rank = np.arange(len(cs), dtype=np.int64) - first[uniq_idx]
+        cnt_uniq = np.diff(np.append(first, len(cs)))
+        pos = fill[uniq][uniq_idx] + rank
+        buf[pos, 0] = us[oc]
+        buf[pos, 1] = vs[oc]
+        fill[uniq] += cnt_uniq
+    assert np.array_equal(fill, offs[1:]), "bucket fill mismatch (scatter bug)"
     del fill
     print(f"[subdivide] bucketed ({time.time()-t0:.0f}s)", flush=True)
 
