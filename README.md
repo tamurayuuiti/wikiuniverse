@@ -212,17 +212,21 @@ python scripts/layout_global.py --base data --dim 3 --pack 0.6 --seed 42
 #   → data/layout/layout_meta.json / preview.png(xy 投影プレビュー)
 ```
 
-アルゴリズム(階層レイアウト v1.2): ①マクロ配置(`--macro-dim 2|3`): 2=2D 円盤パッキング
-(遠景=宇宙地図、xy 重なり ≤2% 保証)、3=3D 球パッキング(±`--macro-z-squash` でハイブリッド
-楕円体宇宙)→ ②マクロ内で銀河を 3D FR 配置、xy で円盤緩和・クランプ、z は `--z-squash` 圧縮
-レンズ → ③dust は遠方シェル。半径はマクロ R_M ∝ √記事数、銀河 r_g = pack·R_M·√(n_g/n_M)。
+アルゴリズム(階層レイアウト v1.3、**正準方針 = 完全 3D**: 2026-09-26 決定):
+①マクロ配置(`--macro-dim 3` 正準)= 3D 球パッキング(macro_pairs 重み付き FR + 球分離緩和、
+重なり ≤2%)。**hybrid/地図ビューはレイアウトではなく視点パラメータ**: HTML プレビューの
+z-compress スライダー(1.0=純 3D ↔ 0.05=ほぼ地図)が視聴時に z を圧縮する(xy 不変なので
+俯瞰は同一、レイアウト焼き直し不要)。`--macro-dim 2` / `--macro-z-squash <1` は実験腕として
+維持(本番規模で再検討する際の比較基準)。
+②マクロ内で銀河を 3D FR 配置、xy で円盤緩和・クランプ、z は `--z-squash`(0.35)圧縮レンズ
+→ ③dust は遠方シェル。半径はマクロ R_M ∝ √記事数、銀河 r_g = pack·R_M·√(n_g/n_M)。
 品質は `layout_meta.json` の `quality`: `macro_native_overlap_frac`(配置次元での重なり)、
 `macro_proj_overlap`(top/side/24 随机視点射影の重なり率 = 「地図らしさ」の視点依存性)、
-`galaxy_spill_frac`。**方式比較プロトコル**: `--out-sub 25d|3d|hyb` で 3 実行し、
-`preview.png`(4 パネル: xy/xz/yz/深度カラー)と **`preview_macro*.html`**
-(three.js・OrbitControls・データ埋め込み、ローカルブラウザで軌道回転可能)を比較する。
-1,971 銀河 + 63 マクロなら数秒。銀河「内部」の記事座標は次のフェーズ(アンカーバネ付き
-ローカルレイアウト、銀河単位バッチ、完全 3D)で合成する。
+`galaxy_spill_frac`。比較実行は `--out-sub <name>` で別ディレクトリへ。
+preview.png(4 パネル: xy/xz/yz/深度カラー)+ **preview_macro*.html**(three.js・OrbitControls・
+z-compress スライダー、データ埋め込み)。1,971 銀河 + 63 マクロなら数秒。
+銀河「内部」の記事座標は次のフェーズ(アンカーバネ付きローカルレイアウト、銀河単位バッチ、
+完全 3D)で合成する。
 
 ## 指標定義(評価レポート共通)
 

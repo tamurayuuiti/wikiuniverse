@@ -177,9 +177,12 @@ def relax_disks(centers: np.ndarray, radii: np.ndarray, iters: int = 40) -> np.n
 HTML_TEMPLATE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>wikiuniverse layout preview __MODE__</title>
 <style>body{margin:0;background:#000;overflow:hidden}
-#info{position:absolute;top:8px;left:10px;color:#9aa;font:12px/1.5 monospace;white-space:pre}</style>
+#info{position:absolute;top:8px;left:10px;color:#9aa;font:12px/1.5 monospace;white-space:pre}
+#ui{position:absolute;bottom:12px;left:12px;color:#9aa;font:12px monospace}
+#ui input{vertical-align:middle;width:220px}</style>
 <script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}</script>
 </head><body><div id="info">__INFO__</div>
+<div id="ui">z-compress (3D&#8596;hybrid&#8596;map): <input id="zsq" type="range" min="0.05" max="1" step="0.05" value="1"> <span id="zval">1.00</span></div>
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -204,12 +207,33 @@ D.g.forEach((g, i) => {
 });
 scene.add(mesh);
 // macro wireframe spheres
+const macroObjs = [];
 D.m.forEach(mk => {
   const g2 = new THREE.SphereGeometry(mk[3], 20, 12);
   const w = new THREE.LineSegments(new THREE.WireframeGeometry(g2),
         new THREE.LineBasicMaterial({color:0x444444, transparent:true, opacity:0.10}));
   w.position.set(mk[0], mk[1], mk[2]);
-  scene.add(w);
+  scene.add(w); macroObjs.push(w);
+});
+// view-time z compression: 3D canonical data -> hybrid/map views without re-layout
+function applyZ(k){
+  for (let i = 0; i < D.g.length; i++) {
+    const g = D.g[i];
+    m4.makeScale(g[3], g[3], g[3]);
+    m4.setPosition(g[0], g[1], g[2] * k);
+    mesh.setMatrixAt(i, m4);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  for (let i = 0; i < D.m.length; i++) {
+    macroObjs[i].position.z = D.m[i][2] * k;
+    macroObjs[i].scale.set(1, 1, k);
+  }
+}
+const zsl = document.getElementById('zsq');
+zsl.addEventListener('input', () => {
+  const k = parseFloat(zsl.value);
+  document.getElementById('zval').textContent = k.toFixed(2);
+  applyZ(k);
 });
 addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
@@ -444,7 +468,13 @@ def main():
             "n_galaxies": G, "n_macros_effective": int(len(eff_m)),
             "n_dust_shell": int(len(dust_idx)), "R_TOTAL": R_TOTAL,
             "mode": {"macro_dim": a.macro_dim, "macro_z_squash": a.macro_z_squash,
-                     "z_squash": a.z_squash},
+                     "z_squash": a.z_squash,
+                     "canonical": a.macro_dim == 3 and a.macro_z_squash == 1.0,
+                     "note": ("canonical policy (2026-09-26): macro-dim 3 unsquashed is the "
+                              "canonical layout; hybrid/map views are VIEW-TIME z-compression "
+                              "(HTML slider), not separate layouts")
+                     if (a.macro_dim == 3 and a.macro_z_squash == 1.0) else
+                     "experimental arm; canonical = --macro-dim 3 --macro-z-squash 1.0"},
             "quality": {"macro_native_overlap_frac": round(macro_overlap, 5),
                         "macro_proj_overlap": proj,
                         "galaxy_spill_frac": round(spill_frac, 5),
