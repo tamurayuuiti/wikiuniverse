@@ -113,6 +113,16 @@ python scripts/run_full_leiden.py --base data metrics --tag res1_sub
 python scripts/run_full_leiden.py --base data cluster --tag res1_sub
 python scripts/run_full_leiden.py --base data export  --tag res1_sub
 # (一括分割のまま評価したい場合: metrics/cluster/export --resolution 1.0)
+
+# レイアウト用グラフ(次数予算剪定)の構築と交差評価
+python scripts/run_full_leiden.py --base data prune --budget 40 --mode smart   # ~60-70% 辺保持、RAM ~4-5GB
+#   既存の分割を剪定グラフ上で評価(分割はそのまま、評価グラフだけ差し替え):
+python scripts/run_full_leiden.py --base data metrics --tag res1_sub --edges edges_pruned_smart40.bin --label res1_sub_B40
+#   剪定グラフで分割そのものを作り直す場合:
+python scripts/run_full_leiden.py --base data detect --resolutions 1.0 --edges edges_pruned_smart40.bin --suffix _B40 --force
+python scripts/run_full_leiden.py --base data subdivide --tag res1_B40 --edges edges_pruned_smart40.bin --max-galaxy 10000
+python scripts/run_full_leiden.py --base data metrics --tag res1_B40_sub --edges edges_pruned_smart40.bin
+python scripts/run_full_leiden.py --base data cluster --tag res1_B40_sub
 ```
 
 出力は `data/community/full/`:

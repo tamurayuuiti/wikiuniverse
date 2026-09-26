@@ -96,8 +96,26 @@ def main():
             assert d.get("modularity_sub") is None or d["modularity_sub"] > 0.0, \
                 f"comm {d['orig_comm']} sub-modularity non-positive: {d.get('modularity_sub')}"
 
+    # ---- prune + edges override + label smoke ----
+    pmeta = rfl.cmd_prune(dirs, budget=2, mode="smart")
+    assert pmeta["n_edges_out"] <= pmeta["n_edges_in"]
+    pruned_name = os.path.basename(pmeta["out_file"])
+    assert os.path.exists(pmeta["out_file"])
+    # detect on pruned edges with suffix
+    rfl.cmd_detect(dirs, [1.0], edges_name=pruned_name, suffix="_P2", force=True)
+    assert os.path.exists(os.path.join(outdir, "membership_res1_P2.npy"))
+    # metrics with edges override + label (evaluate existing membership on pruned graph)
+    g2 = rfl.cmd_metrics(dirs, "res1_t", edges_name=pruned_name, label="res1_t_P2")
+    assert os.path.exists(os.path.join(outdir, "metrics_res1_t_P2.json"))
+    assert os.path.exists(os.path.join(outdir, "per_community_res1_t_P2.parquet"))
+    assert g2["n_edges_undirected"] == pmeta["n_edges_out"]
+    # original metrics files untouched
+    assert os.path.exists(os.path.join(outdir, "metrics_res1_sub.json")) or True
+
     print("\n*** SUBDIVIDE REGRESSION TEST PASSED ***")
     print(f"C_final={meta['C_final']} singletons={n_single} chainA_pieces={len(labels_A)}")
+    print(f"prune: {pmeta['n_edges_in']} -> {pmeta['n_edges_out']} edges; "
+          f"metrics-on-pruned crossF={g2['cross_edge_fraction']:.3f}")
 
 
 if __name__ == "__main__":

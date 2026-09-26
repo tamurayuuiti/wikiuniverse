@@ -87,10 +87,14 @@ def _load_article_ids(dirs: Dirs) -> np.ndarray:
     return np.load(dirs.article_ids)  # sorted page_ids; position == compact idx
 
 
-def _load_undirected(dirs: Dirs) -> np.ndarray:
-    p = os.path.join(dirs.graph, "edges_undirected_unique.bin")
+DEFAULT_EDGES = "edges_undirected_unique.bin"
+
+
+def _load_undirected(dirs: Dirs, name: str | None = None) -> np.ndarray:
+    name = name or DEFAULT_EDGES
+    p = name if os.path.isabs(name) else os.path.join(dirs.graph, name)
     if not os.path.exists(p):
-        sys.exit("edges_undirected_unique.bin not found - run `dedup` first")
+        sys.exit(f"{p} not found - run `dedup` (or `prune`) first")
     cnt = os.path.getsize(p) // 8
     return np.memmap(p, dtype=np.int32, mode="r", shape=(cnt, 2))
 
@@ -187,15 +191,16 @@ def cmd_dedup(dirs: Dirs, chunk: int = 10_000_000):
 
 def cmd_detect(dirs: Dirs, resolutions, max_edges: int = 0, seed: int = SEED,
                force: bool = False, batch: int = 300_000, n_iterations: int = 3,
-               objective: str = "modularity"):
+               objective: str = "modularity", edges_name: str | None = None,
+               suffix: str = ""):
     outdir = _full_dir(dirs)
-    E = _load_undirected(dirs)
+    E = _load_undirected(dirs, edges_name)
     article_ids = _load_article_ids(dirs)
     n = len(article_ids)
     todo = []
     for res in resolutions:
-        tag = _res_tag(res)
-        p = os.path.join(outdir, f"membership_res{tag}.npy")
+        tag = f"res{_res_tag(res)}{suffix}"
+        p = os.path.join(outdir, f"membership_{tag}.npy")
         if os.path.exists(p) and not force:
             print(f"[detect] res={tag}: exists, skip (--force to redo)")
             continue
@@ -221,6 +226,7 @@ def cmd_detect(dirs: Dirs, resolutions, max_edges: int = 0, seed: int = SEED,
         sizes = np.bincount(memb)
         info = {
             "resolution": res, "objective": objective, "seed": seed,
+            "edges_file": edges_name or DEFAULT_EDGES, "tag": tag,
             "n_iterations": n_iterations, "n_nodes": int(n), "n_edges_used": int(total),
             "smoke": bool(max_edges),
             "n_communities": int(len(cl)), "modularity": float(cl.modularity),
@@ -239,6 +245,44 @@ def cmd_detect(dirs: Dirs, resolutions, max_edges: int = 0, seed: int = SEED,
                  "versions": _versions(), "updated_at": _now()})
     write_json(detect_meta_path, meta)
     del g
+
+
+# ------------------------------------------------------------------ prune --
+
+def cmd_prune(dirs: Dirs, budget: int, mode: str = "smart", seed: int = SEED):
+    """Build a layout graph: degree-budget pruning of the undirected unique graph.
+
+    smart mode (recommended): keep an edge if its random rank < budget at either
+    endpoint OR either endpoint has undirected degree <= budget. Preserves
+    galaxy structure (low-degree spokes) while thinning hub<->hub highways.
+    Output: graph/edges_pruned_<mode><budget>.bin
+    RAM peak: ~4-5 GB at 108M edges (full arrays + lexsort workspace).
+    """
+    from wu.pipeline import prune_edges_degree_budget
+
+    t0 = time.time()
+    E_mm = _load_undirected(dirs)
+    m = len(E_mm)
+    print(f"[prune] loading {m:,} edges ...", flush=True)
+    E = np.asarray(E_mm)
+    Ep, info = prune_edges_degree_budget(E, budget, seed=seed, mode=mode)
+    del E
+    Ep = np.ascontiguousarray(Ep, dtype=np.int32)
+    out = os.path.join(dirs.graph, f"edges_pruned_{mode}{budget}.bin")
+    Ep.tofile(out)
+    n = len(_load_article_ids(dirs))
+    meta = {"stage": "prune", "created_at": _now(), "mode": mode, "budget": budget,
+            "seed": seed, "in_file": DEFAULT_EDGES, "n_edges_in": m,
+            "n_edges_out": int(len(Ep)), "out_file": out,
+            "out_bytes": os.path.getsize(out),
+            "avg_degree_out": float(2 * len(Ep) / n), "secs": round(time.time() - t0, 1),
+            **info, **_versions()}
+    write_json(os.path.join(dirs.graph, f"prune_meta_{mode}{budget}.json"), meta)
+    print(f"[prune] {mode} B={budget}: {m:,} -> {len(Ep):,} edges "
+          f"({info['kept_frac']:.1%}, avg_deg {meta['avg_degree_out']:.1f}) "
+          f"({meta['secs']}s) -> {out}")
+    del Ep
+    return meta
 
 
 # --------------------------------------------------------------- subdivide --
@@ -272,7 +316,7 @@ def _partition_recursive(n_local: int, edges: np.ndarray, objective: str, resolu
 def cmd_subdivide(dirs: Dirs, tag: str, min_size: int = 100, max_galaxy: int = 20000,
                   sub_resolution: float = 1.0, sub_objective: str = "modularity",
                   depth: int = 4, seed: int = SEED, chunk: int = 4_000_000,
-                  out_tag: str | None = None):
+                  out_tag: str | None = None, edges_name: str | None = None):
     """Two-stage refinement: split each macro community internally until every
     piece is <= max_galaxy nodes. Bypasses the modularity resolution limit."""
     t0 = time.time()
@@ -281,7 +325,7 @@ def cmd_subdivide(dirs: Dirs, tag: str, min_size: int = 100, max_galaxy: int = 2
     if not os.path.exists(memb_path):
         sys.exit(f"membership_{tag}.npy not found - run `detect` first")
     memb = np.load(memb_path)
-    E = _load_undirected(dirs)
+    E = _load_undirected(dirs, edges_name)
     article_ids = _load_article_ids(dirs)
     n = len(article_ids)
     C = int(memb.max()) + 1
@@ -383,7 +427,8 @@ def cmd_subdivide(dirs: Dirs, tag: str, min_size: int = 100, max_galaxy: int = 2
         "in_tag": tag, "out_tag": out_tag,
         "params": {"min_size": min_size, "max_galaxy": max_galaxy,
                    "sub_resolution": sub_resolution, "sub_objective": sub_objective,
-                   "depth": depth, "seed": seed},
+                   "depth": depth, "seed": seed,
+                   "edges_file": edges_name or DEFAULT_EDGES},
         "C_in": C, "C_final": int(C_final),
         "n_singleton_comms_final": int((fsizes == 1).sum()),
         "largest_final_share": float(fsizes.max() / n),
@@ -404,14 +449,16 @@ def cmd_subdivide(dirs: Dirs, tag: str, min_size: int = 100, max_galaxy: int = 2
 
 # ----------------------------------------------------------------- metrics --
 
-def cmd_metrics(dirs: Dirs, tag: str, chunk: int = 4_000_000):
+def cmd_metrics(dirs: Dirs, tag: str, chunk: int = 4_000_000,
+                edges_name: str | None = None, label: str | None = None):
     t0 = time.time()
     outdir = _full_dir(dirs)
     memb_path = os.path.join(outdir, f"membership_{tag}.npy")
     if not os.path.exists(memb_path):
         sys.exit(f"membership_{tag}.npy not found - run detect/subdivide first")
     memb = np.load(memb_path)
-    E = _load_undirected(dirs)
+    E = _load_undirected(dirs, edges_name)
+    out_tag = label or tag
     article_ids = _load_article_ids(dirs)
     n = len(article_ids)
     C = int(memb.max()) + 1
@@ -460,7 +507,7 @@ def cmd_metrics(dirs: Dirs, tag: str, chunk: int = 4_000_000):
     else:
         pair_a = pair_b = np.zeros(0, np.int32)
         pair_w = np.zeros(0, np.int64)
-    np.savez_compressed(os.path.join(outdir, f"pairs_{tag}.npz"),
+    np.savez_compressed(os.path.join(outdir, f"pairs_{out_tag}.npz"),
                         a=pair_a, b=pair_b, w=pair_w)
 
     bn_inter = np.bincount(memb[b_inter], minlength=C).astype(np.int64)
@@ -474,7 +521,8 @@ def cmd_metrics(dirs: Dirs, tag: str, chunk: int = 4_000_000):
     n_single = int((n_c == 1).sum())
     n_isolated = int((deg == 0).sum())
     glob = {
-        "tag": tag, "seed": SEED, "generated_at": _now(),
+        "tag": tag, "out_tag": out_tag, "edges_file": edges_name or DEFAULT_EDGES,
+        "seed": SEED, "generated_at": _now(),
         "n_nodes": n, "n_communities": C,
         "n_singleton_comms": n_single,
         "n_communities_effective": int(eff.sum()),
@@ -535,15 +583,15 @@ def cmd_metrics(dirs: Dirs, tag: str, chunk: int = 4_000_000):
         "boundary_node_ratio_c": pa.array(bn_inter / np.maximum(1, n_c), type=pa.float64()),
         "rep_titles": pa.array([", ".join(labels[c][:3]) for c in range(C)], type=pa.string()),
     })
-    pq.write_table(tbl, os.path.join(outdir, f"per_community_{tag}.parquet"), compression="zstd")
+    pq.write_table(tbl, os.path.join(outdir, f"per_community_{out_tag}.parquet"), compression="zstd")
 
     topk = np.argsort(pair_w)[::-1][:50]
     top_pairs = [{"comm_a": int(pair_a[k]), "comm_b": int(pair_b[k]), "edges": int(pair_w[k]),
                   "a_labels": labels.get(int(pair_a[k]), [])[:2],
                   "b_labels": labels.get(int(pair_b[k]), [])[:2]} for k in topk]
-    write_json(os.path.join(outdir, f"top_pairs_{tag}.json"), top_pairs)
-    write_json(os.path.join(outdir, f"metrics_{tag}.json"), {"global": glob, "versions": _versions()})
-    print(f"[metrics] tag={tag}: C_eff={glob['n_communities_effective']} "
+    write_json(os.path.join(outdir, f"top_pairs_{out_tag}.json"), top_pairs)
+    write_json(os.path.join(outdir, f"metrics_{out_tag}.json"), {"global": glob, "versions": _versions()})
+    print(f"[metrics] tag={out_tag}: C_eff={glob['n_communities_effective']} "
           f"singletons={n_single} crossF={glob['cross_edge_fraction']:.4f} "
           f"largest={glob['largest_comm_share']:.3f} "
           f"oR_p50_eff={glob['out_ratio_percentiles_effective'].get('p50')} "
@@ -602,6 +650,10 @@ def cmd_cluster(dirs: Dirs, tag: str, cluster_resolution: float = 1.0, seed: int
         "mean_out_ratio2_edge_weighted": float(E_out2.sum() / max(1e-9, ein2_total.sum() + E_out2.sum())),
         "cluster_size_nodes_percentiles": {f"p{p}": float(np.percentile(N2[N2 > 0], p))
                                            for p in (25, 50, 75, 95)},
+        "n_clusters_nontrivial": int((comms_per_cluster_nt := np.bincount(cl_comm, minlength=K) >= 2).sum()),
+        "cluster_size_nodes_percentiles_nontrivial": {
+            f"p{p}": float(np.percentile(N2[comms_per_cluster_nt], p)) for p in (25, 50, 75, 95)
+        } if comms_per_cluster_nt.any() else {},
         "secs": round(time.time() - t0, 1),
     }
     comms_per_cluster = np.bincount(cl_comm, minlength=K)
@@ -690,10 +742,18 @@ def main():
     p.add_argument("--max-edges", type=int, default=0, help="smoke: only first N edges")
     p.add_argument("--seed", type=int, default=SEED)
     p.add_argument("--force", action="store_true")
+    p.add_argument("--edges", default=None, help="edge file in graph/ (default: edges_undirected_unique.bin)")
+    p.add_argument("--suffix", default="", help="tag suffix, e.g. _B40 -> membership_res1_B40.npy")
+
+    p = sub.add_parser("prune")
+    p.add_argument("--budget", type=int, required=True)
+    p.add_argument("--mode", default="smart", choices=["smart", "both"])
+    p.add_argument("--seed", type=int, default=SEED)
 
     p = sub.add_parser("subdivide")
     p.add_argument("--resolution", type=float, default=None)
     p.add_argument("--tag", default=None)
+    p.add_argument("--edges", default=None)
     p.add_argument("--min-size", type=int, default=100)
     p.add_argument("--max-galaxy", type=int, default=20000)
     p.add_argument("--sub-resolution", type=float, default=1.0)
@@ -704,6 +764,8 @@ def main():
 
     p = sub.add_parser("metrics")
     p.add_argument("--resolution", type=float, default=None); p.add_argument("--tag", default=None)
+    p.add_argument("--edges", default=None, help="evaluation graph (default: raw unique edges)")
+    p.add_argument("--label", default=None, help="output file tag (default: same as input tag)")
 
     p = sub.add_parser("cluster")
     p.add_argument("--resolution", type=float, default=None); p.add_argument("--tag", default=None)
@@ -725,13 +787,16 @@ def main():
         cmd_dedup(dirs, chunk=a.chunk)
     elif a.cmd == "detect":
         cmd_detect(dirs, [float(x) for x in a.resolutions.split(",")],
-                   max_edges=a.max_edges, seed=a.seed, force=a.force, objective=a.objective)
+                   max_edges=a.max_edges, seed=a.seed, force=a.force, objective=a.objective,
+                   edges_name=a.edges, suffix=a.suffix)
+    elif a.cmd == "prune":
+        cmd_prune(dirs, budget=a.budget, mode=a.mode, seed=a.seed)
     elif a.cmd == "subdivide":
         cmd_subdivide(dirs, _tag_from_args(a), min_size=a.min_size, max_galaxy=a.max_galaxy,
                       sub_resolution=a.sub_resolution, sub_objective=a.sub_objective,
-                      depth=a.depth, seed=a.seed, out_tag=a.out_tag)
+                      depth=a.depth, seed=a.seed, out_tag=a.out_tag, edges_name=a.edges)
     elif a.cmd == "metrics":
-        cmd_metrics(dirs, _tag_from_args(a))
+        cmd_metrics(dirs, _tag_from_args(a), edges_name=a.edges, label=a.label)
     elif a.cmd == "cluster":
         cmd_cluster(dirs, _tag_from_args(a), cluster_resolution=a.cluster_resolution, seed=a.seed)
     elif a.cmd == "export":
