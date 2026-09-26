@@ -81,6 +81,27 @@ def fr_layout(n_nodes: int, edges, weights, dim: int, seed: int):
     return coords
 
 
+def disk_overlap_fraction(centers: np.ndarray, radii: np.ndarray) -> float:
+    """Pairwise circle-circle intersection area / total disk area (2D projection)."""
+    k = len(centers)
+    if k < 2:
+        return 0.0
+    c2 = centers[:, :2]
+    i, j = np.triu_indices(k, 1)
+    d = np.linalg.norm(c2[j] - c2[i], axis=1)
+    r0, r1 = radii[i], radii[j]
+    inter = np.zeros(len(d))
+    m = d < (r0 + r1)
+    dd, a, b = d[m], r0[m], r1[m]
+    dd = np.maximum(dd, 1e-9)
+    part = np.clip((dd ** 2 + a ** 2 - b ** 2) / (2 * dd * a), -1, 1)
+    part2 = np.clip((dd ** 2 + b ** 2 - a ** 2) / (2 * dd * b), -1, 1)
+    inter[m] = (a ** 2 * np.arccos(part) + b ** 2 * np.arccos(part2)
+                - 0.5 * np.sqrt(np.maximum(0, (-dd + a + b) * (dd + a - b) * (dd - a + b) * (dd + a + b))))
+    total = np.pi * np.sum(radii ** 2)
+    return float(inter.sum() / max(total, 1e-9))
+
+
 def relax_disks(centers: np.ndarray, radii: np.ndarray, iters: int = 40) -> np.ndarray:
     """Push overlapping disks apart (vectorized O(k^2), k small)."""
     c = centers.astype(np.float64).copy()
@@ -167,8 +188,15 @@ def main():
     R_m = R_TOTAL * np.sqrt(n_art_m[eff_m] / max(1, n_art_m.sum()))
     # spread: scale FR unit-disk coords so typical separation ~ sum radii scale
     m_centers = m_coords * (R_TOTAL * 1.6)
-    m_centers = relax_disks(m_centers, R_m, iters=80)
-    print(f"[layout] macros: {len(eff_m)} placed ({time.time()-t0:.1f}s)")
+    m_centers = relax_disks(m_centers, R_m, iters=250)
+    for _round in range(6):  # expand + re-relax until macro disks barely overlap
+        ov = disk_overlap_fraction(m_centers, R_m)
+        if ov <= 0.02:
+            break
+        m_centers = m_centers * 1.08
+        m_centers = relax_disks(m_centers, R_m, iters=150)
+    macro_overlap = disk_overlap_fraction(m_centers, R_m)
+    print(f"[layout] macros: {len(eff_m)} placed, disk overlap={macro_overlap:.4f} ({time.time()-t0:.1f}s)")
 
     # ---------- 2. galaxy pairs ----------
     if a.pairs == "npz":
@@ -205,6 +233,11 @@ def main():
             coords = fr_layout(len(members), e_local, w_local, a.dim, a.seed + int(m))
         avail = max(Rm - g_radius[members].max(), Rm * 0.3)
         centers_local = relax_disks(coords * avail, g_radius[members], iters=40)
+        # radial clamp: keep every galaxy disk inside its macro disk
+        lim = np.maximum(Rm - g_radius[members], 0.05 * Rm)
+        d = np.linalg.norm(centers_local[:, :2], axis=1)
+        sc = np.where(d > lim, lim / np.maximum(d, 1e-9), 1.0)
+        centers_local = centers_local * sc[:, None]
         g_centers[members] = m_centers[m_i] + centers_local
         placed[members] = True
     print(f"[layout] galaxies placed: {int(placed.sum())} ({time.time()-t0:.1f}s)")
@@ -224,6 +257,14 @@ def main():
         else:
             g_centers[dust_idx, 2:] = 0.0
         g_radius[dust_idx] = a.pack * R_TOTAL * np.sqrt(1 / max(1, n_art_m.sum()))
+
+    # ---------- 4b. quality metrics ----------
+    in_macro = np.flatnonzero(placed & ~dust_g)
+    dist_m = np.linalg.norm(g_centers[in_macro, :2] - m_centers[
+        [list(eff_m).index(int(macro_of[i])) for i in in_macro], :2], axis=1)
+    spill = dist_m + g_radius[in_macro] > R_m[
+        [list(eff_m).index(int(macro_of[i])) for i in in_macro]] * 1.02
+    spill_frac = float(spill.mean()) if len(spill) else 0.0
 
     # ---------- 5. outputs ----------
     zcol = g_centers[:, 2] if a.dim == 3 else np.zeros(G)
@@ -253,7 +294,12 @@ def main():
             "pairs_source": a.pairs, "galaxy_tag": a.galaxy_tag,
             "n_galaxies": G, "n_macros_effective": int(len(eff_m)),
             "n_dust_shell": int(len(dust_idx)), "R_TOTAL": R_TOTAL,
+            "quality": {"macro_disk_overlap_frac": round(macro_overlap, 5),
+                        "galaxy_spill_frac": round(spill_frac, 5),
+                        "galaxy_spill_count": int(spill.sum())},
             "secs": round(time.time() - t0, 1)}
+    print(f"[layout] quality: macro_overlap={macro_overlap:.4f} "
+          f"galaxy_spill={spill_frac:.4f} ({int(spill.sum())})")
     write_json(os.path.join(out_dir, "layout_meta.json"), meta)
 
     # ---------- 6. preview ----------
@@ -263,16 +309,27 @@ def main():
         import matplotlib.pyplot as plt
         fig, ax = plt.subplots(figsize=(11, 11), facecolor="black")
         ax.set_facecolor("black")
-        show = ~dust_g
+        show = (~dust_g) & np.isin(np.arange(G), in_macro)
         cmap = plt.get_cmap("tab20")
+        idx_show = np.flatnonzero(show)
         colors = [cmap(int(macro_of[i]) % 20) if cls[i] != "medium" else "#888888"
-                  for i in np.flatnonzero(show)]
+                  for i in idx_show]
         ax.scatter(g_centers[show, 0], g_centers[show, 1],
                    s=np.clip(g_radius[show] * 0.8, 0.5, 400), c=colors, alpha=0.85,
                    linewidths=0)
+        dust_show = dust_g | ~placed
+        if dust_show.any():
+            ax.scatter(g_centers[dust_show, 0], g_centers[dust_show, 1],
+                       s=0.4, c="#333333", alpha=0.5, linewidths=0)
         for i, m in enumerate(eff_m):
             ax.add_patch(plt.Circle((m_centers[i, 0], m_centers[i, 1]), R_m[i],
                                     fill=False, edgecolor="#444444", lw=0.6))
+        top_m = eff_m[np.argsort(-n_art_m[eff_m])[:8]]
+        for m in top_m:
+            i = list(eff_m).index(int(m))
+            lbl = str(mac["rep_titles"][m]).split(",")[0][:14]
+            ax.text(m_centers[i, 0], m_centers[i, 1] + R_m[i] * 1.03, lbl,
+                    color="#999999", fontsize=7, ha="center")
         ax.set_aspect("equal")
         ax.axis("off")
         ax.set_title(f"wikiuniverse global layout (dim={a.dim}, G={G}, seed={a.seed})",

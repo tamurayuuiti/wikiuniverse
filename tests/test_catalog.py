@@ -130,6 +130,8 @@ def main():
     assert _np.asarray(gpos["radius"]).min() >= 0
     lm = json.load(open(os.path.join(lay, "layout_meta.json"), encoding="utf-8"))
     assert lm["n_galaxies"] == G
+    assert set(lm["quality"]) >= {"macro_disk_overlap_frac", "galaxy_spill_frac",
+                                  "galaxy_spill_count"}, lm
 
     # purity v2 outputs present with new schema
     pur = pq.read_table(os.path.join(dirs.community, "full", "purity_res1_s.parquet")).to_pydict()
