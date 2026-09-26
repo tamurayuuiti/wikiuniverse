@@ -65,15 +65,16 @@ def main():
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     agg = json.load(open(os.path.join(full, "purity_test.json"), encoding="utf-8"))
-    assert agg["top1_share_node_weighted_mean"] == 1.0, agg
+    assert agg["top1_share_raw"]["node_weighted_mean"] == 1.0, agg
     pur = pq.read_table(os.path.join(full, "purity_test.parquet")).to_pydict()
     assert pur["top1_title"][0] == "Category:テスト"
     assert pur["top1_title"][1] == "Category:テスト2"
-    assert abs(pur["coverage"][2]) < 1e-9   # comm2 has no categorized articles
+    assert pur["name"][0] == "Category:テスト"          # tf-idf name (v2)
+    assert pur["n_with_filtered_cats"][2] == 0          # comm2 has no categorized articles
 
     print("\n*** CATLINKS/PURITY TEST PASSED ***")
     print({k: counters[k] for k in ("rows", "pairs_kept")},
-          "purity_mean=", agg["top1_share_node_weighted_mean"])
+          "purity_mean=", agg["top1_share_raw"]["node_weighted_mean"])
 
 
 if __name__ == "__main__":

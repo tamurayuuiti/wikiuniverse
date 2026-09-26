@@ -178,6 +178,24 @@ python -m wu.cli --base data categories                       # ~2-5分
 python scripts/community_purity.py --base data --tag res1_sub        # 生グラフ銀河の純度
 python scripts/community_purity.py --base data --tag res1_body_sub   # 本文グラフ銀河の純度
 #   → community/full/purity_<tag>.parquet / purity_<tag>.json + コンソール表
+#   v2: --max-cat-freq 20000 でメタカテゴリ(すべてのスタブ記事/存命人物/
+#       ウィキデータ座標 等)を命名から除外し、tf-idf で name 列を生成
+```
+
+## 銀河カタログ(data/final/ = レイアウト・ビューアのデータ契約)
+
+既存成果物(membership/pairs/per_community/purity)から、表示とレイアウトが使う
+台帳を一括生成する(D16 方針の成果物):
+
+```bash
+python scripts/build_galaxy_catalog.py --base data --galaxy-tag res1_sub --macro-tag res1
+#   → data/final/galaxies.parquet        銀河台帳(macro_id, n_articles, e_in/out, out_ratio,
+#                                         is_dust, name(カテゴリ), rep_titles, top_neighbors,
+#                                         n_neighbors, cluster_l2)
+#   → data/final/macros.parquet          マクロ台帳(63 行 + 統計 + top_galaxies)
+#   → data/final/galaxy_pairs_topK.parquet  中景用バンドル(重み top-K)
+#   → data/final/macro_pairs.parquet     遠景用「数本」(マクロ間集約重み)
+#   → data/final/catalog_meta.json       件数・包含チェック(containment_violations)
 ```
 
 ## 指標定義(評価レポート共通)
