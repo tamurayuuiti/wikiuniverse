@@ -244,6 +244,22 @@ python scripts/layout_local.py --base data --galaxies all --layout-sub canon
 リンク先銀河方向のボール境界面へ。方向ベクトル集約なのでペア保存不要)+ 弾性 prior
 (FR 形状の保持)+ ボール内クランプ。銀河中心・半径は canon レイアウト由来。
 
+## 最小ビューアプロトタイプ(v0.1、フェーズ 3 第 4 ステップ)
+
+```bash
+python scripts/export_viewer_tiles.py --base data     # ~3-6分 → data/spatial/(~0.7GB)
+python -m http.server 8000                            # リポジトリルートで起動
+# ブラウザで http://localhost:8000/viewer/index.html
+```
+
+操作: **銀河クリック=潜入** / **星(記事)クリック=その記事の実リンク**(銀河内=シアン、
+銀河間=マゼンタで実記事まで)/ **Esc=back** / **z-compress スライダー 0.40–1.00**(D17 検討範囲)。
+配信原型: 宇宙+銀河ビューは `bootstrap.json` の 1 fetch、記事データはズームインした
+銀河のタイル(`spatial/tiles/gal_XXXXXX.bin` + `.json`)だけを on-demand fetch(§8「見える
+範囲だけ読む」のプロトタイプ。file:// は CORS で不可のため http サーバ必須)。
+v0.1 制約: 銀河内リンク描画は 6 万本/銀河で間引き、記事間クロスリンクは記事当たり 4 本まで
+(タイル側 cap)、ホバーラベルなし(クリック panel のみ)。
+
 ## 指標定義(評価レポート共通)
 
 コミュニティ c について(エッジはサブセット内部の無向一意リンク):

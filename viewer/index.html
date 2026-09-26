@@ -1,0 +1,255 @@
+
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>wikiuniverse viewer v0.1</title>
+<style>
+  body{margin:0;background:#000;overflow:hidden;font-family:system-ui,sans-serif}
+  #ui{position:absolute;top:10px;left:12px;color:#9ab;font:12px/1.6 monospace;z-index:5}
+  #panel{position:absolute;top:10px;right:12px;width:300px;max-height:70vh;overflow:auto;
+         background:rgba(10,12,18,.82);color:#cde;font:12px/1.5 monospace;
+         padding:10px 12px;border:1px solid #333;border-radius:6px;z-index:5}
+  #panel h3{margin:0 0 6px;font-size:13px;color:#fff}
+  #ui input{width:180px;vertical-align:middle}
+  button{background:#223;color:#cde;border:1px solid #445;border-radius:4px;
+         padding:3px 10px;font:12px monospace;cursor:pointer}
+  .dim{color:#789}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+<div id="ui">
+  <div>wikiuniverse v0.1 — <span id="stage">universe</span></div>
+  <div>z-compress: <input id="zsq" type="range" min="0.40" max="1" step="0.05" value="1">
+       <span id="zv">1.00</span></div>
+  <div><button id="back" style="display:none">&larr; back (Esc)</button></div>
+  <div class="dim">click galaxy = enter / click star = article links / drag = orbit</div>
+</div>
+<div id="panel"><h3>wikiuniverse</h3><div id="pbody">loading bootstrap…</div></div>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+
+const BASE = '../data/spatial/';
+const B = await (await fetch(BASE+'bootstrap.json')).json();
+const G = B.galaxies.length;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000000, 0.00012);
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.5, 200000);
+camera.position.set(0, -3400, 1900);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+const col = c => new THREE.Color().setHSL(((c*137.508)%360)/360, .75, .62);
+let zK = 1.0;
+const gPos = B.galaxies.map(g=>new THREE.Vector3(g[0],g[1],g[2]));
+const mPos = B.macros.map(m=>new THREE.Vector3(m[0],m[1],m[2]));
+
+// ---------------- universe stage ----------------
+const gUni = new THREE.Group(); scene.add(gUni);
+const gGeo = new THREE.SphereGeometry(1, 12, 12);
+const gMat = new THREE.MeshBasicMaterial();
+const inst = new THREE.InstancedMesh(gGeo, gMat, G);
+const m4 = new THREE.Matrix4();
+function paintGalaxies(){
+  B.galaxies.forEach((g,i)=>{
+    const r = Math.max(g[3], .8);
+    m4.makeScale(r,r,r); m4.setPosition(g[0],g[1],g[2]*zK);
+    inst.setMatrixAt(i,m4);
+    inst.setColorAt(i, g[5]===1 ? new THREE.Color(0x888888)
+                     : g[5]===2 ? new THREE.Color(0x222222)
+                     : col(g[4]));
+  });
+  inst.instanceMatrix.needsUpdate = true;
+  if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+}
+paintGalaxies(); gUni.add(inst);
+B.macros.forEach(m=>{
+  if (m[4] <= 1) return;  // skip dust macros
+  const w = new THREE.LineSegments(
+    new THREE.WireframeGeometry(new THREE.SphereGeometry(m[3],14,9)),
+    new THREE.LineBasicMaterial({color:0x445566,transparent:true,opacity:.10}));
+  w.position.set(m[0],m[1],m[2]*zK); w.scale.set(1,1,zK);
+  w.userData.m = m; gUni.add(w);
+});
+function lineSegs(pairs, get, opac, color){
+  const pos = new Float32Array(pairs.length*6);
+  pairs.forEach((p,i)=>{ const a=get(p[0]), b=get(p[1]);
+    pos.set([a.x,a.y,a.z*zK,b.x,b.y,b.z*zK], i*6); });
+  const g2 = new THREE.BufferGeometry();
+  g2.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  return new THREE.LineSegments(g2,
+    new THREE.LineBasicMaterial({color,transparent:true,opacity:opac}));
+}
+let mpLines = lineSegs(B.macro_pairs, i=>mPos[i], .35, 0x6688aa);
+gUni.add(mpLines);
+let gpLines = lineSegs(B.galaxy_pairs, i=>gPos[i], .10, 0x88aaff);
+gUni.add(gpLines);
+function rebuildLines(){
+  gUni.remove(mpLines); gUni.remove(gpLines);
+  mpLines.geometry.dispose(); gpLines.geometry.dispose();
+  gUni.add(lineSegs(B.macro_pairs, i=>mPos[i], .35, 0x6688aa));
+  gUni.add(lineSegs(B.galaxy_pairs, i=>gPos[i], .10, 0x88aaff));
+}
+
+// ---------------- tiles ----------------
+const tileCache = new Map();
+async function tile(g){
+  if (tileCache.has(g)) return tileCache.get(g);
+  const buf = await (await fetch(BASE+`tiles/gal_${String(g).padStart(6,'0')}.bin`)).arrayBuffer();
+  const dv = new DataView(buf);
+  const n = dv.getUint32(0,true), ne = dv.getUint32(4,true), nx = dv.getUint32(8,true);
+  const pos = new Float32Array(buf, 12, n*3);
+  const edges = new Uint32Array(buf, 12+n*12, ne*2);
+  const cross = new Uint32Array(buf, 12+n*12+ne*8, nx*3);
+  const tj = await (await fetch(BASE+`tiles/gal_${String(g).padStart(6,'0')}.json`)).json();
+  const t = {n, ne, nx, pos, edges, cross, titles: tj.t};
+  if (tileCache.size > 24) tileCache.delete(tileCache.keys().next().value);
+  tileCache.set(g, t);
+  return t;
+}
+
+// ---------------- galaxy stage ----------------
+const gGal = new THREE.Group(); gGal.visible = false; scene.add(gGal);
+let curG = -1, artPoints = null, curTile = null;
+const panel = document.getElementById('pbody');
+const stageEl = document.getElementById('stage');
+const backBtn = document.getElementById('back');
+
+function clearGroup(gr){ while(gr.children.length){ const c=gr.children.pop();
+  c.geometry&&c.geometry.dispose(); c.material&&c.material.dispose(); } }
+
+async function enterGalaxy(g){
+  curG = g; stageEl.textContent = `galaxy #${g}`;
+  backBtn.style.display = '';
+  clearGroup(gGal); clearGroup(gArt); gGal.visible = true; gUni.visible = false;
+  const t = curTile = await tile(g);
+  const bg = B.galaxies[g];
+  const pts = new THREE.BufferGeometry();
+  const arr = new Float32Array(t.n*3);
+  for (let i=0;i<t.n;i++){ arr[3*i]=t.pos[3*i]; arr[3*i+1]=t.pos[3*i+1]; arr[3*i+2]=t.pos[3*i+2]*zK; }
+  pts.setAttribute('position', new THREE.BufferAttribute(arr,3));
+  artPoints = new THREE.Points(pts, new THREE.PointsMaterial({
+      color: 0x9ecbff, size: Math.max(bg[3]/60,1.2), sizeAttenuation:true }));
+  artPoints.material.color = col(bg[4]);
+  gGal.add(artPoints);
+  const ne = t.ne, stride = Math.max(1, Math.floor(ne/60000));
+  const lp = [];
+  for (let i=0;i<ne;i+=stride){ const a=t.edges[2*i], b=t.edges[2*i+1];
+    lp.push(t.pos[3*a],t.pos[3*a+1],t.pos[3*a+2]*zK, t.pos[3*b],t.pos[3*b+1],t.pos[3*b+2]*zK); }
+  const lg = new THREE.BufferGeometry();
+  lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lp),3));
+  gGal.add(new THREE.LineSegments(lg,
+    new THREE.LineBasicMaterial({color:0x335577,transparent:true,opacity:.28})));
+  // cross bundles to neighbour galaxies
+  const agg = new Map();
+  for (let i=0;i<t.nx;i+=3){ const og=t.cross[i+1]; agg.set(og,(agg.get(og)||0)+1); }
+  const bp = [];
+  for (const [og,cnt] of agg){ const o=B.galaxies[og];
+    bp.push(bg[0],bg[1],bg[2]*zK, o[0],o[1],o[2]*zK); }
+  if (bp.length){ const bgeo = new THREE.BufferGeometry();
+    bgeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(bp),3));
+    gGal.add(new THREE.LineSegments(bgeo,
+      new THREE.LineBasicMaterial({color:0xaa66aa,transparent:true,opacity:.5}))); }
+  controls.target.set(bg[0],bg[1],bg[2]*zK);
+  camera.position.set(bg[0]+bg[3]*2.2, bg[1]-bg[3]*2.6, bg[2]*zK+bg[3]*1.8);
+  panel.innerHTML = `<h3>${bg[7]||('galaxy #'+g)}</h3>
+    <div>articles: ${bg[6].toLocaleString()} / internal links: ${t.ne.toLocaleString()}</div>
+    <div>cross links (cap4/article): ${t.nx.toLocaleString()} → ${agg.size} galaxies</div>
+    <div class="dim">macro #${bg[4]} · ${bg[5]===1?'MEDIUM (intergalactic medium)':bg[5]===2?'dust':'galaxy'}</div>
+    <div class="dim">click a star for its real links</div>`;
+}
+function exitGalaxy(){
+  curG = -1; stageEl.textContent = 'universe'; backBtn.style.display='none';
+  clearGroup(gGal); clearGroup(gArt); gGal.visible = false; gUni.visible = true;
+  panel.innerHTML = `<h3>wikiuniverse</h3><div>${B.meta.n_articles.toLocaleString()} articles /
+    ${G.toLocaleString()} galaxies / ${B.macros.length} macros</div>
+    <div class="dim">click a galaxy to enter</div>`;
+}
+backBtn.onclick = exitGalaxy;
+addEventListener('keydown', e=>{ if(e.key==='Escape') exitGalaxy(); });
+
+// ---------------- article stage ----------------
+const gArt = new THREE.Group(); scene.add(gArt);
+async function showArticle(local){
+  clearGroup(gArt);
+  const t = curTile, bg = B.galaxies[curG];
+  const title = t.titles[local] || '?';
+  const deg = countDeg(t, local);
+  const lp = [];
+  for (let i=0;i<t.ne;i++){ const a=t.edges[2*i], b=t.edges[2*i+1];
+    if (a===local||b===local) lp.push(t.pos[3*a],t.pos[3*a+1],t.pos[3*a+2]*zK,
+                                      t.pos[3*b],t.pos[3*b+1],t.pos[3*b+2]*zK); }
+  if (lp.length){ const g2 = new THREE.BufferGeometry();
+    g2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lp),3));
+    gArt.add(new THREE.LineSegments(g2,
+      new THREE.LineBasicMaterial({color:0x88ddff,transparent:true,opacity:.9}))); }
+  const x = [];
+  for (let i=0;i<t.nx;i+=3){ if (t.cross[i]!==local) continue;
+    const og=t.cross[i+1], ov=t.cross[i+2];
+    try { const ot = await tile(og);
+      x.push(t.pos[3*local],t.pos[3*local+1],t.pos[3*local+2]*zK,
+             ot.pos[3*ov],ot.pos[3*ov+1],ot.pos[3*ov+2]*zK);
+    } catch(e){} }
+  if (x.length){ const g3 = new THREE.BufferGeometry();
+    g3.setAttribute('position', new THREE.BufferAttribute(new Float32Array(x),3));
+    gArt.add(new THREE.LineSegments(g3,
+      new THREE.LineBasicMaterial({color:0xff66cc,transparent:true,opacity:.9}))); }
+  panel.innerHTML = `<h3>${title}</h3>
+    <div>galaxy: ${bg[7]||('#'+curG)} · internal deg: ${deg}</div>
+    <div class="dim">cyan = intra-galaxy links, magenta = inter-galaxy (real articles)</div>
+    <div><button onclick="document.dispatchEvent(new Event('back-art'))">close</button></div>`;
+}
+function countDeg(t, local){ let d=0;
+  for (let i=0;i<t.ne;i++) if (t.edges[2*i]===local||t.edges[2*i+1]===local) d++;
+  return d; }
+document.addEventListener('back-art', ()=>clearGroup(gArt));
+
+// ---------------- picking ----------------
+const ray = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+renderer.domElement.addEventListener('click', async ev=>{
+  mouse.x = (ev.clientX/innerWidth)*2-1; mouse.y = -(ev.clientY/innerHeight)*2+1;
+  ray.setFromCamera(mouse, camera);
+  if (curG === -1){
+    ray.params.Points = {threshold: 1};
+    const hit = ray.intersectObject(inst);
+    if (hit.length) enterGalaxy(hit[0].instanceId);
+  } else if (artPoints){
+    const bg = B.galaxies[curG];
+    ray.params.Points = {threshold: Math.max(bg[3]/50, 1)};
+    const hit = ray.intersectObject(artPoints);
+    if (hit.length) showArticle(hit[0].index);
+  }
+});
+
+// ---------------- z slider ----------------
+const zsl = document.getElementById('zsq');
+zsl.addEventListener('input', ()=>{
+  zK = parseFloat(zsl.value);
+  document.getElementById('zv').textContent = zK.toFixed(2);
+  paintGalaxies();
+  gUni.children.forEach(c=>{ if (c.userData.m){ c.position.z = c.userData.m[2]*zK; c.scale.set(1,1,zK); } });
+  rebuildLines();
+  if (curG >= 0 && curTile){
+    const pa = artPoints.geometry.attributes.position;
+    for (let i=0;i<curTile.n;i++) pa.array[3*i+2] = curTile.pos[3*i+2]*zK;
+    pa.needsUpdate = true;
+  }
+});
+
+addEventListener('resize', ()=>{ camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+(function loop(){ requestAnimationFrame(loop); controls.update(); renderer.render(scene,camera); })();
+exitGalaxy();
+</script>
+</body>
+</html>

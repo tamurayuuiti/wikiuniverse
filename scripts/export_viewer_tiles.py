@@ -1,0 +1,222 @@
+"""Export viewer tiles + bootstrap JSON (LOD streaming prototype, §8).
+
+Per-galaxy self-contained tile (data/spatial/tiles/gal_XXXXXX.bin, little-endian):
+  uint32  n_articles
+  uint32  n_internal_edges
+  uint32  n_cross_links
+  float32 n*3            article positions (canonical global coords)
+  uint32  n_internal*2   internal edges (local idx pairs)
+  uint32  n_cross*3      cross links (local_u, other_galaxy, local_v)
+                         per-article cap: first 4 cross links (prototype)
+Sidecar gal_XXXXXX.json : {"t": [title, ...]} (local idx order)
+
+bootstrap.json (few hundred KB): macros / galaxies / macro_pairs / galaxy_pairs
+so the universe+galaxy views need a single fetch; article data streams per tile.
+
+Usage:
+  python scripts/export_viewer_tiles.py --base data [--galaxy-tag res1_sub]
+      [--layout-sub canon] [--cross-cap 4]
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from wu.dumpio import write_json  # noqa: E402
+from wu.paths import Dirs  # noqa: E402
+from wu.stats import load_edges_mmap, load_titles  # noqa: E402
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--base", default="data")
+    ap.add_argument("--galaxy-tag", default="res1_sub")
+    ap.add_argument("--layout-sub", default="canon")
+    ap.add_argument("--cross-cap", type=int, default=4)
+    a = ap.parse_args()
+    dirs = Dirs(a.base)
+    t0 = time.time()
+    lay = os.path.join(dirs.base, "layout", a.layout_sub)
+    spatial = os.path.join(dirs.base, "spatial")
+    tiles = os.path.join(spatial, "tiles")
+    os.makedirs(tiles, exist_ok=True)
+
+    import pyarrow.parquet as pq
+
+    memb = np.load(os.path.join(dirs.community, "full", f"membership_{a.galaxy_tag}.npy"))
+    n = len(memb)
+    G = int(memb.max()) + 1
+    gpos = pq.read_table(os.path.join(lay, "galaxy_positions.parquet")).to_pydict()
+    mpos = pq.read_table(os.path.join(lay, "macro_positions.parquet")).to_pydict()
+    cat = pq.read_table(os.path.join(dirs.base, "final", "galaxies.parquet")).to_pydict()
+    apq = pq.read_table(os.path.join(lay, "article_positions.parquet"))
+    P = np.stack([apq.column("x").to_numpy(), apq.column("y").to_numpy(),
+                  apq.column("z").to_numpy()], axis=1).astype(np.float32)
+    del apq
+    pid_col, title_col = load_titles(dirs.parsed)
+    titles_all = [title_col[i].as_py() for i in
+                  np.clip(np.searchsorted(pid_col, np.load(dirs.article_ids)),
+                          0, len(pid_col) - 1)]
+    E = load_edges_mmap(os.path.join(dirs.graph, "edges_undirected_unique.bin"))
+    print(f"[tiles] loaded: {n:,} articles, {G:,} galaxies, {len(E):,} edges "
+          f"({time.time()-t0:.0f}s)")
+
+    order = np.argsort(memb, kind="stable")
+    starts = np.searchsorted(memb[order], np.arange(G), side="left")
+    ends = np.searchsorted(memb[order], np.arange(G), side="right")
+    starts_arr = starts
+
+    # ---- pass 1: counts (internal edges per galaxy; cross links per galaxy with cap)
+    cnt_e = np.zeros(G, np.int64)
+    cnt_x = np.zeros(G, np.int64)
+    slot = np.full(n, a.cross_cap, np.int8)
+    CH = 4_000_000
+
+    def cross_mask(u, v):
+        gu, gv = memb[u], memb[v]
+        cr = gu != gv
+        return cr, gu, gv
+
+    for i in range(0, len(E), CH):
+        blk = np.asarray(E[i : i + CH]).astype(np.int64)
+        u, v = blk[:, 0], blk[:, 1]
+        gu, gv = memb[u], memb[v]
+        same = gu == gv
+        cnt_e += np.bincount(gu[same], minlength=G)
+        cr = ~same
+        uu, vv, guu, gvv = u[cr], v[cr], gu[cr], gv[cr]
+        ok_u = slot[uu] > 0
+        ok_v = slot[vv] > 0
+        # entry in u's tile requires slot[u]; entry in v's tile requires slot[v]
+        su, sv = slot[uu].copy(), slot[vv].copy()
+        # emulate sequential acceptance: sort by u to apply caps deterministically
+        for arr_u, arr_g in ((uu, gvv),):
+            pass
+        # vectorized approximate cap: accept if slot>0 then decrement (order-free)
+        au = ok_u
+        av = ok_v
+        np.add.at(slot, uu[au], -1)
+        np.add.at(slot, vv[av], -1)
+        cnt_x += np.bincount(guu[au], minlength=G)
+        cnt_x += np.bincount(gvv[av], minlength=G)
+    # ---- pass 2: fill (same acceptance logic, same order)
+    slot = np.full(n, a.cross_cap, np.int8)
+    e_off = np.zeros(G + 1, np.int64); e_off[1:] = np.cumsum(cnt_e)
+    x_off = np.zeros(G + 1, np.int64); x_off[1:] = np.cumsum(cnt_x)
+    e_buf = np.empty((int(cnt_e.sum()), 2), np.uint32)
+    x_buf = np.empty((int(cnt_x.sum()), 3), np.uint32)
+    e_fill, x_fill = e_off[:-1].copy(), x_off[:-1].copy()
+    for i in range(0, len(E), CH):
+        blk = np.asarray(E[i : i + CH]).astype(np.int64)
+        u, v = blk[:, 0], blk[:, 1]
+        gu, gv = memb[u], memb[v]
+        same = gu == gv
+        if same.any():
+            c = gu[same]
+            oc = np.argsort(c, kind="stable")
+            cs = c[oc]
+            uniq, first = np.unique(cs, return_index=True)
+            ui = np.searchsorted(uniq, cs)
+            rank = np.arange(len(cs)) - first[ui]
+            pos = e_fill[uniq][ui] + rank
+            us, vs = u[same][oc], v[same][oc]
+            e_buf[pos, 0] = local_idx(order, us, gu[same][oc], starts_arr)
+            e_buf[pos, 1] = local_idx(order, vs, gu[same][oc], starts_arr)
+            e_fill[uniq] += np.diff(np.append(first, len(cs)))
+        cr = ~same
+        if cr.any():
+            uu, vv, guu, gvv = u[cr], v[cr], gu[cr], gv[cr]
+            au = slot[uu] > 0
+            av = slot[vv] > 0
+            np.add.at(slot, uu[au], -1)
+            np.add.at(slot, vv[av], -1)
+            # rank-based scatter (duplicate-safe; mirrors pass1 bincount exactly)
+            for src_g, dst_g, src_p, dst_p in (
+                    (guu[au], gvv[au], uu[au], vv[au]),
+                    (gvv[av], guu[av], vv[av], uu[av])):
+                if len(src_g) == 0:
+                    continue
+                ocx = np.argsort(src_g, kind="stable")
+                gs = src_g[ocx]
+                uniq_x, first_x, cnt_x = np.unique(gs, return_index=True,
+                                                   return_counts=True)
+                ui_x = np.searchsorted(uniq_x, gs)
+                rank_x = np.arange(len(gs)) - first_x[ui_x]
+                posx = x_fill[uniq_x][ui_x] + rank_x
+                x_buf[posx, 0] = local_idx(order, src_p[ocx], gs, starts_arr)
+                x_buf[posx, 1] = dst_g[ocx].astype(np.uint32)
+                x_buf[posx, 2] = local_idx(order, dst_p[ocx], dst_g[ocx], starts_arr)
+                x_fill[uniq_x] += cnt_x
+        if (i // CH) % 5 == 0:
+            print(f"  tiles pass2 {i + len(blk):,}/{len(E):,} ({time.time()-t0:.0f}s)", flush=True)
+    assert np.array_equal(e_fill, e_off[1:]) and np.array_equal(x_fill, x_off[1:])
+
+    # ---- write tiles
+    cls_code = {"galaxy": 0, "medium": 1, "dust": 2}
+    for g in range(G):
+        members = order[starts[g] : ends[g]]
+        ng = len(members)
+        if ng == 0:
+            continue
+        pos_g = P[members]
+        eg = e_buf[e_off[g] : e_off[g + 1]]
+        xg = x_buf[x_off[g] : x_off[g + 1]]
+        hdr = np.array([ng, len(eg), len(xg)], dtype=np.uint32)
+        with open(os.path.join(tiles, f"gal_{g:06d}.bin"), "wb") as f:
+            f.write(hdr.tobytes())
+            f.write(pos_g.astype("<f4").tobytes())
+            f.write(eg.astype("<u4").tobytes())
+            f.write(xg.astype("<u4").tobytes())
+        with open(os.path.join(tiles, f"gal_{g:06d}.json"), "w", encoding="utf-8") as f:
+            json.dump({"t": [titles_all[i] for i in members]}, f, ensure_ascii=False)
+    print(f"[tiles] wrote {G:,} tiles ({time.time()-t0:.0f}s)")
+
+    # ---- bootstrap
+    mac = pq.read_table(os.path.join(dirs.base, "final", "macros.parquet")).to_pydict()
+    mpq = pq.read_table(os.path.join(dirs.base, "final", "macro_pairs.parquet")).to_pydict()
+    gpq = pq.read_table(os.path.join(dirs.base, "final", "galaxy_pairs_topK.parquet")).to_pydict()
+    boot = {
+        "meta": {"galaxy_tag": a.galaxy_tag, "layout_sub": a.layout_sub,
+                 "n_articles": n, "n_galaxies": G,
+                 "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                 "cross_cap": a.cross_cap},
+        "macros": [[round(mpos["x"][i], 2), round(mpos["y"][i], 2), round(mpos["z"][i], 2),
+                    round(mpos["radius"][i], 2), int(mpos["n_articles"][i]),
+                    str(mac["rep_titles"][i]).split(",")[0][:16]]
+                   for i in range(len(mpos["macro_id"]))],  # ALL ids: pairs index raw ids
+        "galaxies": [[round(gpos["x"][i], 2), round(gpos["y"][i], 2), round(gpos["z"][i], 2),
+                      round(max(gpos["radius"][i], 0.5), 2), int(gpos["macro_id"][i]),
+                      cls_code.get(str(cat["display_class"][i]), 0),
+                      int(cat["n_articles"][i]), str(cat["name"][i] or "")]
+                     for i in range(G)],
+        "macro_pairs": [[int(mpq["macro_a"][i]), int(mpq["macro_b"][i]), int(mpq["w"][i])]
+                        for i in range(min(400, len(mpq["w"])))],
+        "galaxy_pairs": [[int(gpq["a"][i]), int(gpq["b"][i]), int(gpq["w"][i])]
+                         for i in range(min(5000, len(gpq["w"])))],
+    }
+    write_json(os.path.join(spatial, "bootstrap.json"), boot)
+    meta = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "n_tiles": int(G), "internal_edges": int(cnt_e.sum()),
+            "cross_links": int(cnt_x.sum()),
+            "tile_bytes": sum(os.path.getsize(os.path.join(tiles, f))
+                              for f in os.listdir(tiles) if f.endswith(".bin")),
+            "secs": round(time.time() - t0, 1)}
+    write_json(os.path.join(spatial, "tiles_meta.json"), meta)
+    print(f"[tiles] bootstrap.json + tiles_meta.json: {meta}")
+
+
+def local_idx(order, pids, gids, starts_arr):
+    """local index of article pids within their galaxy (members sorted by idx)."""
+    opos = np.searchsorted(order, pids)
+    return (opos - starts_arr[gids]).astype(np.uint32)
+
+
+if __name__ == "__main__":
+    main()

@@ -117,6 +117,9 @@ def main():
     pq.write_table(_gt.drop(["display_class"]), _gpath)
     out_skew = run_script("layout_global.py", "--dim", "2", "--galaxy-tag", "res1_s")
     assert "pre-v2" in out_skew, "skew warning not emitted"
+    # restore v2 catalog files (skew block degraded them in place)
+    run_script("build_galaxy_catalog.py", "--galaxy-tag", "res1_s",
+               "--macro-tag", "res1", "--top-neighbors", "4", "--top-pairs", "100")
 
     lay = os.path.join(BASE, "layout")
     for f in ("galaxy_positions.parquet", "macro_positions.parquet",
@@ -177,6 +180,22 @@ def main():
     gid = _np.asarray(apt["galaxy_id"])
     d = _np.linalg.norm(P - C3[gid], axis=1)
     assert (d <= _np.maximum(R3[gid] * 1.25, 1e-6)).all(), "article outside galaxy ball"
+
+    # ---- viewer tiles export
+    run_script("export_viewer_tiles.py", "--galaxy-tag", "res1_s", "--layout-sub", "")
+    sp = os.path.join(BASE, "spatial")
+    boot = json.load(open(os.path.join(sp, "bootstrap.json"), encoding="utf-8"))
+    assert len(boot["galaxies"]) == G
+    assert len(boot["macros"]) == len(m["macro_id"])   # ALL macro ids (pairs index raw)
+    t0f = os.path.join(sp, "tiles", "gal_000000.bin")
+    assert os.path.exists(t0f)
+    import struct
+    with open(t0f, "rb") as fh:
+        nn, ne, nx = struct.unpack("<III", fh.read(12))
+    assert nn > 0 and os.path.getsize(t0f) == 12 + nn * 12 + ne * 8 + nx * 12
+    assert os.path.exists(os.path.join(sp, "tiles", "gal_000000.json"))
+    assert os.path.exists(os.path.join(sp, "tiles_meta.json"))
+
 
     # purity v2 outputs present with new schema
     pur = pq.read_table(os.path.join(dirs.community, "full", "purity_res1_s.parquet")).to_pydict()
