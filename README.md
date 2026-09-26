@@ -228,6 +228,22 @@ z-compress スライダー、データ埋め込み)。1,971 銀河 + 63 マク�
 銀河「内部」の記事座標は次のフェーズ(アンカーバネ付きローカルレイアウト、銀河単位バッチ、
 完全 3D)で合成する。
 
+## 銀河内部ローカルレイアウト(記事座標、フェーズ 3 第 3 ステップ)
+
+銀河ごとに**完全に独立したジョブ**(§12 独立バッチの原型)。バッチ分割実行=Colab ジョブの試作:
+
+```bash
+python scripts/layout_local.py --base data --galaxies all --layout-sub canon
+# バッチ分割例: --galaxies 0-499 / --galaxies 500-1499 (resume 対応、checkpoint 記録)
+#   → data/layout/canon/article_shards/gal_XXXXXX.npy (銀河毎)
+#   → 全銀河完了時に自動マージ: article_positions.parquet (page_id, galaxy_id, x,y,z)
+#   → layout_local_meta.json (銀河毎所要時間 p50/p95 = バッチ外挿の根拠)
+```
+
+力モデル: 内部エッジ = igraph FR(3D)の形状 + **アンカーバネ**(銀河間リンクが多い記事ほど、
+リンク先銀河方向のボール境界面へ。方向ベクトル集約なのでペア保存不要)+ 弾性 prior
+(FR 形状の保持)+ ボール内クランプ。銀河中心・半径は canon レイアウト由来。
+
 ## 指標定義(評価レポート共通)
 
 コミュニティ c について(エッジはサブセット内部の無向一意リンク):

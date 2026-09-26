@@ -160,6 +160,24 @@ def main():
     assert any(f.startswith("preview_macro3d") and f.endswith(".html")
                for f in os.listdir(lay3)), os.listdir(lay3)
 
+    # ---- local (intra-galaxy) article layout, batch range + merge
+    run_script("layout_local.py", "--galaxies", "0-11", "--galaxy-tag", "res1_s",
+               "--layout-sub", "")
+    run_script("layout_local.py", "--galaxies", "12-9999", "--galaxy-tag", "res1_s",
+               "--layout-sub", "", "--preview-galaxy", "0")
+    assert os.path.exists(os.path.join(BASE, "layout", "preview_galaxy_0.png"))
+    apq = os.path.join(BASE, "layout", "article_positions.parquet")
+    assert os.path.exists(apq), "merged article positions missing"
+    apt = pq.read_table(apq).to_pydict()
+    assert len(apt["page_id"]) == 60
+    P = _np.stack([apt["x"], apt["y"], apt["z"]], axis=1)
+    assert _np.isfinite(P).all()
+    C3 = _np.stack([gpos["x"], gpos["y"], gpos["z"]], axis=1)
+    R3 = _np.asarray(gpos["radius"])
+    gid = _np.asarray(apt["galaxy_id"])
+    d = _np.linalg.norm(P - C3[gid], axis=1)
+    assert (d <= _np.maximum(R3[gid] * 1.25, 1e-6)).all(), "article outside galaxy ball"
+
     # purity v2 outputs present with new schema
     pur = pq.read_table(os.path.join(dirs.community, "full", "purity_res1_s.parquet")).to_pydict()
     assert "name" in pur and "top1_share_filt" in pur
