@@ -13,11 +13,14 @@
 //   dist/proj 倍率を掛ける(自己相似性の要)。px 上限のみ持たせる。
 // - クロスアークは実記事間リンク(隣接銀河タイルの位置を使用)。
 //   隣接タイル未着の分は描かない(タイル到着時に進歩的に増える)。
+// - 測光: エッジ類は通常ブレンド+露出(1/n)+ハブ抑制 ink(vertex color)で
+//   累積光束を有界化する(加算ブレンドは本数に比例して白飛びするため廃止)。
+//   加算は星点と ego 網(本数有界)のみ残す。
 
 import * as THREE from 'three'
 import type { TileIndex } from '@/types/catalog'
 import { peekTile, fetchTile } from '@/data/tileCache'
-import { LOD, STAR_PX_FACTOR, emergeAlpha, edgesAlpha, crossAlpha } from './lod'
+import { LOD, STAR_PX_FACTOR, EXPOSURE, emergeAlpha, edgesAlpha, crossAlpha, edgeExposure, crossExposure, edgeInk } from './lod'
 
 // 1 銀河あたりクロスアークの描画上限(サンプリング)。
 const CROSS_ARC_CAP = 700
@@ -34,6 +37,7 @@ interface Entry {
   edges: THREE.LineSegments | null
   cross: THREE.LineSegments | null
   crossRequested: Set<number>
+  drawnCross: number // 構築済みクロスアーク本数(露出 1/n の基準)
   n: number
   maxDeg: number
 }
@@ -57,9 +61,11 @@ void main() {
 `
 
 // スターフィールドの FS(丸グロー)。
+// 注意: ShaderMaterial は material.opacity が FS へ届かないため uOpacity で自前乗算する。
 const STAR_FS = `
 uniform vec3 uColorA;
 uniform vec3 uColorB;
+uniform float uOpacity;
 varying float vBright;
 void main() {
   vec2 d = gl_PointCoord - vec2(0.5);
@@ -68,11 +74,22 @@ void main() {
   float a = (1.0 - r);
   float core = pow(max(1.0 - r, 0.0), 2.4);
   vec3 c = mix(uColorA, uColorB, vBright);
-  gl_FragColor = vec4(c * (0.30 + 0.95 * core), a * a);
+  gl_FragColor = vec4(c * (${EXPOSURE.starBase} + ${EXPOSURE.starCore} * core), uOpacity * a * a);
 }
 `
 
 const tmpColor = new THREE.Color()
+
+// 次数中央値の近似(サンプリング)を返す(ハブ抑制の正規化基準)。
+function medianDeg(deg: ArrayLike<number>): number {
+  const n = deg.length
+  if (n === 0) return 1
+  const s: number[] = []
+  const step = Math.max(1, Math.floor(n / 128))
+  for (let i = 0; i < n; i += step) s.push(deg[i] ?? 0)
+  s.sort((a, b) => a - b)
+  return Math.max(1, s[s.length >> 1] ?? 1)
+}
 
 // 出現銀河の星・内部エッジ・クロスアーク・ego を描画する。
 export class StarField {
@@ -140,10 +157,13 @@ export class StarField {
       const mat = e.points.material as THREE.ShaderMaterial
       mat.uniforms.uPx.value = px * STAR_PX_FACTOR
       mat.uniforms.uTime.value = this.time
+      mat.uniforms.uOpacity.value = e.shown
       mat.opacity = e.shown
-      // 内部エッジ(px 則)。
-      const ea = edgesAlpha(px) * e.shown
-      if (ea > 0.012) {
+      // 内部エッジ(px 則×露出 1/n: 本数に依らず画面インクを一定化)。
+      const tile = peekTile(e.g)
+      const drawn = tile ? Math.min(tile.eSrc.length, INTERNAL_CAP) : INTERNAL_CAP
+      const ea = edgesAlpha(px) * e.shown * edgeExposure(drawn)
+      if (ea > 0.004) {
         if (!e.edges) e.edges = this.buildEdges(e)
         if (e.edges) {
           e.edges.visible = true
@@ -152,10 +172,10 @@ export class StarField {
       } else if (e.edges) {
         e.edges.visible = false
       }
-      // 実クロスアーク(隣接タイルを要求しつつ進歩的に構築)。
-      const ca = crossOn ? crossAlpha(px) * e.shown : 0
-      if (ca > 0.02) {
-        this.buildCross(e, ca)
+      // 実クロスアーク(隣接タイルを要求しつつ進歩的に構築、露出 1/n)。
+      const ca = crossOn ? crossAlpha(px) * e.shown * crossExposure(e.drawnCross || CROSS_ARC_CAP) : 0
+      if (ca > 0.008) {
+        this.buildCross(e, ca, crossAlpha(px) * e.shown > 0.1)
       } else if (e.cross) {
         e.cross.visible = false
       }
@@ -275,6 +295,7 @@ export class StarField {
         uPx: { value: 1 },
         uTime: { value: 0 },
         uPxMax: { value: 9 },
+        uOpacity: { value: 0 },
         uColorA: { value: colorA },
         uColorB: { value: colorB },
       },
@@ -290,7 +311,7 @@ export class StarField {
     points.renderOrder = 6
     points.userData.galaxy = g
     this.group.add(points)
-    return { g, alpha: 0, shown: 0, points, edges: null, cross: null, crossRequested: new Set(), n: tile.n, maxDeg }
+    return { g, alpha: 0, shown: 0, points, edges: null, cross: null, crossRequested: new Set(), drawnCross: 0, n: tile.n, maxDeg }
   }
 
   // エントリを破棄する。
@@ -321,6 +342,12 @@ export class StarField {
     const stride = Math.max(1, Math.floor(total / INTERNAL_CAP))
     const cap = Math.min(total, INTERNAL_CAP)
     const pos = new Float32Array(cap * 6)
+    const col = new Float32Array(cap * 6)
+    const med = medianDeg(tile.deg)
+    tmpColor.setHSL(meta.hue, 0.35, 0.52)
+    const br = tmpColor.r
+    const bg = tmpColor.g
+    const bb = tmpColor.b
     let k = 0
     for (let i = 0; i < total && k < cap; i += stride) {
       const a = tile.eSrc[i]
@@ -332,12 +359,20 @@ export class StarField {
       pos[k * 6 + 3] = tile.pos[b * 3]
       pos[k * 6 + 4] = tile.pos[b * 3 + 1]
       pos[k * 6 + 5] = tile.pos[b * 3 + 2]
+      // ハブ抑制 ink(両端正規次数): ハブ発射線のみ暗く、典型線は残す。
+      const ink = edgeInk((tile.deg[a] ?? 0) / med, (tile.deg[b] ?? 0) / med, EXPOSURE.edgeInk)
+      col[k * 6] = br * ink
+      col[k * 6 + 1] = bg * ink
+      col[k * 6 + 2] = bb * ink
+      col[k * 6 + 3] = br * ink
+      col[k * 6 + 4] = bg * ink
+      col[k * 6 + 5] = bb * ink
       k++
     }
     const geo = new THREE.BufferGeometry()
     geo.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, k * 6), 3))
-    tmpColor.setHSL(meta.hue, 0.35, 0.52)
-    const mat = new THREE.LineBasicMaterial({ color: tmpColor, transparent: true, opacity: 0.1, depthWrite: false, blending: THREE.AdditiveBlending })
+    geo.setAttribute('color', new THREE.BufferAttribute(col.subarray(0, k * 6), 3))
+    const mat = new THREE.LineBasicMaterial({ color: 0xffffff, vertexColors: true, transparent: true, opacity: 0.1, depthWrite: false, blending: THREE.NormalBlending })
     const lines = new THREE.LineSegments(geo, mat)
     lines.frustumCulled = false
     lines.renderOrder = 5
@@ -346,11 +381,10 @@ export class StarField {
   }
 
   // 実クロスアークを進歩的に構築する(隣接タイルがあれば実記事間、なければ銀河中心へのビーム)。
-  private buildCross(e: Entry, alpha: number): void {
+  private buildCross(e: Entry, alpha: number, wantNeighbors: boolean): void {
     const tile = peekTile(e.g)
     const meta = this.index.galaxies.get(e.g)
     if (!tile || !meta) return
-    const wantNeighbors = alpha > 0.1
     if (e.cross) {
       ;(e.cross.material as THREE.LineBasicMaterial).opacity = alpha
       e.cross.visible = true
@@ -375,11 +409,21 @@ export class StarField {
       }
       if (requested && e.cross) return // 到着後に再構築
     }
-    // アーク構築(サンプリング、実位置優先)。
+    // アーク構築(サンプリング、実位置優先、ハブ抑制 ink を頂点色へ焼く)。
     const total = tile.cross.length / 3
     const stride = Math.max(1, Math.floor(total / CROSS_ARC_CAP))
     const cap = Math.min(total, CROSS_ARC_CAP)
     const pos: number[] = []
+    const col: number[] = []
+    const med = medianDeg(tile.deg)
+    const otherMed = new Map<number, number>()
+    tmpColor.setHSL((meta.hue + 0.5) % 1, 0.5, 0.6)
+    const br = tmpColor.r
+    const bg = tmpColor.g
+    const bb = tmpColor.b
+    const pushInk = (ink: number): void => {
+      col.push(br * ink, bg * ink, bb * ink, br * ink, bg * ink, bb * ink)
+    }
     for (let i = 0; i < total && pos.length < cap * 6; i += stride) {
       const u = tile.cross[i * 3]
       const og = tile.cross[i * 3 + 1]
@@ -388,26 +432,35 @@ export class StarField {
       const ux = tile.pos[u * 3]
       const uy = tile.pos[u * 3 + 1]
       const uz = tile.pos[u * 3 + 2]
+      const dnU = (tile.deg[u] ?? 0) / med
       const other = peekTile(og)
       if (other?.pos && v < other.n) {
-        // 実記事間アーク。
+        // 実記事間アーク(相手次数が既知なら両端で抑制)。
+        let m = otherMed.get(og)
+        if (m == null) {
+          m = medianDeg(other.deg)
+          otherMed.set(og, m)
+        }
+        pushInk(edgeInk(dnU, (other.deg[v] ?? 0) / m, EXPOSURE.crossInk))
         pos.push(ux, uy, uz, other.pos[v * 3], other.pos[v * 3 + 1], other.pos[v * 3 + 2])
       } else {
-        // 隣接タイル未着: 隣接銀河中心への淡いビーム。
+        // 隣接タイル未着: 隣接銀河中心への淡いビーム(相手次数は典型扱い)。
         const om = this.index.galaxies.get(og)
         if (!om) continue
+        pushInk(edgeInk(dnU, 1, EXPOSURE.crossInk) * 0.5)
         pos.push(ux, uy, uz, ux + (om.x - ux) * 0.55, uy + (om.y - uy) * 0.55, uz + (om.z - uz) * 0.55)
       }
     }
     if (pos.length === 0) return
     const geo = new THREE.BufferGeometry()
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
-    tmpColor.setHSL((meta.hue + 0.5) % 1, 0.5, 0.6)
-    const mat = new THREE.LineBasicMaterial({ color: tmpColor, transparent: true, opacity: alpha, depthWrite: false, blending: THREE.AdditiveBlending })
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3))
+    const mat = new THREE.LineBasicMaterial({ color: 0xffffff, vertexColors: true, transparent: true, opacity: alpha, depthWrite: false, blending: THREE.NormalBlending })
     if (e.cross) {
       this.group.remove(e.cross)
       e.cross.geometry.dispose()
     }
+    e.drawnCross = pos.length / 6
     e.cross = new THREE.LineSegments(geo, mat)
     e.cross.frustumCulled = false
     e.cross.renderOrder = 6
@@ -462,7 +515,8 @@ export class StarField {
     if (pos.length === 0) return
     const geo = new THREE.BufferGeometry()
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
-    const mat = new THREE.LineBasicMaterial({ color: 0xfff3b0, transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending })
+    // ego は本数有界(EGO_CAP)のため加算を維持しつつ、輝度は抑える。
+    const mat = new THREE.LineBasicMaterial({ color: 0xfff3b0, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending })
     this.egoLines = new THREE.LineSegments(geo, mat)
     this.egoLines.frustumCulled = false
     this.egoLines.renderOrder = 8

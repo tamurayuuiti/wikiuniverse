@@ -12,10 +12,12 @@
 // 注意:
 // - ラベルテクスチャは銀河単位で遅延生成しキャッシュする(上限あり)。
 // - 球殻は近距離のみ表示(fade)、遠景ではクラスタだけ。
+// - 測光: 塊スプライトとバンドルは通常ブレンド(重なりが線色へ収束し白飛びしない)。
+//   バンドルは次数由来のハブ抑制 ink を頂点色へ焼き、ハブ交差点の放射状白飛びを縛る。
 
 import * as THREE from 'three'
 import type { BootstrapData, TileIndex } from '@/types/catalog'
-import { LOD, screenPx, clumpAlpha, galaxyLabelAlpha, macroLabelAlpha } from './lod'
+import { LOD, EXPOSURE, screenPx, clumpAlpha, galaxyLabelAlpha, macroLabelAlpha, edgeInk } from './lod'
 
 // ラベルプール上限。
 const LABEL_POOL = 42
@@ -24,6 +26,17 @@ const LABEL_CACHE = 200
 
 const tmpColor = new THREE.Color()
 const tmpV = new THREE.Vector3()
+
+// ペア列から各ノードの次数(出現数)と中央値を返す(バンドル ink の正規化基準)。
+function pairDegrees(pairs: { a: number; b: number }[]): { deg: Map<number, number>; med: number } {
+  const deg = new Map<number, number>()
+  for (const p of pairs) {
+    deg.set(p.a, (deg.get(p.a) ?? 0) + 1)
+    deg.set(p.b, (deg.get(p.b) ?? 0) + 1)
+  }
+  const vals = [...deg.values()].sort((x, y) => x - y)
+  return { deg, med: Math.max(1, vals[vals.length >> 1] ?? 1) }
+}
 
 // 宇宙の骨格(マクロ/銀河)を描画する。
 export class UniverseLayer {
@@ -68,7 +81,7 @@ export class UniverseLayer {
         transparent: true,
         opacity: 0.9,
         depthWrite: false,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.NormalBlending,
       })
       const s = new THREE.Sprite(mat)
       s.position.set(m.x, m.y, m.z)
@@ -82,9 +95,9 @@ export class UniverseLayer {
         map: clumpTex,
         color: tmpColor.clone().multiplyScalar(0.7),
         transparent: true,
-        opacity: 0.3,
+        opacity: 0.22,
         depthWrite: false,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.NormalBlending,
       })
       const gs = new THREE.Sprite(gmat)
       gs.position.copy(s.position)
@@ -109,12 +122,21 @@ export class UniverseLayer {
       this.group.add(ls)
       this.macroLabels.push(ls)
     }
-    // マクロバンドル(帯状: 上辺+下辺+対角)。
+    // マクロバンドル(帯状: 上辺+下辺+対角、ハブ抑制 ink を頂点色へ焼く)。
     {
       const pos: number[] = []
+      const col: number[] = []
+      const { deg, med } = pairDegrees(boot.macroBundles)
+      const base = new THREE.Color(0xaad4ff)
+      // 1 セグメントを位置+ink 付き頂点色で積む。
+      const seg = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, ink: number): void => {
+        pos.push(x0, y0, z0, x1, y1, z1)
+        col.push(base.r * ink, base.g * ink, base.b * ink, base.r * ink, base.g * ink, base.b * ink)
+      }
       for (const b of boot.macroBundles) {
         const A = boot.macros[b.a]
         const B = boot.macros[b.b]
+        const ink = edgeInk((deg.get(b.a) ?? 1) / med, (deg.get(b.b) ?? 1) / med, EXPOSURE.macroBundleInk)
         const ax = A.x
         const ay = A.y
         const az = A.z
@@ -145,22 +167,24 @@ export class UniverseLayer {
           let prev = P(0, side)
           for (let s = 1; s <= 8; s++) {
             const cur = P(s / 8, side)
-            pos.push(prev[0], prev[1], prev[2], cur[0], cur[1], cur[2])
+            seg(prev[0], prev[1], prev[2], cur[0], cur[1], cur[2], ink)
             prev = cur
           }
         }
         const p0 = P(0, 1)
         const p1 = P(1, -1)
-        pos.push(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2])
+        seg(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], ink)
       }
       const geo = new THREE.BufferGeometry()
       geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3))
       this.macroBundleMat = new THREE.LineBasicMaterial({
-        color: 0xaad4ff,
+        color: 0xffffff,
+        vertexColors: true,
         transparent: true,
         opacity: 0.5,
         depthWrite: false,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.NormalBlending,
       })
       this.macroBundleLines = new THREE.LineSegments(geo, this.macroBundleMat)
       this.macroBundleLines.frustumCulled = false
@@ -178,7 +202,7 @@ export class UniverseLayer {
         transparent: true,
         opacity: 0.85,
         depthWrite: false,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.NormalBlending,
       })
       const s = new THREE.Sprite(mat)
       s.position.set(g.x, g.y, g.z)
@@ -195,13 +219,22 @@ export class UniverseLayer {
       this.group.add(hub)
       this.galHubs.push(hub)
     }
-    // 銀河バンドル(3 本束、ベジェ 12 分割)。
+    // 銀河バンドル(3 本束、ベジェ 12 分割、ハブ抑制 ink を頂点色へ焼く)。
     {
       const pos: number[] = []
+      const col: number[] = []
+      const { deg, med } = pairDegrees(boot.galaxyBundles)
+      const base = new THREE.Color(0x9fc4f0)
+      // 1 セグメントを位置+ink 付き頂点色で積む。
+      const seg = (p0: THREE.Vector3, p1: THREE.Vector3, ink: number): void => {
+        pos.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z)
+        col.push(base.r * ink, base.g * ink, base.b * ink, base.r * ink, base.g * ink, base.b * ink)
+      }
       for (const b of boot.galaxyBundles) {
         const ga = boot.galaxies.find(x => x.gid === b.a)
         const gb = boot.galaxies.find(x => x.gid === b.b)
         if (!ga || !gb) continue
+        const ink = edgeInk((deg.get(b.a) ?? 1) / med, (deg.get(b.b) ?? 1) / med, EXPOSURE.galaxyBundleInk)
         const a = new THREE.Vector3(ga.x, ga.y, ga.z)
         const c = new THREE.Vector3(gb.x, gb.y, gb.z)
         const mid = a.clone().add(c).multiplyScalar(0.5)
@@ -210,25 +243,27 @@ export class UniverseLayer {
         const pts = curve.getPoints(12)
         const dir = c.clone().sub(a).normalize()
         const up = new THREE.Vector3(0, 1, 0)
-        let perp = up.clone().cross(dir)
+        const perp = up.clone().cross(dir)
         if (perp.lengthSq() < 1e-6) perp.set(1, 0, 0)
         perp.normalize()
         for (const off of [-0.14, 0, 0.14]) {
           for (let i = 0; i < pts.length - 1; i++) {
             const p0 = pts[i].clone().addScaledVector(perp, off * 1.4)
             const p1 = pts[i + 1].clone().addScaledVector(perp, off * 1.4)
-            pos.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z)
+            seg(p0, p1, ink)
           }
         }
       }
       const geo = new THREE.BufferGeometry()
       geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3))
       this.galaxyBundleMat = new THREE.LineBasicMaterial({
-        color: 0x9fc4f0,
+        color: 0xffffff,
+        vertexColors: true,
         transparent: true,
         opacity: 0.2,
         depthWrite: false,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.NormalBlending,
       })
       this.galaxyBundleLines = new THREE.LineSegments(geo, this.galaxyBundleMat)
       this.galaxyBundleLines.frustumCulled = false
@@ -273,7 +308,7 @@ export class UniverseLayer {
       this.macroClumps[i].scale.setScalar(worldSize * 1.25)
       this.macroGlows[i].scale.setScalar(worldSize * 2.4)
       ;(this.macroClumps[i].material as THREE.SpriteMaterial).opacity = 0.92 * fade
-      ;(this.macroGlows[i].material as THREE.SpriteMaterial).opacity = 0.28 * fade
+      ;(this.macroGlows[i].material as THREE.SpriteMaterial).opacity = 0.16 * fade
       this.macroShells[i].visible = shellsOn && fade > 0.85 && d < m.r * 26
       const la = labelsOn ? macroLabelAlpha(px) * fade : 0
       const lmat = this.macroLabels[i].material as THREE.SpriteMaterial
@@ -306,7 +341,7 @@ export class UniverseLayer {
       hub.visible = emerge === 1 && tilePx > LOD.emerge
       if (hub.visible) {
         hmat.uniforms.uSize.value = Math.max(1.2, (worldSize * 1.45 * 0.075 * this.proj) / Math.max(d, 1))
-        hmat.opacity = Math.min(1, alpha * 0.8)
+        hmat.uniforms.uOpacity.value = Math.min(1, alpha * 0.55)
       }
       if (labelsOn && alpha > 0.05) {
         labelCand.push({ g: g.gid, i, px: effPx, d })
@@ -376,6 +411,7 @@ export class UniverseLayer {
         uSize: { value: 2 },
         uTime: { value: 0 },
         uPxMax: { value: 12 },
+        uOpacity: { value: 0 },
         uColorA: { value: tmpColor.clone() },
         uColorB: { value: new THREE.Color(0xfff6e0) },
       },
@@ -397,6 +433,7 @@ void main() {
       fragmentShader: `
 uniform vec3 uColorA;
 uniform vec3 uColorB;
+uniform float uOpacity;
 varying float vBright;
 void main() {
   vec2 d = gl_PointCoord - vec2(0.5);
@@ -404,7 +441,7 @@ void main() {
   if (r > 1.0) discard;
   float core = pow(max(1.0 - r, 0.0), 2.0);
   vec3 c = mix(uColorA, uColorB, vBright);
-  gl_FragColor = vec4(c * (0.35 + core), (1.0 - r) * (0.5 + 0.5 * core));
+  gl_FragColor = vec4(c * (${EXPOSURE.hubBase} + ${EXPOSURE.hubCore} * core), uOpacity * (1.0 - r) * (0.5 + 0.5 * core));
 }`,
       transparent: true,
       depthWrite: false,

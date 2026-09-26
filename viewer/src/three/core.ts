@@ -3,7 +3,7 @@
 //
 // 責務:
 // - renderer(対数深度)/ scene(fog)/ camera / OrbitControls(慣性)の初期化
-// - UnrealBloom によるグロー(ルックは加算ブレンド+bloom+fog で構成)
+// - 測光パイプライン: ACES トーンマッピング+OutputPass、bloom は星コア専業
 // - 毎フレーム: StarField 同期・塊の自己相似 px・エッジ tier α・ラベル LOD
 // - 操作: hover(star>galaxy>macro)、click=fly-to または記事選択、Esc=親レベルへ上昇
 // - z-compress スライダの再構成(recomposeArticles)
@@ -11,12 +11,16 @@
 // 注意:
 // - クリックによるテレポート/段階切替は行わない(理想形=連続性)。
 // - selection は表示専用コンテキストであり、描画は全て距離/px 駆動。
+// - 測光: エッジ/塊は通常ブレンド+露出(1/n)+ハブ抑制 ink(lod.ts EXPOSURE)で
+//   有界化済み。bloom threshold はエッジ飽和輝度と星コア輝度の間に置き、
+//   星コアのみ bloom させる。ACES がハイライトをロールオフさせ白飛びを最後に縛る。
 
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import type { BootstrapData, Macro, TileIndex } from '@/types/catalog'
 import { useStore } from '@/state/store'
 import { peekTile, fetchTile, setIndex, recomposeTiles } from '@/data/tileCache'
@@ -82,6 +86,9 @@ export class ViewerCore {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     this.renderer.setSize(w, h, false)
     this.renderer.setClearColor(0x03040a, 1)
+    // 測光: ACES でハイライトをロールオフ(重ね描きの白飛びを最後の段で縛る)。
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping
+    this.renderer.toneMappingExposure = 1.05
     this.scene.fog = new THREE.FogExp2(0x03040a, 0.00016)
     this.camera = new THREE.PerspectiveCamera(55, w / Math.max(h, 1), 0.1, 600000)
     this.camera.position.copy(HOME_POS)
@@ -93,10 +100,12 @@ export class ViewerCore {
     this.controls.minDistance = 1.5
     this.controls.maxDistance = 12000
     this.controls.target.copy(HOME_TARGET)
-    // bloom(宇宙感の要)。
+    // bloom(星コア専業: threshold はエッジ飽和輝度より上、強度は控えめ)。
     this.composer = new EffectComposer(this.renderer)
     this.composer.addPass(new RenderPass(this.scene, this.camera))
-    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(w, h), 0.62, 0.55, 0.12))
+    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(w, h), 0.38, 0.42, 0.55))
+    // 終端: トーンマッピング+sRGB 変換(これがないと線形値がそのまま出て白飛びする)。
+    this.composer.addPass(new OutputPass())
     // レイヤ。
     const clumpTex = makeStarSprite(256, 1.9, 3.4)
     this.uni = new UniverseLayer(boot, index, clumpTex, '600 34px system-ui, sans-serif')
