@@ -246,7 +246,19 @@ python scripts/layout_local.py --base data --galaxies all --layout-sub canon
 リンク先銀河方向のボール境界面へ。方向ベクトル集約なのでペア保存不要)+ 弾性 prior
 (FR 形状の保持)+ ボール内クランプ。銀河中心・半径は canon レイアウト由来。
 
-## 最小ビューアプロトタイプ(v0.1、フェーズ 3 第 4 ステップ)
+## ビューア(v4: React+TS+Tailwind アプリ、ブランチ feat/viewer-react-ts)
+
+```bash
+cd viewer && npm install
+# 別ターミナル(リポジトリルート): python -m http.server 8000   # データサーバ
+npm run dev        # http://localhost:5173 (vite proxy が /data を :8000 へ)
+```
+
+構成: `src/types/catalog.ts`(データ契約)/ `src/three/`(core+universeLayer+focusLayer、
+React 非依存)/ `src/state/`(store+commands)/ `src/ui/`(Hud/InfoPanel/Tooltip)/
+`legacy/`(v2/v3 単一 HTML、参照用)。仕様: コメント・エイリアスは docs/ の社内仕様準拠。
+
+## (過去)最小ビューアプロトタイプ(v0.1、フェーズ 3 第 4 ステップ)
 
 ```bash
 python scripts/export_viewer_tiles.py --base data     # ~3-6分 → data/spatial/(~0.7GB)
