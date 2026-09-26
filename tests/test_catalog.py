@@ -130,8 +130,35 @@ def main():
     assert _np.asarray(gpos["radius"]).min() >= 0
     lm = json.load(open(os.path.join(lay, "layout_meta.json"), encoding="utf-8"))
     assert lm["n_galaxies"] == G
-    assert set(lm["quality"]) >= {"macro_disk_overlap_frac", "galaxy_spill_frac",
-                                  "galaxy_spill_count"}, lm
+    assert set(lm["quality"]) >= {"macro_native_overlap_frac", "galaxy_spill_frac",
+                                  "galaxy_spill_count", "macro_proj_overlap"}, lm
+    assert set(lm["quality"]["macro_proj_overlap"]) >= {"top_z", "side_x", "random_mean"}
+    assert os.path.exists(os.path.join(lay, "preview.png"))
+    assert any(f.startswith("preview_macro2d") and f.endswith(".html")
+               for f in os.listdir(lay)), os.listdir(lay)
+
+    # ---- full-3D arm (macro-dim 3) into its own subdir
+    run_script("layout_global.py", "--dim", "3", "--macro-dim", "3",
+               "--out-sub", "3d", "--galaxy-tag", "res1_s")
+    lay3 = os.path.join(BASE, "layout", "3d")
+    lm3 = json.load(open(os.path.join(lay3, "layout_meta.json"), encoding="utf-8"))
+    assert lm3["mode"]["macro_dim"] == 3
+    # --- 3D containment regression: every placed non-dust galaxy center must lie
+    #     inside its macro sphere (catches z-composition bugs like the 2026-09-26 one)
+    gpos3 = pq.read_table(os.path.join(lay3, "galaxy_positions.parquet")).to_pydict()
+    mpos3 = pq.read_table(os.path.join(lay3, "macro_positions.parquet")).to_pydict()
+    mxyz = _np.stack([mpos3["x"], mpos3["y"], mpos3["z"]], axis=1)
+    mr = _np.asarray(mpos3["radius"])
+    gxyz = _np.stack([gpos3["x"], gpos3["y"], gpos3["z"]], axis=1)
+    gr = _np.asarray(gpos3["radius"])
+    placed_mask = gr > 0
+    mi = _np.asarray(gpos3["macro_id"])[placed_mask]
+    d3 = _np.linalg.norm(gxyz[placed_mask] - mxyz[mi], axis=1)
+    assert (d3 <= mr[mi] * 1.15).mean() > 0.98, \
+        f"galaxies outside macro spheres in 3D: {(d3 > mr[mi] * 1.15).sum()}"
+    assert os.path.exists(os.path.join(lay3, "preview.png"))
+    assert any(f.startswith("preview_macro3d") and f.endswith(".html")
+               for f in os.listdir(lay3)), os.listdir(lay3)
 
     # purity v2 outputs present with new schema
     pur = pq.read_table(os.path.join(dirs.community, "full", "purity_res1_s.parquet")).to_pydict()

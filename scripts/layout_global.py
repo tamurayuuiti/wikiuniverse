@@ -1,14 +1,19 @@
 """Global hierarchical layout (Phase 3, step 2): macro disks + galaxy disks.
 
-Design (matches D16 policy "銀河を空間的に分離して配置"):
-  1. Macro level: weighted force-layout (igraph FR) over effective macros using
-     macro_pairs aggregated weights -> macro centers. Macro radius R_M is
-     proportional to sqrt(n_articles) so that disk areas sum to the canvas.
-  2. Macro-macro disk relaxation: push overlapping disks apart (few iterations).
-  3. Galaxy level: for each macro, weighted FR over its galaxies using
-     intra-macro galaxy pair weights -> local unit-disk coordinates, composed
-     into the macro disk. Galaxy radius r_g = pack * R_M * sqrt(n_g / n_M).
-  4. Intra-macro disk relaxation (no overlaps within a macro).
+Design (matches D16 policy "銀河を空間的に分離して配置").
+Hierarchical 2.5D: the universe map (macro level) is packed in 2D so that the
+top-down view -- what users see at universe zoom -- has no overlapping macro
+disks. Depth (z) appears only INSIDE macros: galaxies sit in a squashed 3D
+lens (z *= --z-squash), relaxed in xy. Article positions (next phase) will be
+full 3D inside each galaxy ball.
+
+  1. Macro level: weighted FR (dim=2 always) over effective macros using
+     macro_pairs -> centers; radius R_M proportional to sqrt(n_articles).
+  2. Macro-macro disk relaxation + expansion loop until xy overlap <= 2%.
+  3. Galaxy level: weighted FR (dim) over intra-macro galaxy pairs; xy used for
+     disk placement/relaxation/clamping, z squashed for depth.
+     Galaxy radius r_g = pack * R_M * sqrt(n_g / n_M).
+  4. Intra-macro xy disk relaxation + radial clamp inside macro disk.
   5. Dust galaxies (n=1) get positions on a far shell (cosmic dust ring).
 
 Outputs (data/layout/):
@@ -102,6 +107,51 @@ def disk_overlap_fraction(centers: np.ndarray, radii: np.ndarray) -> float:
     return float(inter.sum() / max(total, 1e-9))
 
 
+def sphere_overlap_fraction(centers: np.ndarray, radii: np.ndarray) -> float:
+    """Pairwise sphere-sphere intersection volume / total volume (3D)."""
+    k = len(centers)
+    if k < 2:
+        return 0.0
+    i, j = np.triu_indices(k, 1)
+    d = np.maximum(np.linalg.norm(centers[j] - centers[i], axis=1), 1e-9)
+    r0, r1 = radii[i], radii[j]
+    m = d < (r0 + r1)
+    dd, a, b = d[m], r0[m], r1[m]
+    vol = (np.pi * (a + b - dd) ** 2 *
+           (dd ** 2 + 2 * dd * (a + b) - 3 * (a - b) ** 2)) / (12 * dd)
+    total = (4.0 / 3.0) * np.pi * np.sum(radii ** 3)
+    return float(vol.sum() / max(total, 1e-9))
+
+
+def projection_overlap_stats(centers: np.ndarray, radii: np.ndarray,
+                             n_views: int = 24, seed: int = 7) -> dict:
+    """Disk-overlap fraction of projected circles over canonical axes + random
+    view directions. Quantifies 'how map-like' the layout is from each view."""
+    rng = np.random.default_rng(seed)
+    dirs3 = [np.array([0, 0, 1.0]), np.array([1, 0, 0.0]), np.array([0, 1, 0.0])]
+    extra = rng.normal(size=(n_views, 3))
+    extra /= np.linalg.norm(extra, axis=1, keepdims=True)
+    dirs3 += [e for e in extra]
+    vals = {}
+    allv = []
+    for w in dirs3:
+        if abs(w[2]) < 0.99:
+            u = np.cross(w, [0, 0, 1.0])
+        else:
+            u = np.cross(w, [1, 0, 0.0])
+        u /= np.linalg.norm(u)
+        v = np.cross(w, u)
+        P = np.stack([centers @ u, centers @ v], axis=1)
+        ov = disk_overlap_fraction(P, radii)
+        allv.append(ov)
+    vals["top_z"] = round(allv[0], 5)
+    vals["side_x"] = round(allv[1], 5)
+    vals["side_y"] = round(allv[2], 5)
+    vals["random_mean"] = round(float(np.mean(allv[3:])), 5)
+    vals["random_worst"] = round(float(np.max(allv[3:])), 5)
+    return vals
+
+
 def relax_disks(centers: np.ndarray, radii: np.ndarray, iters: int = 40) -> np.ndarray:
     """Push overlapping disks apart (vectorized O(k^2), k small)."""
     c = centers.astype(np.float64).copy()
@@ -124,11 +174,95 @@ def relax_disks(centers: np.ndarray, radii: np.ndarray, iters: int = 40) -> np.n
     return c
 
 
+HTML_TEMPLATE = """<!doctype html>
+<html><head><meta charset="utf-8"><title>wikiuniverse layout preview __MODE__</title>
+<style>body{margin:0;background:#000;overflow:hidden}
+#info{position:absolute;top:8px;left:10px;color:#9aa;font:12px/1.5 monospace;white-space:pre}</style>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}</script>
+</head><body><div id="info">__INFO__</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+const D = __DATA__;
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000000, 0.00018);
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 1, 200000);
+camera.position.set(0, -3200, 1800);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+// galaxies: instanced spheres
+const geo = new THREE.SphereGeometry(1, 10, 10);
+const mat = new THREE.MeshBasicMaterial();
+const mesh = new THREE.InstancedMesh(geo, mat, D.g.length);
+const m4 = new THREE.Matrix4(); const col = new THREE.Color();
+D.g.forEach((g, i) => {
+  m4.makeScale(g[3], g[3], g[3]); m4.setPosition(g[0], g[1], g[2]);
+  mesh.setMatrixAt(i, m4); mesh.setColorAt(i, col.set(g[4]));
+});
+scene.add(mesh);
+// macro wireframe spheres
+D.m.forEach(mk => {
+  const g2 = new THREE.SphereGeometry(mk[3], 20, 12);
+  const w = new THREE.LineSegments(new THREE.WireframeGeometry(g2),
+        new THREE.LineBasicMaterial({color:0x444444, transparent:true, opacity:0.10}));
+  w.position.set(mk[0], mk[1], mk[2]);
+  scene.add(w);
+});
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+(function loop(){ requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+</script></body></html>
+"""
+
+
+def write_html_preview(path, g_centers, g_radius, gal_colors, dust_mask,
+                       m_centers, R_m, eff_m, labels, mode_tag, info):
+    """gal_colors: hex color per galaxy index (already curated)."""
+    garr = []
+    for i in np.flatnonzero(~dust_mask):
+        garr.append([round(float(g_centers[i, 0]), 2), round(float(g_centers[i, 1]), 2),
+                     round(float(g_centers[i, 2]), 2), round(float(max(g_radius[i], 1.0)), 2),
+                     gal_colors[i]])
+    dust_i = np.flatnonzero(dust_mask)
+    if len(dust_i):
+        # dust as tiny dim spheres (few thousand max)
+        for i in dust_i:
+            garr.append([round(float(g_centers[i, 0]), 2), round(float(g_centers[i, 1]), 2),
+                         round(float(g_centers[i, 2]), 2), 1.5, "#333333"])
+    marr = []
+    for k, m in enumerate(eff_m):
+        marr.append([round(float(m_centers[k, 0]), 2), round(float(m_centers[k, 1]), 2),
+                     round(float(m_centers[k, 2]), 2), round(float(R_m[k]), 2),
+                     labels.get(int(m), "")])
+    data = json.dumps({"g": garr, "m": marr}, separators=(",", ":"))
+    html = (HTML_TEMPLATE.replace("__DATA__", data).replace("__MODE__", mode_tag)
+            .replace("__INFO__", info))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(html)
+    return path
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="data")
     ap.add_argument("--dim", type=int, default=3, choices=[2, 3])
     ap.add_argument("--pack", type=float, default=0.6)
+    ap.add_argument("--z-squash", type=float, default=0.35,
+                    help="z compression of galaxy lens inside macro disks")
+    ap.add_argument("--macro-dim", type=int, default=2, choices=[2, 3],
+                    help="2 = 2.5D universe map (macros packed in plane), "
+                         "3 = full 3D sphere packing")
+    ap.add_argument("--macro-z-squash", type=float, default=1.0,
+                    help="with --macro-dim 3: squash macro sphere z (hybrid ellipsoid "
+                         "universe, e.g. 0.5)")
+    ap.add_argument("--out-sub", default="",
+                    help="output subdir under data/layout (e.g. 25d / 3d / hyb)")
+    ap.add_argument("--views", type=int, default=24)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--pairs", default="catalog", choices=["catalog", "npz"],
                     help="galaxy pair source: catalog topK parquet or full pairs npz")
@@ -136,7 +270,8 @@ def main():
     a = ap.parse_args()
     dirs = Dirs(a.base)
     final = os.path.join(dirs.base, "final")
-    out_dir = os.path.join(dirs.base, "layout")
+    out_dir = os.path.join(dirs.base, "layout", a.out_sub) if a.out_sub \
+        else os.path.join(dirs.base, "layout")
     os.makedirs(out_dir, exist_ok=True)
     t0 = time.time()
 
@@ -184,19 +319,28 @@ def main():
     m_edges = list(zip(me_a[ok].tolist(), me_b[ok].tolist()))
     del me_a, me_b
     m_w = np.asarray(mp["w"], np.float64)[ok]
-    m_coords = fr_layout(len(eff_m), m_edges, m_w, a.dim, a.seed)
+    m_coords = fr_layout(len(eff_m), m_edges, m_w, a.macro_dim, a.seed)
+    if a.macro_dim == 3 and a.macro_z_squash != 1.0:
+        m_coords[:, 2] *= a.macro_z_squash
     R_m = R_TOTAL * np.sqrt(n_art_m[eff_m] / max(1, n_art_m.sum()))
-    # spread: scale FR unit-disk coords so typical separation ~ sum radii scale
     m_centers = m_coords * (R_TOTAL * 1.6)
+    native_overlap = (sphere_overlap_fraction if a.macro_dim == 3
+                      else disk_overlap_fraction)
     m_centers = relax_disks(m_centers, R_m, iters=250)
-    for _round in range(6):  # expand + re-relax until macro disks barely overlap
-        ov = disk_overlap_fraction(m_centers, R_m)
+    for _round in range(10):  # relax + expand until macro bodies barely overlap
+        ov = native_overlap(m_centers, R_m)
         if ov <= 0.02:
             break
-        m_centers = m_centers * 1.08
-        m_centers = relax_disks(m_centers, R_m, iters=150)
-    macro_overlap = disk_overlap_fraction(m_centers, R_m)
-    print(f"[layout] macros: {len(eff_m)} placed, disk overlap={macro_overlap:.4f} ({time.time()-t0:.1f}s)")
+        m_centers = relax_disks(m_centers, R_m, iters=200)
+        m_centers = m_centers * 1.06
+    m_centers = relax_disks(m_centers, R_m, iters=300)
+    macro_overlap = native_overlap(m_centers, R_m)
+    if m_centers.shape[1] == 2:
+        m_centers = np.concatenate([m_centers, np.zeros((len(m_centers), 1))], axis=1)
+    proj = projection_overlap_stats(m_centers, R_m, n_views=a.views, seed=a.seed)
+    print(f"[layout] macros: {len(eff_m)} placed (macro_dim={a.macro_dim}), "
+          f"native overlap={macro_overlap:.4f}, proj top/side/mean="
+          f"{proj['top_z']}/{proj['side_x']}/{proj['random_mean']} ({time.time()-t0:.1f}s)")
 
     # ---------- 2. galaxy pairs ----------
     if a.pairs == "npz":
@@ -213,7 +357,7 @@ def main():
     del mac_b
 
     # ---------- 3. per-macro galaxy layout ----------
-    g_centers = np.zeros((G, a.dim), np.float64)
+    g_centers = np.zeros((G, 3), np.float64)  # always 3D (z squashed lens)
     g_radius = np.zeros(G, np.float64)
     placed = np.zeros(G, bool)
     for m_i, m in enumerate(eff_m):
@@ -228,17 +372,21 @@ def main():
         e_local = [(local_idx[int(gp_a[i])], local_idx[int(gp_b[i])]) for i in np.flatnonzero(sel)]
         w_local = gp_w[sel]
         if len(members) == 1:
-            coords = np.zeros((1, a.dim))
+            coords3 = np.zeros((1, 3))
         else:
-            coords = fr_layout(len(members), e_local, w_local, a.dim, a.seed + int(m))
+            coords3 = fr_layout(len(members), e_local, w_local, 3, a.seed + int(m))
+        xy = coords3[:, :2]
+        zz = coords3[:, 2] * a.z_squash
         avail = max(Rm - g_radius[members].max(), Rm * 0.3)
-        centers_local = relax_disks(coords * avail, g_radius[members], iters=40)
-        # radial clamp: keep every galaxy disk inside its macro disk
+        centers_xy = relax_disks(xy * avail, g_radius[members], iters=40)
+        # radial clamp: keep every galaxy disk inside its macro disk (xy)
         lim = np.maximum(Rm - g_radius[members], 0.05 * Rm)
-        d = np.linalg.norm(centers_local[:, :2], axis=1)
+        d = np.linalg.norm(centers_xy, axis=1)
         sc = np.where(d > lim, lim / np.maximum(d, 1e-9), 1.0)
-        centers_local = centers_local * sc[:, None]
-        g_centers[members] = m_centers[m_i] + centers_local
+        centers_xy = centers_xy * sc[:, None]
+        g_centers[members, 0] = m_centers[m_i, 0] + centers_xy[:, 0]
+        g_centers[members, 1] = m_centers[m_i, 1] + centers_xy[:, 1]
+        g_centers[members, 2] = m_centers[m_i, 2] + zz * avail
         placed[members] = True
     print(f"[layout] galaxies placed: {int(placed.sum())} ({time.time()-t0:.1f}s)")
 
@@ -267,7 +415,7 @@ def main():
     spill_frac = float(spill.mean()) if len(spill) else 0.0
 
     # ---------- 5. outputs ----------
-    zcol = g_centers[:, 2] if a.dim == 3 else np.zeros(G)
+    zcol = g_centers[:, 2]
     pq.write_table(pa.table({
         "galaxy_id": pa.array(np.arange(G, dtype=np.int32)),
         "macro_id": pa.array(macro_of.astype(np.int32)),
@@ -277,7 +425,7 @@ def main():
         "n_articles": pa.array(n_art_g.astype(np.int32)),
     }), os.path.join(out_dir, "galaxy_positions.parquet"), compression="zstd")
 
-    mz = m_centers[:, 2] if a.dim == 3 else np.zeros(len(eff_m))
+    mz = m_centers[:, 2]
     full_mx = np.zeros(Mac); full_my = np.zeros(Mac); full_mz = np.zeros(Mac); full_R = np.zeros(Mac)
     for i, m in enumerate(eff_m):
         full_mx[m], full_my[m], full_mz[m], full_R[m] = m_centers[i, 0], m_centers[i, 1], mz[i], R_m[i]
@@ -290,11 +438,15 @@ def main():
         "is_dust": pa.array(dust_m),
     }), os.path.join(out_dir, "macro_positions.parquet"), compression="zstd")
 
-    meta = {"generated_at": _now(), "dim": a.dim, "pack": a.pack, "seed": a.seed,
+    meta = {"generated_at": _now(), "dim": a.dim, "pack": a.pack,
+            "z_squash": a.z_squash, "seed": a.seed,
             "pairs_source": a.pairs, "galaxy_tag": a.galaxy_tag,
             "n_galaxies": G, "n_macros_effective": int(len(eff_m)),
             "n_dust_shell": int(len(dust_idx)), "R_TOTAL": R_TOTAL,
-            "quality": {"macro_disk_overlap_frac": round(macro_overlap, 5),
+            "mode": {"macro_dim": a.macro_dim, "macro_z_squash": a.macro_z_squash,
+                     "z_squash": a.z_squash},
+            "quality": {"macro_native_overlap_frac": round(macro_overlap, 5),
+                        "macro_proj_overlap": proj,
                         "galaxy_spill_frac": round(spill_frac, 5),
                         "galaxy_spill_count": int(spill.sum())},
             "secs": round(time.time() - t0, 1)}
@@ -302,43 +454,66 @@ def main():
           f"galaxy_spill={spill_frac:.4f} ({int(spill.sum())})")
     write_json(os.path.join(out_dir, "layout_meta.json"), meta)
 
-    # ---------- 6. preview ----------
+    # ---------- 6. preview: multi-view PNG + interactive HTML ----------
+    mode_tag = (f"macro{a.macro_dim}d" +
+                (f"_mz{a.macro_z_squash:g}" if a.macro_dim == 3 and a.macro_z_squash != 1.0 else "") +
+                f"_z{a.z_squash:g}")
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        fig, ax = plt.subplots(figsize=(11, 11), facecolor="black")
-        ax.set_facecolor("black")
-        show = (~dust_g) & np.isin(np.arange(G), in_macro)
         cmap = plt.get_cmap("tab20")
-        idx_show = np.flatnonzero(show)
-        colors = [cmap(int(macro_of[i]) % 20) if cls[i] != "medium" else "#888888"
-                  for i in idx_show]
-        ax.scatter(g_centers[show, 0], g_centers[show, 1],
-                   s=np.clip(g_radius[show] * 0.8, 0.5, 400), c=colors, alpha=0.85,
-                   linewidths=0)
-        dust_show = dust_g | ~placed
-        if dust_show.any():
-            ax.scatter(g_centers[dust_show, 0], g_centers[dust_show, 1],
-                       s=0.4, c="#333333", alpha=0.5, linewidths=0)
-        for i, m in enumerate(eff_m):
-            ax.add_patch(plt.Circle((m_centers[i, 0], m_centers[i, 1]), R_m[i],
-                                    fill=False, edgecolor="#444444", lw=0.6))
+        colors_hex = [matplotlib.colors.to_hex(cmap(int(m) % 20)) for m in range(Mac)]
+        idx_in = np.flatnonzero((~dust_g) & placed)
+        colors_all = ["#888888" if cls[i] == "medium" else colors_hex[int(macro_of[i])]
+                      for i in range(G)]
+        colors = [colors_all[i] for i in idx_in]
+        dust_i = np.flatnonzero(dust_g | ~placed)
+        fig, axes = plt.subplots(2, 2, figsize=(16, 16), facecolor="black")
+        panels = [("xy (map view)", 0, 1, None), ("xz", 0, 2, None),
+                  ("yz", 1, 2, None), ("xy colored by z", 0, 1, "z")]
         top_m = eff_m[np.argsort(-n_art_m[eff_m])[:8]]
-        for m in top_m:
-            i = list(eff_m).index(int(m))
-            lbl = str(mac["rep_titles"][m]).split(",")[0][:14]
-            ax.text(m_centers[i, 0], m_centers[i, 1] + R_m[i] * 1.03, lbl,
-                    color="#999999", fontsize=7, ha="center")
-        ax.set_aspect("equal")
-        ax.axis("off")
-        ax.set_title(f"wikiuniverse global layout (dim={a.dim}, G={G}, seed={a.seed})",
-                     color="white", fontsize=10)
+        for ax, (name, i1_, i2_, depth) in zip(axes.flat, panels):
+            ax.set_facecolor("black")
+            if depth is None:
+                ax.scatter(g_centers[idx_in, i1_], g_centers[idx_in, i2_],
+                           s=np.clip(g_radius[idx_in] * 0.8, 0.5, 300),
+                           c=colors, alpha=0.85, linewidths=0)
+            else:
+                ax.scatter(g_centers[idx_in, i1_], g_centers[idx_in, i2_],
+                           s=np.clip(g_radius[idx_in] * 0.8, 0.5, 300),
+                           c=g_centers[idx_in, 2], cmap="coolwarm", alpha=0.9,
+                           linewidths=0)
+            if len(dust_i):
+                ax.scatter(g_centers[dust_i, i1_], g_centers[dust_i, i2_],
+                           s=0.4, c="#333333", alpha=0.5, linewidths=0)
+            for k, m in enumerate(eff_m):
+                ax.add_patch(plt.Circle((m_centers[k, i1_], m_centers[k, i2_]), R_m[k],
+                                        fill=False, edgecolor="#444444", lw=0.6))
+            if name.startswith("xy ("):
+                for m in top_m:
+                    k = list(eff_m).index(int(m))
+                    lbl = str(mac["rep_titles"][int(m)]).split(",")[0][:14]
+                    ax.text(m_centers[k, i1_], m_centers[k, i2_] + R_m[k] * 1.03, lbl,
+                            color="#999999", fontsize=7, ha="center")
+            ax.set_aspect("equal")
+            ax.axis("off")
+            ax.set_title(f"{name}  [mode={mode_tag}]", color="#777777", fontsize=9)
         fig.tight_layout()
-        fig.savefig(os.path.join(out_dir, "preview.png"), dpi=130, facecolor="black")
+        fig.savefig(os.path.join(out_dir, "preview.png"), dpi=110, facecolor="black")
         plt.close(fig)
-        print(f"[layout] preview -> {os.path.join(out_dir, 'preview.png')}")
-    except Exception as e:  # matplotlib optional
+        labels_top = {int(m): str(mac["rep_titles"][int(m)]).split(",")[0][:16]
+                      for m in eff_m}
+        info = (f"mode={mode_tag} seed={a.seed} G={G} macros={len(eff_m)}\n"
+                f"native_overlap={macro_overlap:.4f} spill={spill_frac:.4f}\n"
+                f"proj top/side/mean={proj['top_z']}/{proj['side_x']}/{proj['random_mean']}\n"
+                f"drag=orbit wheel=zoom")
+        hp = write_html_preview(os.path.join(out_dir, f"preview_{mode_tag}.html"),
+                                g_centers, g_radius, colors_all,
+                                dust_g | ~placed, m_centers, R_m, eff_m,
+                                labels_top, mode_tag, info)
+        print(f"[layout] preview -> {os.path.join(out_dir, 'preview.png')} + {hp}")
+    except Exception as e:  # previews optional
         print(f"[layout] preview skipped: {e}")
 
     print(f"[layout] done ({meta['secs']}s) -> {out_dir}")

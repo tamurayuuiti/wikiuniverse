@@ -212,11 +212,17 @@ python scripts/layout_global.py --base data --dim 3 --pack 0.6 --seed 42
 #   → data/layout/layout_meta.json / preview.png(xy 投影プレビュー)
 ```
 
-アルゴリズム: ①マクロを macro_pairs 重み付き FR レイアウトで配置(半径 ∝ √記事数)
-→ ②マクロ円盤の重なり緩和 → ③マクロごとに内部銀河を galaxy_pairs 重み付き FR で
-円盤内配置(半径 = pack·R_M·√(n_g/n_M))→ ④銀河円盤の重なり緩和 → ⑤dust は遠方シェル。
+アルゴリズム(階層レイアウト v1.2): ①マクロ配置(`--macro-dim 2|3`): 2=2D 円盤パッキング
+(遠景=宇宙地図、xy 重なり ≤2% 保証)、3=3D 球パッキング(±`--macro-z-squash` でハイブリッド
+楕円体宇宙)→ ②マクロ内で銀河を 3D FR 配置、xy で円盤緩和・クランプ、z は `--z-squash` 圧縮
+レンズ → ③dust は遠方シェル。半径はマクロ R_M ∝ √記事数、銀河 r_g = pack·R_M·√(n_g/n_M)。
+品質は `layout_meta.json` の `quality`: `macro_native_overlap_frac`(配置次元での重なり)、
+`macro_proj_overlap`(top/side/24 随机視点射影の重なり率 = 「地図らしさ」の視点依存性)、
+`galaxy_spill_frac`。**方式比較プロトコル**: `--out-sub 25d|3d|hyb` で 3 実行し、
+`preview.png`(4 パネル: xy/xz/yz/深度カラー)と **`preview_macro*.html`**
+(three.js・OrbitControls・データ埋め込み、ローカルブラウザで軌道回転可能)を比較する。
 1,971 銀河 + 63 マクロなら数秒。銀河「内部」の記事座標は次のフェーズ(アンカーバネ付き
-ローカルレイアウト、銀河単位バッチ)で合成する。
+ローカルレイアウト、銀河単位バッチ、完全 3D)で合成する。
 
 ## 指標定義(評価レポート共通)
 
