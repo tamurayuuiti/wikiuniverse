@@ -167,16 +167,17 @@ python -m wu.cli --base data analyze --subset bfs_geo_100k \
 期待される概略値: `res=0.5: C=11 largest≈0.30 crossF≈0.24 mod≈0.65`。
 Leiden には乱択性があるため **membership の完全一致は保証されません**(seed=42 固定・同一バージョンなら通常一致しますが、igraph のバージョン差で変わり得ます)。指標が ±数% 以内に収まれば再現成功とみなしてください。
 
-## 6. ローカル移行後に最初にやること(次フェーズ予告)
+## 6. ローカル移行後に最初にやること(次フェーズ)
 
-1. **全グラフ一括 Leiden**(1.45M ノード / 142M エッジ、igraph native、想定 RAM 12–16GB)— 実行スクリプトは次ターンで `scripts/run_full_leiden.py` として提供予定。既存 CLI の部品(バッチ igraph 構築・memmap エッジ・trim)をそのまま使う設計。
-2. **categorylinks パーサ追加** → カテゴリ基準サブセット(作品系/学問系)でドメイン依存性の定量。
-3. **2 段階分割プロトタイプ**(全体粗分割 → 銀河単位バッチ)と境界情報フォーマット(§12.2)の設計。
+1. **全グラフ一括 Leiden** — ✅ 提供済み: `scripts/run_full_leiden.py`(手順・RAM/時間見積もりは README「全グラフ Leiden」節)。dedup → detect(res sweep)→ metrics → cluster(L2 銀河団)→ export の工程制。
+2. **categorylinks パーサ追加** → カテゴリ基準サブセット(作品系/学問系)でドメイン依存性の定量(未実装)。
+3. **2 段階分割プロトタイプ**(全体粗分割 → 銀河単位バッチ)と境界情報フォーマット(§12.2)の設計 — 1 の結果(コミュニティ数・サイズ分布・out_ratio)を受けて設計する。
 
 ## 7. トラブルシュート
 
 | 症状 | 対処 |
 |---|---|
+| **生成した .md/.json が VS Code で文字化け** | 2026-09-25 以前のコードは Windows 既定(cp932)で書き出していた。**修正済みファイルを同期後、`stats` や `analyze` を再実行して再生成**(または VS Code 右下の encoding →「Reopen with Encoding」→ Shift JIS →「Save with Encoding」→ UTF-8 で変換)。恒久保険として環境変数 `PYTHONUTF8=1` の設定も推奨 |
 | download が途中で切れる | 同じコマンド再実行(Range resume 対応) |
 | `edges` がメモリ不足 | 元々 ~400MB ピーク設計。他アプリ終了。それでもダメなら `--chunk-bytes 8388608` |
 | analyze が OOM(巨大サブセット) | `--engine igraph` を使う(leidenalg は 2 倍消費)/ `--degree-budget 40 --degree-budget-mode smart` でレイアウト用グラフ化 |

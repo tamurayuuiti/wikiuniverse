@@ -142,13 +142,21 @@ def sha256_of(path: str, limit: int | None = None) -> str:
 
 
 def read_json(path, default=None):
+    """UTF-8 first; fall back to cp932 for files written on Windows before the
+    encoding fix (2026-09-25). Prints a warning when the fallback triggers."""
     if os.path.exists(path):
-        with open(path) as f:
-            return json.load(f)
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except UnicodeDecodeError:
+            print(f"[warn] {path}: not UTF-8, retrying as cp932 "
+                  f"(re-generate this file to fix permanently)")
+            with open(path, encoding="cp932") as f:
+                return json.load(f)
     return default
 
 
 def write_json(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2, default=str)

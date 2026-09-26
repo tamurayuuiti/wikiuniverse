@@ -6,7 +6,7 @@ base = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.environ.get("ARENA_
 p = os.path.join(base, "graph", "full_stats.json")
 if not os.path.exists(p):
     p = os.path.join(base, "artifacts/full_stats.json")  # legacy layout
-d = json.load(open(p))
+d = json.load(open(p, encoding='utf-8'))
 s = d["stats"]
 for k, v in s.items():
     print(f"{k}: {v}")

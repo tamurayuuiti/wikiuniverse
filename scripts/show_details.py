@@ -4,7 +4,7 @@ import os
 BASE = os.environ.get("ARENA_WORKSPACE", "/home/user") + "/wikiuniverse/results"
 
 for run in ["bfs_geo_100k_raw", "bfs_mixed_30k_igraph", "bfs_geo_30k"]:
-    m = json.load(open(os.path.join(BASE, run, "metrics.json")))
+    m = json.load(open(os.path.join(BASE, run, "metrics.json"), encoding="utf-8"))
     per = m["per_community"]
     print(f"### {run} res={m['meta']['resolution']}")
     import numpy as np

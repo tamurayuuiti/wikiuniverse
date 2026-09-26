@@ -125,6 +125,11 @@ def _dump_date(dirs: Dirs) -> str:
 
 
 def main():
+    # Windows コンソール(cp932 等)で日本語タイトル出力時にクラッシュしないための保険
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except Exception:
+        pass
     ap = argparse.ArgumentParser(prog="wu")
     ap.add_argument("--base", default="data",
                     help="base dir; layout: dump/ parsed/ graph/ community/ (see wu/paths.py)")

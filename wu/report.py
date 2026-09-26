@@ -233,6 +233,6 @@ def write_report(path: str, ctx: dict):
     for p in ctx.get("plots", []):
         A(f"![{p}]({p})")
     A("")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     return path

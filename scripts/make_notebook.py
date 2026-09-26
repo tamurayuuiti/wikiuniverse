@@ -59,7 +59,7 @@ os.makedirs("results", exist_ok=True)
 """))
 
 for mod in MODULES:
-    src = open(os.path.join(WU, mod)).read()
+    src = open(os.path.join(WU, mod), encoding="utf-8").read()
     cells.append(code(f"%%writefile wu/{mod}\n" + src))
 
 cells.append(code("""# 3. データ取得(page / redirect / linktarget / pagelinks, 計 ~1.13GB, resume 対応)
@@ -145,6 +145,6 @@ nb = {
     "nbformat_minor": 0,
 }
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
-with open(OUT, "w") as f:
+with open(OUT, "w", encoding="utf-8") as f:
     json.dump(nb, f, ensure_ascii=False, indent=1)
 print("wrote", OUT, os.path.getsize(OUT), "bytes,", len(cells), "cells")

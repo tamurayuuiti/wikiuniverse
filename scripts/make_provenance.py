@@ -22,5 +22,5 @@ dest = os.environ.get("ARENA_WORKSPACE", "/home/user") + "/wikiuniverse/PROVENAN
 json.dump({"source": "https://dumps.wikimedia.org/jawiki/latest/",
            "dump_date": "2026-09-02",
            "downloaded_at": "2026-09-25T13:08-13:15+09:00 (sandbox)",
-           "files": out}, open(dest, "w"), indent=2)
+           "files": out}, open(dest, "w", encoding="utf-8"), indent=2)
 print("wrote", dest)

@@ -19,7 +19,7 @@ for d, label in runs:
     if not os.path.exists(p):
         print(f"{label:24s}  (missing)")
         continue
-    m = json.load(open(p))
+    m = json.load(open(p, encoding='utf-8'))
     g = m["global"]
     per = m["per_community"]
     sizes = [s for s in per["N_c"] if s > 0]
@@ -41,7 +41,7 @@ for d, label in runs:
           f"{(f'{raw:.3f}' if raw is not None else '-'):>10s}")
 
 print("\n=== mixed 30k: community labels (res primary) ===")
-m = json.load(open(os.path.join(BASE, "bfs_mixed_30k", "metrics.json")))
+m = json.load(open(os.path.join(BASE, "bfs_mixed_30k", "metrics.json"), encoding="utf-8"))
 per = m["per_community"]
 order = sorted(range(len(per["N_c"])), key=lambda i: -per["N_c"][i])[:14]
 for i in order:
@@ -55,7 +55,7 @@ if h:
         print(f"  cluster{r['cluster']}: comms={r['n_comms']:2d} N={r['N_nodes']:6d} out_ratio2={r['out_ratio2']}")
 
 print("\n=== geo 100k smart40: top communities ===")
-m2 = json.load(open(os.path.join(BASE, "bfs_geo_100k_smart40", "metrics.json")))
+m2 = json.load(open(os.path.join(BASE, "bfs_geo_100k_smart40", "metrics.json"), encoding="utf-8"))
 per2 = m2["per_community"]
 order2 = sorted(range(len(per2["N_c"])), key=lambda i: -per2["N_c"][i])[:10]
 for i in order2:
