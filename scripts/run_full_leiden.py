@@ -1,32 +1,37 @@
 """Full-graph Leiden pipeline for the complete jawiki ns0 graph.
 
-Subcommands (run in order; each stage persists to disk so the pipeline is
-resumable — `all` runs everything):
+Subcommands (each stage persists to disk; the pipeline is resumable):
 
-  dedup    graph/edges_ns0.bin (directed, page_id)
-             -> graph/edges_undirected_unique.bin (undirected unique, compact idx)
-  detect   build igraph in memory-bounded batches -> native C Leiden
-             -> community/full/membership_res<R>.npy  (int32, per compact idx)
-  metrics  chunked per-community + global metrics for one resolution
-             -> community/full/metrics_res<R>.json / per_community_res<R>.parquet
-                / top_pairs_res<R>.json / pairs_res<R>.npz
-  cluster  level-2 (galaxy clusters) from the weighted community graph
-             -> community/full/clusters_comm_res<R>.npy + clusters_meta_res<R>.json
-  export   page_id/title/comm/cluster join -> community/full/membership_res<R>.parquet
+  dedup     graph/edges_ns0.bin (directed, page_id)
+              -> graph/edges_undirected_unique.bin (undirected unique, compact idx)
+  detect    build igraph in memory-bounded batches -> native C Leiden
+              -> community/full/membership_res<R>.npy
+  subdivide ★ two-stage refinement: for each macro community, extract its
+            induced subgraph and run Leiden recursively until every piece is
+            <= max_galaxy nodes. This bypasses the modularity resolution
+            limit (~sqrt(2m) nodes) that prevents one-shot galaxy-sized
+            partitions at full scale.
+              -> community/full/membership_<tag>_sub.npy + subdivide_meta_<tag>_sub.json
+  metrics   chunked per-community + global metrics for any membership tag
+  cluster   level-2 (galaxy clusters) from the weighted community graph
+  export    page_id/title/comm/cluster join -> membership_<tag>.parquet
 
-Memory budget (measured scaling, 32GB machine):
-  dedup   peak ~4 GB   (packed int64 keys + np.unique sort)
-  detect  ~7-9 GB RSS  (igraph ~58B/edge for ~105M undirected edges + batches)
-  metrics ~2 GB        (chunked passes over the edge file)
-Smoke test before the long run:  detect --max-edges 5000000
+Tags: detect writes tag "res<R>" (e.g. res1). subdivide writes "res<R>_sub".
+metrics/cluster/export accept either --resolution (=> tag res<R>) or --tag.
 
-Usage:
+Memory budget (32GB machine):
+  dedup      peak ~4-5 GB   detect ~7-9 GB RSS
+  subdivide  ~2-4 GB + per-subgraph Leiden (largest blob 246k nodes is trivial)
+  metrics    ~3 GB (2 passes + induced-edge buffer ~0.7 GB)
+
+Usage (typical full sequence):
   python scripts/run_full_leiden.py --base data dedup
   python scripts/run_full_leiden.py --base data detect --resolutions 0.5,1.0,2.0
-  python scripts/run_full_leiden.py --base data metrics --resolution 1.0
-  python scripts/run_full_leiden.py --base data cluster --resolution 1.0
-  python scripts/run_full_leiden.py --base data export  --resolution 1.0
-  (or) python scripts/run_full_leiden.py --base data all --resolutions 0.5,1.0,2.0 --primary 1.0
+  python scripts/run_full_leiden.py --base data subdivide --resolution 1.0
+  python scripts/run_full_leiden.py --base data metrics --tag res1_sub
+  python scripts/run_full_leiden.py --base data cluster --tag res1_sub
+  python scripts/run_full_leiden.py --base data export  --tag res1_sub
+Smoke: detect --max-edges 5000000 --force   (then rerun real detect with --force)
 """
 from __future__ import annotations
 
@@ -51,7 +56,6 @@ SHIFT = 21  # compact idx < 2^21 = 2,097,152  (jawiki: 1,516,326 articles)
 
 
 def _safe_stdout():
-    """Avoid UnicodeEncodeError on Windows cmd (cp932) when printing titles."""
     try:
         sys.stdout.reconfigure(errors="replace")
     except Exception:
@@ -83,6 +87,49 @@ def _load_article_ids(dirs: Dirs) -> np.ndarray:
     return np.load(dirs.article_ids)  # sorted page_ids; position == compact idx
 
 
+def _load_undirected(dirs: Dirs) -> np.ndarray:
+    p = os.path.join(dirs.graph, "edges_undirected_unique.bin")
+    if not os.path.exists(p):
+        sys.exit("edges_undirected_unique.bin not found - run `dedup` first")
+    cnt = os.path.getsize(p) // 8
+    return np.memmap(p, dtype=np.int32, mode="r", shape=(cnt, 2))
+
+
+def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
+    m = ~np.isnan(values) & (weights > 0)
+    if not m.any():
+        return float("nan")
+    vals, w = values[m], weights[m].astype(float)
+    o = np.argsort(vals)
+    vals, w = vals[o], w[o]
+    cw = np.cumsum(w)
+    return float(vals[np.searchsorted(cw, cw[-1] / 2)])
+
+
+def _build_graph(n: int, edges: np.ndarray, batch: int = 300_000, quiet: bool = True):
+    import igraph as ig
+    g = ig.Graph(n=n)
+    m = len(edges)
+    for i in range(0, m, batch):
+        blk = np.asarray(edges[i : i + batch])
+        g.add_edges(list(zip(blk[:, 0].tolist(), blk[:, 1].tolist())))
+        if not quiet and (i // batch) % 20 == 0:
+            print(f"  igraph build {i + len(blk):,}/{m:,}", flush=True)
+    return g
+
+
+def _leiden_once(n: int, edges: np.ndarray, objective: str, resolution: float,
+                 seed: int = SEED, n_iterations: int = 3):
+    g = _build_graph(n, edges)
+    random.seed(seed)
+    cl = g.community_leiden(objective, resolution=resolution, n_iterations=n_iterations)
+    memb = np.asarray(cl.membership, dtype=np.int32)
+    mod = float(cl.modularity) if objective.lower() == "modularity" else None
+    q = float(cl.quality)
+    del g
+    return memb, mod, q
+
+
 # ------------------------------------------------------------------- dedup --
 
 def cmd_dedup(dirs: Dirs, chunk: int = 10_000_000):
@@ -106,10 +153,11 @@ def cmd_dedup(dirs: Dirs, chunk: int = 10_000_000):
         hi = np.maximum(s, d)
         keys[i : i + len(lo)] = (lo << SHIFT) | hi
         if len(lo) < len(blk):
-            keys[i + len(lo) : i + len(blk)] = -1  # invalid marker
+            keys[i + len(lo) : i + len(blk)] = -1
         print(f"  remap {i + len(blk):,}/{m:,} ({time.time()-t0:.0f}s)", flush=True)
     keys = keys[keys >= 0]
-    mask = (keys & ((1 << SHIFT) - 1)) != (keys >> SHIFT)  # drop self loops (none expected)
+    mask = (keys & ((1 << SHIFT) - 1)) != (keys >> SHIFT)
+    n_self = int((~mask).sum())
     keys = keys[mask]
     print(f"[dedup] sorting {len(keys):,} keys ...", flush=True)
     uq = np.unique(keys)
@@ -122,7 +170,7 @@ def cmd_dedup(dirs: Dirs, chunk: int = 10_000_000):
     meta = {
         "stage": "dedup", "created_at": _now(),
         "n_articles": n, "n_directed_edges": m,
-        "n_endpoint_remap_failures": bad, "n_self_loops_dropped": int((~mask).sum()),
+        "n_endpoint_remap_failures": bad, "n_self_loops_dropped": n_self,
         "n_undirected_unique_edges": int(len(uq)),
         "reciprocity_implied": float(1.0 - len(uq) / max(1, m - bad)) if m else None,
         "shift": SHIFT, "secs": round(time.time() - t0, 1),
@@ -135,20 +183,11 @@ def cmd_dedup(dirs: Dirs, chunk: int = 10_000_000):
     return meta
 
 
-def _load_undirected(dirs: Dirs) -> np.ndarray:
-    p = os.path.join(dirs.graph, "edges_undirected_unique.bin")
-    if not os.path.exists(p):
-        sys.exit("edges_undirected_unique.bin not found - run `dedup` first")
-    cnt = os.path.getsize(p) // 8
-    return np.memmap(p, dtype=np.int32, mode="r", shape=(cnt, 2))
-
-
 # ------------------------------------------------------------------ detect --
 
 def cmd_detect(dirs: Dirs, resolutions, max_edges: int = 0, seed: int = SEED,
-               force: bool = False, batch: int = 300_000, n_iterations: int = 3):
-    import igraph as ig
-
+               force: bool = False, batch: int = 300_000, n_iterations: int = 3,
+               objective: str = "modularity"):
     outdir = _full_dir(dirs)
     E = _load_undirected(dirs)
     article_ids = _load_article_ids(dirs)
@@ -167,12 +206,7 @@ def cmd_detect(dirs: Dirs, resolutions, max_edges: int = 0, seed: int = SEED,
     if max_edges:
         print(f"[detect] SMOKE MODE: using first {total:,} of {len(E):,} edges")
     t0 = time.time()
-    g = ig.Graph(n=n)
-    for i in range(0, total, batch):
-        blk = np.asarray(E[i : min(i + batch, total)])
-        g.add_edges(list(zip(blk[:, 0].tolist(), blk[:, 1].tolist())))
-        if (i // batch) % 20 == 0:
-            print(f"  igraph build {i + len(blk):,}/{total:,} edges ({time.time()-t0:.0f}s)", flush=True)
+    g = _build_graph(n, E[:total] if max_edges else E, batch=batch, quiet=False)
     print(f"[detect] graph built: {g.vcount():,} nodes {g.ecount():,} edges "
           f"({time.time()-t0:.0f}s)", flush=True)
 
@@ -181,57 +215,192 @@ def cmd_detect(dirs: Dirs, resolutions, max_edges: int = 0, seed: int = SEED,
     for res, tag, p in todo:
         t1 = time.time()
         random.seed(seed)
-        cl = g.community_leiden("modularity", resolution=res, n_iterations=n_iterations)
+        cl = g.community_leiden(objective, resolution=res, n_iterations=n_iterations)
         memb = np.asarray(cl.membership, dtype=np.int32)
         np.save(p, memb)
         sizes = np.bincount(memb)
         info = {
-            "resolution": res, "seed": seed, "n_iterations": n_iterations,
-            "objective": "modularity", "n_nodes": int(n), "n_edges_used": int(total),
+            "resolution": res, "objective": objective, "seed": seed,
+            "n_iterations": n_iterations, "n_nodes": int(n), "n_edges_used": int(total),
             "smoke": bool(max_edges),
             "n_communities": int(len(cl)), "modularity": float(cl.modularity),
             "quality": float(cl.quality),
+            "n_singleton_comms": int((sizes == 1).sum()),
             "largest_comm_share": float(sizes.max() / n),
             "top5_comm_share": float(np.sort(sizes)[::-1][:5].sum() / n),
-            "median_comm_size": float(np.median(sizes[sizes > 0])),
+            "median_comm_size_nontrivial": float(np.median(sizes[sizes >= 2])) if (sizes >= 2).any() else None,
             "secs": round(time.time() - t1, 1), "finished_at": _now(),
         }
         meta["runs"][tag] = info
         print(f"[detect] res={tag}: C={info['n_communities']:,} "
               f"mod={info['modularity']:.4f} largest={info['largest_comm_share']:.3f} "
-              f"median={info['median_comm_size']:.0f} ({info['secs']}s)")
+              f"singletons={info['n_singleton_comms']} ({info['secs']}s)")
     meta.update({"graph": {"n_nodes": int(n), "n_edges_total": int(len(E))},
                  "versions": _versions(), "updated_at": _now()})
     write_json(detect_meta_path, meta)
     del g
 
 
-# ----------------------------------------------------------------- metrics --
+# --------------------------------------------------------------- subdivide --
 
-def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
-    m = ~np.isnan(values) & (weights > 0)
-    if not m.any():
-        return float("nan")
-    vals, w = values[m], weights[m].astype(float)
-    o = np.argsort(vals)
-    vals, w = vals[o], w[o]
-    cw = np.cumsum(w)
-    return float(vals[np.searchsorted(cw, cw[-1] / 2)])
+def _partition_recursive(n_local: int, edges: np.ndarray, objective: str, resolution: float,
+                         max_size: int, depth: int, seed: int):
+    """Leiden + recursive splitting of pieces still larger than max_size."""
+    memb, mod, q = _leiden_once(n_local, edges, objective, resolution, seed=seed)
+    info = {"modularity": mod, "quality": q}
+    sizes = np.bincount(memb)
+    big = np.flatnonzero(sizes > max_size)
+    if depth <= 0 or len(big) == 0:
+        return memb, info
+    new = memb.copy()
+    next_free = int(memb.max()) + 1
+    for c in big:
+        mem = np.flatnonzero(memb == c)
+        mask = (memb[edges[:, 0]] == c) & (memb[edges[:, 1]] == c) if len(edges) else np.zeros(0, bool)
+        e = edges[mask]
+        loc = np.stack([np.searchsorted(mem, e[:, 0]),
+                        np.searchsorted(mem, e[:, 1])], axis=1).astype(np.int32)
+        sub, subinfo = _partition_recursive(len(mem), loc, objective, resolution,
+                                            max_size, depth - 1, seed)
+        new[mem] = next_free + sub
+        next_free += int(sub.max()) + 1
+    uq, inv = np.unique(new, return_inverse=True)
+    info["recursive_splits"] = int(len(big))
+    return inv.astype(np.int32), info
 
 
-def cmd_metrics(dirs: Dirs, res: float, chunk: int = 4_000_000):
+def cmd_subdivide(dirs: Dirs, tag: str, min_size: int = 100, max_galaxy: int = 20000,
+                  sub_resolution: float = 1.0, sub_objective: str = "modularity",
+                  depth: int = 4, seed: int = SEED, chunk: int = 4_000_000,
+                  out_tag: str | None = None):
+    """Two-stage refinement: split each macro community internally until every
+    piece is <= max_galaxy nodes. Bypasses the modularity resolution limit."""
     t0 = time.time()
     outdir = _full_dir(dirs)
-    tag = _res_tag(res)
-    memb_path = os.path.join(outdir, f"membership_res{tag}.npy")
+    memb_path = os.path.join(outdir, f"membership_{tag}.npy")
     if not os.path.exists(memb_path):
-        sys.exit(f"membership_res{tag}.npy not found - run `detect` first")
+        sys.exit(f"membership_{tag}.npy not found - run `detect` first")
     memb = np.load(memb_path)
     E = _load_undirected(dirs)
     article_ids = _load_article_ids(dirs)
     n = len(article_ids)
     C = int(memb.max()) + 1
-    print(f"[metrics] res={tag}: n={n:,} C={C:,} edges={len(E):,}")
+    out_tag = out_tag or f"{tag}_sub"
+    print(f"[subdivide] tag={tag}: n={n:,} C={C:,} edges={len(E):,} "
+          f"min_size={min_size} max_galaxy={max_galaxy} sub_res={sub_resolution} "
+          f"objective={sub_objective} depth={depth}")
+
+    # ---- pass 1: count induced edges per community
+    cnt = np.zeros(C, np.int64)
+    for i in range(0, len(E), chunk):
+        blk = np.asarray(E[i : i + chunk])
+        mu = memb[blk[:, 0].astype(np.int64)]
+        same = mu == memb[blk[:, 1].astype(np.int64)]
+        cnt += np.bincount(mu[same], minlength=C)
+    offs = np.zeros(C + 1, np.int64)
+    offs[1:] = np.cumsum(cnt)
+    total_ind = int(cnt.sum())
+    print(f"[subdivide] induced edges total: {total_ind:,} "
+          f"(pass1 {time.time()-t0:.0f}s)", flush=True)
+
+    # ---- pass 2: bucket induced edges (CSR-style)
+    buf = np.empty((total_ind, 2), np.int32)
+    fill = offs[:-1].copy()
+    for i in range(0, len(E), chunk):
+        blk = np.asarray(E[i : i + chunk])
+        u = blk[:, 0].astype(np.int64)
+        v = blk[:, 1].astype(np.int64)
+        mu = memb[u]
+        same = mu == memb[v]
+        c = mu[same]
+        pos = fill[c]
+        fill[c] = pos + 1
+        buf[pos, 0] = u[same].astype(np.int32)
+        buf[pos, 1] = v[same].astype(np.int32)
+    del fill
+    print(f"[subdivide] bucketed ({time.time()-t0:.0f}s)", flush=True)
+
+    # ---- per-community subdivision
+    order = np.argsort(memb, kind="stable")
+    starts = np.searchsorted(memb[order], np.arange(C + 1))
+    refined = np.empty(n, np.int32)
+    next_label = 0
+    diag = []
+    for c in range(C):
+        members = order[starts[c] : starts[c + 1]]
+        size = len(members)
+        e_glob = buf[offs[c] : offs[c + 1]]
+        if size < min_size:
+            refined[members] = next_label
+            diag.append({"orig_comm": c, "size": size, "E_in": int(len(e_glob)),
+                         "action": "kept", "C_sub": 1,
+                         "label_start": next_label})
+            next_label += 1
+            continue
+        loc = np.stack([np.searchsorted(members, e_glob[:, 0].astype(np.int64)),
+                        np.searchsorted(members, e_glob[:, 1].astype(np.int64))],
+                       axis=1).astype(np.int32)
+        t1 = time.time()
+        labels, info = _partition_recursive(size, loc, sub_objective, sub_resolution,
+                                            max_galaxy, depth, seed)
+        lsizes = np.bincount(labels)
+        refined[members] = next_label + labels
+        diag.append({"orig_comm": c, "size": size, "E_in": int(len(e_glob)),
+                     "action": "split", "C_sub": int(labels.max()) + 1,
+                     "modularity_sub": info.get("modularity"),
+                     "largest_sub_share": float(lsizes.max() / size),
+                     "median_sub_size": float(np.median(lsizes[lsizes > 0])),
+                     "secs": round(time.time() - t1, 1),
+                     "label_start": next_label})
+        if size >= 5000:
+            print(f"  comm {c}: size={size:,} E_in={len(e_glob):,} -> "
+                  f"C_sub={int(labels.max())+1} largest={lsizes.max()/size:.3f} "
+                  f"({time.time()-t1:.0f}s)", flush=True)
+        next_label += int(labels.max()) + 1
+    del buf
+
+    C_final = next_label
+    out_path = os.path.join(outdir, f"membership_{out_tag}.npy")
+    np.save(out_path, refined)
+    fsizes = np.bincount(refined, minlength=C_final)
+    meta = {
+        "stage": "subdivide", "created_at": _now(),
+        "in_tag": tag, "out_tag": out_tag,
+        "params": {"min_size": min_size, "max_galaxy": max_galaxy,
+                   "sub_resolution": sub_resolution, "sub_objective": sub_objective,
+                   "depth": depth, "seed": seed},
+        "C_in": C, "C_final": int(C_final),
+        "n_singleton_comms_final": int((fsizes == 1).sum()),
+        "largest_final_share": float(fsizes.max() / n),
+        "size_percentiles_final": {f"p{p}": float(np.percentile(fsizes[fsizes >= 2], p))
+                                   for p in (25, 50, 75, 95, 99)} if (fsizes >= 2).any() else {},
+        "size_max_final": int(fsizes.max()),
+        "secs": round(time.time() - t0, 1),
+        "communities": diag,
+        **_versions(),
+    }
+    write_json(os.path.join(outdir, f"subdivide_meta_{out_tag}.json"), meta)
+    print(f"[subdivide] C: {C} -> {C_final:,} (singletons={meta['n_singleton_comms_final']}) "
+          f"largest={meta['largest_final_share']:.4f} "
+          f"median(nontrivial)={meta['size_percentiles_final'].get('p50')} "
+          f"({meta['secs']}s) -> {out_path}")
+    return meta
+
+
+# ----------------------------------------------------------------- metrics --
+
+def cmd_metrics(dirs: Dirs, tag: str, chunk: int = 4_000_000):
+    t0 = time.time()
+    outdir = _full_dir(dirs)
+    memb_path = os.path.join(outdir, f"membership_{tag}.npy")
+    if not os.path.exists(memb_path):
+        sys.exit(f"membership_{tag}.npy not found - run detect/subdivide first")
+    memb = np.load(memb_path)
+    E = _load_undirected(dirs)
+    article_ids = _load_article_ids(dirs)
+    n = len(article_ids)
+    C = int(memb.max()) + 1
+    print(f"[metrics] tag={tag}: n={n:,} C={C:,} edges={len(E):,}")
 
     e_in = np.zeros(C, np.int64)
     e_out = np.zeros(C, np.int64)
@@ -264,7 +433,6 @@ def cmd_metrics(dirs: Dirs, res: float, chunk: int = 4_000_000):
         if (i // chunk) % 10 == 0:
             print(f"  metrics {i + len(blk):,}/{len(E):,} ({time.time()-t0:.0f}s)", flush=True)
 
-    # merge pair tables
     if pair_keys_chunks:
         all_k = np.concatenate(pair_keys_chunks)
         all_c = np.concatenate(pair_cnts_chunks)
@@ -277,7 +445,7 @@ def cmd_metrics(dirs: Dirs, res: float, chunk: int = 4_000_000):
     else:
         pair_a = pair_b = np.zeros(0, np.int32)
         pair_w = np.zeros(0, np.int64)
-    np.savez_compressed(os.path.join(outdir, f"pairs_res{tag}.npz"),
+    np.savez_compressed(os.path.join(outdir, f"pairs_{tag}.npz"),
                         a=pair_a, b=pair_b, w=pair_w)
 
     bn_inter = np.bincount(memb[b_inter], minlength=C).astype(np.int64)
@@ -286,11 +454,16 @@ def cmd_metrics(dirs: Dirs, res: float, chunk: int = 4_000_000):
         conduct = np.where(2 * e_in + e_out > 0, e_out / np.maximum(1, 2 * e_in + e_out), np.nan)
         avg_deg = 2 * e_in / np.maximum(1, n_c)
 
-    sizes_nz = n_c[n_c > 0]
+    eff = n_c >= 2                      # "effective" communities (drop singletons)
+    sizes_eff = n_c[eff]
+    n_single = int((n_c == 1).sum())
+    n_isolated = int((deg == 0).sum())
     glob = {
-        "resolution": res, "seed": SEED, "generated_at": _now(),
+        "tag": tag, "seed": SEED, "generated_at": _now(),
         "n_nodes": n, "n_communities": C,
-        "n_communities_nonempty": int((n_c > 0).sum()),
+        "n_singleton_comms": n_single,
+        "n_communities_effective": int(eff.sum()),
+        "n_isolated_nodes": n_isolated,
         "n_edges_undirected": total_edges,
         "n_cross_community_edges": total_cross,
         "cross_edge_fraction": float(total_cross / max(1, total_edges)),
@@ -298,37 +471,41 @@ def cmd_metrics(dirs: Dirs, res: float, chunk: int = 4_000_000):
         "top5_comm_share": float(np.sort(n_c)[::-1][:5].sum() / n),
         "mean_out_ratio_edge_weighted": float(e_out.sum() / max(1, e_in.sum() + e_out.sum())),
         "node_weighted_median_out_ratio": _weighted_median(out_ratio, n_c),
-        "size_percentiles": {f"p{p}": float(np.percentile(sizes_nz, p)) for p in (5, 25, 50, 75, 95, 99)},
-        "size_max": int(sizes_nz.max()),
-        "out_ratio_percentiles": {f"p{p}": float(np.nanpercentile(out_ratio, p)) for p in (10, 25, 50, 75, 90)},
-        "conductance_percentiles": {f"p{p}": float(np.nanpercentile(conduct, p)) for p in (10, 25, 50, 75, 90)},
+        "size_percentiles_all": {f"p{p}": float(np.percentile(n_c[n_c > 0], p))
+                                 for p in (5, 25, 50, 75, 95, 99)},
+        "size_percentiles_effective": {f"p{p}": float(np.percentile(sizes_eff, p))
+                                       for p in (5, 25, 50, 75, 95, 99)} if eff.any() else {},
+        "size_max": int(n_c.max()),
+        "out_ratio_percentiles_effective": {f"p{p}": float(np.nanpercentile(out_ratio[eff], p))
+                                            for p in (10, 25, 50, 75, 90)} if eff.any() else {},
+        "conductance_percentiles_effective": {f"p{p}": float(np.nanpercentile(conduct[eff], p))
+                                              for p in (10, 25, 50, 75, 90)} if eff.any() else {},
+        "node_share_in_comms_out_ratio_lt_0.3": float(n_c[eff & (out_ratio < 0.3)].sum() / n),
+        "node_share_in_comms_out_ratio_lt_0.5": float(n_c[eff & (out_ratio < 0.5)].sum() / n),
         "boundary_node_ratio_node_weighted": float(b_inter.sum() / n),
         "avg_degree_full": float(2 * total_edges / n),
         "secs": round(time.time() - t0, 1),
     }
 
-    # representative labels: top-3 nodes by internal degree per community (vectorized)
+    # representative labels: top-3 nodes by internal degree per community
     pid_col, title_col = load_titles(dirs.parsed)
-    order = np.lexsort((-deg, memb))  # within each comm: descending degree
-    starts = np.searchsorted(memb[order], np.arange(C), side="left")
-    rep_idx = []
-    rep_comm = []
+    deg_order = np.lexsort((-deg, memb))
+    starts = np.searchsorted(memb[deg_order], np.arange(C), side="left")
+    rep_idx, rep_comm = [], []
     for c in range(C):
         if n_c[c] == 0:
             continue
         k = min(3, int(n_c[c]))
-        rep_idx.extend(order[starts[c] : starts[c] + k].tolist())
+        rep_idx.extend(deg_order[starts[c] : starts[c] + k].tolist())
         rep_comm.extend([c] * k)
     rep_idx = np.asarray(rep_idx, dtype=np.int64)
-    rep_pid = article_ids[rep_idx]
-    pos = np.clip(np.searchsorted(pid_col, rep_pid), 0, len(pid_col) - 1)
+    pos = np.clip(np.searchsorted(pid_col, article_ids[rep_idx]), 0, len(pid_col) - 1)
     rep_titles = [title_col[p].as_py() for p in pos]
     labels = {}
     for c, t in zip(rep_comm, rep_titles):
         labels.setdefault(c, []).append(t)
     labels = {c: labels.get(c, []) for c in range(C)}
 
-    # per-community parquet
     import pyarrow as pa
     import pyarrow.parquet as pq
     tbl = pa.table({
@@ -343,32 +520,32 @@ def cmd_metrics(dirs: Dirs, res: float, chunk: int = 4_000_000):
         "boundary_node_ratio_c": pa.array(bn_inter / np.maximum(1, n_c), type=pa.float64()),
         "rep_titles": pa.array([", ".join(labels[c][:3]) for c in range(C)], type=pa.string()),
     })
-    pq.write_table(tbl, os.path.join(outdir, f"per_community_res{tag}.parquet"), compression="zstd")
+    pq.write_table(tbl, os.path.join(outdir, f"per_community_{tag}.parquet"), compression="zstd")
 
-    # top pairs
     topk = np.argsort(pair_w)[::-1][:50]
     top_pairs = [{"comm_a": int(pair_a[k]), "comm_b": int(pair_b[k]), "edges": int(pair_w[k]),
                   "a_labels": labels.get(int(pair_a[k]), [])[:2],
                   "b_labels": labels.get(int(pair_b[k]), [])[:2]} for k in topk]
-    write_json(os.path.join(outdir, f"top_pairs_res{tag}.json"), top_pairs)
-
-    write_json(os.path.join(outdir, f"metrics_res{tag}.json"), {"global": glob, "versions": _versions()})
-    print(f"[metrics] res={tag}: C={C:,} crossF={glob['cross_edge_fraction']:.4f} "
-          f"mod-largest={glob['largest_comm_share']:.3f} oR_p50="
-          f"{glob['out_ratio_percentiles']['p50']:.3f} ({glob['secs']}s)")
+    write_json(os.path.join(outdir, f"top_pairs_{tag}.json"), top_pairs)
+    write_json(os.path.join(outdir, f"metrics_{tag}.json"), {"global": glob, "versions": _versions()})
+    print(f"[metrics] tag={tag}: C_eff={glob['n_communities_effective']} "
+          f"singletons={n_single} crossF={glob['cross_edge_fraction']:.4f} "
+          f"largest={glob['largest_comm_share']:.3f} "
+          f"oR_p50_eff={glob['out_ratio_percentiles_effective'].get('p50')} "
+          f"({glob['secs']}s)")
     return glob
 
 
 # ----------------------------------------------------------------- cluster --
 
-def cmd_cluster(dirs: Dirs, res: float, cluster_resolution: float = 1.0, seed: int = SEED):
+def cmd_cluster(dirs: Dirs, tag: str, cluster_resolution: float = 1.0, seed: int = SEED):
     import igraph as ig
+    import pyarrow.parquet as pq
 
     t0 = time.time()
     outdir = _full_dir(dirs)
-    tag = _res_tag(res)
-    memb = np.load(os.path.join(outdir, f"membership_res{tag}.npy"))
-    pz = np.load(os.path.join(outdir, f"pairs_res{tag}.npz"))
+    memb = np.load(os.path.join(outdir, f"membership_{tag}.npy"))
+    pz = np.load(os.path.join(outdir, f"pairs_{tag}.npz"))
     a, b, w = pz["a"], pz["b"], pz["w"]
     C = int(memb.max()) + 1
     article_ids = _load_article_ids(dirs)
@@ -380,18 +557,15 @@ def cmd_cluster(dirs: Dirs, res: float, cluster_resolution: float = 1.0, seed: i
     random.seed(seed)
     cl = g.community_leiden("modularity", weights="weight",
                             resolution=cluster_resolution, n_iterations=3)
-    cl_comm = np.asarray(cl.membership, dtype=np.int32)   # community -> cluster
+    cl_comm = np.asarray(cl.membership, dtype=np.int32)
     K = int(cl_comm.max()) + 1
-    cl_node = cl_comm[memb]                                # node -> cluster
-    np.save(os.path.join(outdir, f"clusters_comm_res{tag}.npy"), cl_comm)
-    np.save(os.path.join(outdir, f"clusters_node_res{tag}.npy"), cl_node)
+    cl_node = cl_comm[memb]
+    np.save(os.path.join(outdir, f"clusters_comm_{tag}.npy"), cl_comm)
+    np.save(os.path.join(outdir, f"clusters_node_{tag}.npy"), cl_node)
 
-    # level-2 metrics
-    import pyarrow.parquet as pq
-    tbl = pq.read_table(os.path.join(outdir, f"per_community_res{tag}.parquet")).to_pydict()
+    tbl = pq.read_table(os.path.join(outdir, f"per_community_{tag}.parquet")).to_pydict()
     n_c = np.asarray(tbl["N_c"], np.int64)
     e_in_c = np.asarray(tbl["E_in_c"], np.int64)
-
     N2 = np.bincount(cl_comm, weights=n_c, minlength=K).astype(np.int64)
     E_in2 = np.bincount(cl_comm, weights=e_in_c, minlength=K)
     E_between2 = np.zeros(K)
@@ -405,7 +579,7 @@ def cmd_cluster(dirs: Dirs, res: float, cluster_resolution: float = 1.0, seed: i
         ein2_total = E_in2 + E_between2
         out_ratio2 = np.where(ein2_total + E_out2 > 0, E_out2 / np.maximum(1, ein2_total + E_out2), np.nan)
     glob = {
-        "resolution_l1": res, "resolution_l2": cluster_resolution, "seed": seed,
+        "tag": tag, "resolution_l2": cluster_resolution, "seed": seed,
         "generated_at": _now(), "n_clusters": K, "n_communities": C,
         "modularity_community_graph": float(cl.modularity),
         "largest_cluster_share": float(N2.max() / n),
@@ -415,15 +589,16 @@ def cmd_cluster(dirs: Dirs, res: float, cluster_resolution: float = 1.0, seed: i
                                            for p in (25, 50, 75, 95)},
         "secs": round(time.time() - t0, 1),
     }
+    comms_per_cluster = np.bincount(cl_comm, minlength=K)
     rows = []
     for k in range(K):
-        rows.append({"cluster": k, "n_comms": int(np.bincount(cl_comm, minlength=K)[k]),
+        rows.append({"cluster": k, "n_comms": int(comms_per_cluster[k]),
                      "N_nodes": int(N2[k]), "E_in_articles": float(E_in2[k]),
                      "E_between_comms": float(E_between2[k]), "E_out2": float(E_out2[k]),
                      "out_ratio2": float(out_ratio2[k]) if not np.isnan(out_ratio2[k]) else None})
-    write_json(os.path.join(outdir, f"clusters_meta_res{tag}.json"),
+    write_json(os.path.join(outdir, f"clusters_meta_{tag}.json"),
                {"global": glob, "clusters": rows, "versions": _versions()})
-    print(f"[cluster] res={tag}: K={K:,} largest={glob['largest_cluster_share']:.3f} "
+    print(f"[cluster] tag={tag}: K={K:,} largest={glob['largest_cluster_share']:.3f} "
           f"modL2={glob['modularity_community_graph']:.4f} "
           f"oR2_w={glob['mean_out_ratio2_edge_weighted']:.3f} ({glob['secs']}s)")
     return glob
@@ -431,15 +606,14 @@ def cmd_cluster(dirs: Dirs, res: float, cluster_resolution: float = 1.0, seed: i
 
 # ------------------------------------------------------------------ export --
 
-def cmd_export(dirs: Dirs, res: float, with_clusters: bool = True):
+def cmd_export(dirs: Dirs, tag: str, with_clusters: bool = True):
     import pyarrow as pa
     import pyarrow.parquet as pq
 
     t0 = time.time()
     outdir = _full_dir(dirs)
-    tag = _res_tag(res)
-    memb = np.load(os.path.join(outdir, f"membership_res{tag}.npy"))
-    cl_path = os.path.join(outdir, f"clusters_node_res{tag}.npy")
+    memb = np.load(os.path.join(outdir, f"membership_{tag}.npy"))
+    cl_path = os.path.join(outdir, f"clusters_node_{tag}.npy")
     cl_node = np.load(cl_path) if (with_clusters and os.path.exists(cl_path)) else None
     article_ids = _load_article_ids(dirs)
     pid_col, title_col = load_titles(dirs.parsed)
@@ -454,7 +628,7 @@ def cmd_export(dirs: Dirs, res: float, with_clusters: bool = True):
     }
     if cl_node is not None:
         cols["cluster"] = pa.array(cl_node)
-    out = os.path.join(outdir, f"membership_res{tag}.parquet")
+    out = os.path.join(outdir, f"membership_{tag}.parquet")
     pq.write_table(pa.table(cols), out, compression="zstd")
     print(f"[export] {n:,} rows -> {out} ({time.time()-t0:.0f}s, "
           f"{os.path.getsize(out)/1e6:.1f} MB)")
@@ -469,11 +643,22 @@ def cmd_all(dirs: Dirs, resolutions, primary: float, max_edges: int, seed: int):
         print("[all] dedup: exists, skip")
     cmd_detect(dirs, resolutions, max_edges=max_edges, seed=seed)
     if max_edges:
-        print("[all] smoke mode: skipping metrics/cluster/export")
+        print("[all] smoke mode: skipping subdivide/metrics/cluster/export")
         return
-    cmd_metrics(dirs, primary)
-    cmd_cluster(dirs, primary)
-    cmd_export(dirs, primary)
+    ptag = f"res{_res_tag(primary)}"
+    cmd_subdivide(dirs, ptag)
+    stag = f"{ptag}_sub"
+    cmd_metrics(dirs, stag)
+    cmd_cluster(dirs, stag)
+    cmd_export(dirs, stag)
+
+
+def _tag_from_args(a) -> str:
+    if getattr(a, "tag", None):
+        return a.tag
+    if getattr(a, "resolution", None) is not None:
+        return f"res{_res_tag(a.resolution)}"
+    sys.exit("either --tag or --resolution is required")
 
 
 def main():
@@ -483,16 +668,36 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("dedup"); p.add_argument("--chunk", type=int, default=10_000_000)
+
     p = sub.add_parser("detect")
     p.add_argument("--resolutions", default="0.5,1.0,2.0")
+    p.add_argument("--objective", default="modularity", choices=["modularity", "CPM"])
     p.add_argument("--max-edges", type=int, default=0, help="smoke: only first N edges")
     p.add_argument("--seed", type=int, default=SEED)
     p.add_argument("--force", action="store_true")
-    p = sub.add_parser("metrics"); p.add_argument("--resolution", type=float, required=True)
-    p = sub.add_parser("cluster"); p.add_argument("--resolution", type=float, required=True)
+
+    p = sub.add_parser("subdivide")
+    p.add_argument("--resolution", type=float, default=None)
+    p.add_argument("--tag", default=None)
+    p.add_argument("--min-size", type=int, default=100)
+    p.add_argument("--max-galaxy", type=int, default=20000)
+    p.add_argument("--sub-resolution", type=float, default=1.0)
+    p.add_argument("--sub-objective", default="modularity", choices=["modularity", "CPM"])
+    p.add_argument("--depth", type=int, default=4)
+    p.add_argument("--seed", type=int, default=SEED)
+    p.add_argument("--out-tag", default=None)
+
+    p = sub.add_parser("metrics")
+    p.add_argument("--resolution", type=float, default=None); p.add_argument("--tag", default=None)
+
+    p = sub.add_parser("cluster")
+    p.add_argument("--resolution", type=float, default=None); p.add_argument("--tag", default=None)
     p.add_argument("--cluster-resolution", type=float, default=1.0)
     p.add_argument("--seed", type=int, default=SEED)
-    p = sub.add_parser("export"); p.add_argument("--resolution", type=float, required=True)
+
+    p = sub.add_parser("export")
+    p.add_argument("--resolution", type=float, default=None); p.add_argument("--tag", default=None)
+
     p = sub.add_parser("all")
     p.add_argument("--resolutions", default="0.5,1.0,2.0")
     p.add_argument("--primary", type=float, default=1.0)
@@ -505,13 +710,17 @@ def main():
         cmd_dedup(dirs, chunk=a.chunk)
     elif a.cmd == "detect":
         cmd_detect(dirs, [float(x) for x in a.resolutions.split(",")],
-                   max_edges=a.max_edges, seed=a.seed, force=a.force)
+                   max_edges=a.max_edges, seed=a.seed, force=a.force, objective=a.objective)
+    elif a.cmd == "subdivide":
+        cmd_subdivide(dirs, _tag_from_args(a), min_size=a.min_size, max_galaxy=a.max_galaxy,
+                      sub_resolution=a.sub_resolution, sub_objective=a.sub_objective,
+                      depth=a.depth, seed=a.seed, out_tag=a.out_tag)
     elif a.cmd == "metrics":
-        cmd_metrics(dirs, a.resolution)
+        cmd_metrics(dirs, _tag_from_args(a))
     elif a.cmd == "cluster":
-        cmd_cluster(dirs, a.resolution, cluster_resolution=a.cluster_resolution, seed=a.seed)
+        cmd_cluster(dirs, _tag_from_args(a), cluster_resolution=a.cluster_resolution, seed=a.seed)
     elif a.cmd == "export":
-        cmd_export(dirs, a.resolution)
+        cmd_export(dirs, _tag_from_args(a))
     elif a.cmd == "all":
         cmd_all(dirs, [float(x) for x in a.resolutions.split(",")],
                 primary=a.primary, max_edges=a.max_edges, seed=a.seed)

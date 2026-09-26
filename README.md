@@ -104,17 +104,25 @@ python scripts/run_full_leiden.py --base data dedup
 python scripts/run_full_leiden.py --base data detect --resolutions 0.5,1.0,2.0
 
 # 3) 指標(チャンク方式、~3-6分)→ 4) L2 銀河団クラスタリング(1分)→ 5) エクスポート
-python scripts/run_full_leiden.py --base data metrics --resolution 1.0
-python scripts/run_full_leiden.py --base data cluster --resolution 1.0
-python scripts/run_full_leiden.py --base data export  --resolution 1.0
+#    ★ フルスケールでは modularity の解像度限界(√2m ≈ 1.5万ノード未満を分解不能)と
+#      ハブ支配により、一括 Leiden は「数十個のマクロコミュニティ + 孤立ノード」になる。
+#      → subdivide(マクロコミュニティ内の誘導部分グラフで Leiden を再帰実行)で
+#        銀河サイズ(数百〜数万ノード)まで分割するのが本流(2 段階方式)。
+python scripts/run_full_leiden.py --base data subdivide --resolution 1.0 --max-galaxy 10000
+python scripts/run_full_leiden.py --base data metrics --tag res1_sub
+python scripts/run_full_leiden.py --base data cluster --tag res1_sub
+python scripts/run_full_leiden.py --base data export  --tag res1_sub
+# (一括分割のまま評価したい場合: metrics/cluster/export --resolution 1.0)
 ```
 
 出力は `data/community/full/`:
-`membership_res<R>.npy`(ノード→コミュニティ、compact idx 順)/ `detect_meta.json` /
-`metrics_res<R>.json`(全体指標)/ `per_community_res<R>.parquet`(コミュニティ別指標+代表記事)/
-`top_pairs_res<R>.json`(コミュニティ間エッジ top50)/ `pairs_res<R>.npz` /
-`clusters_comm_res<R>.npy`・`clusters_node_res<R>.npy`・`clusters_meta_res<R>.json`(L2=銀河団)/
-`membership_res<R>.parquet`(page_id+title+comm+cluster の結合表)。
+`membership_<tag>.npy`(ノード→コミュニティ、compact idx 順)/ `detect_meta.json` /
+`subdivide_meta_<tag>.json`(マクロコミュニティ別の分割診断)/
+`metrics_<tag>.json`(全体指標)/ `per_community_<tag>.parquet`(コミュニティ別指標+代表記事)/
+`top_pairs_<tag>.json`(コミュニティ間エッジ top50)/ `pairs_<tag>.npz` /
+`clusters_comm_<tag>.npy`・`clusters_node_<tag>.npy`・`clusters_meta_<tag>.json`(L2=銀河団)/
+`membership_<tag>.parquet`(page_id+title+comm+cluster の結合表)。
+tag は `res<R>`(一括)または `res<R>_sub`(2 段階)。
 
 期待値の目安(実行前に共有しておくべき想定):
 - 無向一意エッジ ~100–110M(相互リンク率 ~23–30%、正確な値は `graph/dedup_meta.json`)
