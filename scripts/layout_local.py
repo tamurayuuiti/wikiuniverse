@@ -10,17 +10,17 @@ Each galaxy is a fully independent job:
 Inputs:
   community/full/membership_<galaxy-tag>.npy
   graph/edges_undirected_unique.bin
-  layout/<layout-sub>/galaxy_positions.parquet   (canonical centers + radii)
+  layout/<run>/galaxy_positions.parquet   (canonical centers + radii)
 
-Outputs (layout/<layout-sub>/):
+Outputs (layout/<run>/):
   article_positions.parquet   page_id, idx, galaxy_id, x, y, z (float32)
   layout_local_meta.json      timings (per-galaxy p50/p95 -> batch extrapolation)
   layout_local_checkpoint.json  done-galaxy list (resume / batch boundary)
 
 Batch usage (§12 Colab-jobs prototype):
-  python scripts/layout_local.py --base data --galaxies 0-99        # one "job"
-  python scripts/layout_local.py --base data --galaxies 100-199     # next "job"
-  python scripts/layout_local.py --base data --galaxies all
+  python scripts/layout_local.py --base data --run 20260926_baseline --galaxies 0-99
+  python scripts/layout_local.py --base data --run 20260926_baseline --galaxies 100-199
+  python scripts/layout_local.py --base data --run 20260926_baseline --galaxies all
 (positions arrays are merged at the end from the checkpointed per-galaxy files
 when --galaxies all completes; partial jobs write per-galaxy .npy shards)
 """
@@ -39,7 +39,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wu.dumpio import read_json, write_json  # noqa: E402
-from wu.paths import Dirs  # noqa: E402
+from wu.paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 from wu.stats import load_edges_mmap  # noqa: E402
 
 
@@ -69,7 +69,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="data")
     ap.add_argument("--galaxy-tag", default="res1_sub")
-    ap.add_argument("--layout-sub", default="canon")
+    ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
+                    help="layout run name under data/layout "
+                         "(default: wu.paths.ACTIVE_LAYOUT_RUN)")
     ap.add_argument("--galaxies", default="all",
                     help="'all' or 'A-B' inclusive id range (one batch job)")
     ap.add_argument("--iters", type=int, default=40)
@@ -78,10 +80,10 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--preview-galaxy", type=int, default=None,
                     help="after the run, render a 3-view scatter of this galaxy's "
-                         "article shard (layout/<sub>/preview_galaxy_<id>.png)")
+                         "article shard (layout/<run>/preview_galaxy_<id>.png)")
     a = ap.parse_args()
     dirs = Dirs(a.base)
-    lay_dir = os.path.join(dirs.base, "layout", a.layout_sub)
+    lay_dir = str(dirs.layout_run(a.run))
     shard_dir = os.path.join(lay_dir, "article_shards")
     os.makedirs(shard_dir, exist_ok=True)
     t0 = time.time()
@@ -89,7 +91,7 @@ def main():
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    memb = np.load(os.path.join(dirs.community, "full", f"membership_{a.galaxy_tag}.npy"))
+    memb = np.load(dirs.community_full / f"membership_{a.galaxy_tag}.npy")
     n = len(memb)
     G = int(memb.max()) + 1
     gpos = pq.read_table(os.path.join(lay_dir, "galaxy_positions.parquet")).to_pydict()
@@ -267,7 +269,7 @@ def main():
 
     # ---- merge when complete
     meta = {"generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
-            "galaxy_tag": a.galaxy_tag, "layout_sub": a.layout_sub,
+            "galaxy_tag": a.galaxy_tag, "run": a.run,
             "galaxies_range": [glo, ghi], "n_done_this_run": n_done,
             "n_done_total": len(done), "n_galaxies": G,
             "params": {"iters": a.iters, "kappa": a.kappa, "lam": a.lam, "seed": a.seed},

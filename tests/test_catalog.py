@@ -104,7 +104,8 @@ def main():
     assert sum(g["display_class"][i] == "dust" for i in range(G)) == meta["n_dust"]
 
     # ---- global layout smoke (dim=2 for speed)
-    out2 = run_script("layout_global.py", "--dim", "2", "--galaxy-tag", "res1_s")
+    out2 = run_script("layout_global.py", "--dim", "2", "--galaxy-tag", "res1_s",
+                      "--run", "r_main")
 
     # ---- version-skew regression: pre-v2 catalog (macros without is_dust,
     #      galaxies without display_class) must still lay out with a warning
@@ -115,13 +116,14 @@ def main():
     _gpath = os.path.join(final, "galaxies.parquet")
     _gt = pq.read_table(_gpath)
     pq.write_table(_gt.drop(["display_class"]), _gpath)
-    out_skew = run_script("layout_global.py", "--dim", "2", "--galaxy-tag", "res1_s")
+    out_skew = run_script("layout_global.py", "--dim", "2", "--galaxy-tag", "res1_s",
+                          "--run", "r_main")
     assert "pre-v2" in out_skew, "skew warning not emitted"
     # restore v2 catalog files (skew block degraded them in place)
     run_script("build_galaxy_catalog.py", "--galaxy-tag", "res1_s",
                "--macro-tag", "res1", "--top-neighbors", "4", "--top-pairs", "100")
 
-    lay = os.path.join(BASE, "layout")
+    lay = os.path.join(BASE, "layout", "r_main")
     for f in ("galaxy_positions.parquet", "macro_positions.parquet",
               "layout_meta.json", "preview.png"):
         assert os.path.exists(os.path.join(lay, f)), f
@@ -142,8 +144,8 @@ def main():
 
     # ---- full-3D arm (macro-dim 3) into its own subdir
     run_script("layout_global.py", "--dim", "3", "--macro-dim", "3",
-               "--out-sub", "3d", "--galaxy-tag", "res1_s")
-    lay3 = os.path.join(BASE, "layout", "3d")
+               "--run", "r_3d", "--galaxy-tag", "res1_s")
+    lay3 = os.path.join(BASE, "layout", "r_3d")
     lm3 = json.load(open(os.path.join(lay3, "layout_meta.json"), encoding="utf-8"))
     assert lm3["mode"]["macro_dim"] == 3
     # --- 3D containment regression: every placed non-dust galaxy center must lie
@@ -165,11 +167,11 @@ def main():
 
     # ---- local (intra-galaxy) article layout, batch range + merge
     run_script("layout_local.py", "--galaxies", "0-11", "--galaxy-tag", "res1_s",
-               "--layout-sub", "")
+               "--run", "r_main")
     run_script("layout_local.py", "--galaxies", "12-9999", "--galaxy-tag", "res1_s",
-               "--layout-sub", "", "--preview-galaxy", "0")
-    assert os.path.exists(os.path.join(BASE, "layout", "preview_galaxy_0.png"))
-    apq = os.path.join(BASE, "layout", "article_positions.parquet")
+               "--run", "r_main", "--preview-galaxy", "0")
+    assert os.path.exists(os.path.join(lay, "preview_galaxy_0.png"))
+    apq = os.path.join(lay, "article_positions.parquet")
     assert os.path.exists(apq), "merged article positions missing"
     apt = pq.read_table(apq).to_pydict()
     assert len(apt["page_id"]) == 60
@@ -185,10 +187,11 @@ def main():
     # NOTE: z_squash has no effect on tiny synthetic graphs (igraph FR init is
     # planar for n<=~6), so we vary --pack to force a radius/scale change.
     run_script("layout_global.py", "--dim", "2", "--pack", "0.3",
-               "--out-sub", "c2", "--galaxy-tag", "res1_s")
-    run_script("recompose_articles.py", "--from-sub", "", "--to-sub", "c2")
-    p_old = pq.read_table(os.path.join(BASE, "layout", "article_positions.parquet")).to_pydict()
-    p_new = pq.read_table(os.path.join(BASE, "layout", "c2", "article_positions.parquet")).to_pydict()
+               "--run", "r_c2", "--galaxy-tag", "res1_s")
+    run_script("recompose_articles.py", "--from-run", "r_main", "--to-run", "r_c2")
+    p_old = pq.read_table(os.path.join(lay, "article_positions.parquet")).to_pydict()
+    p_new = pq.read_table(os.path.join(BASE, "layout", "r_c2",
+                                       "article_positions.parquet")).to_pydict()
     assert len(p_new["x"]) == 60
     moved = sum(1 for i in range(60) if abs(p_new["z"][i] - p_old["z"][i]) > 1e-6
                 or abs(p_new["x"][i] - p_old["x"][i]) > 1e-6)
@@ -196,10 +199,10 @@ def main():
 
     # ---- parallel launcher: all-done branch -> merge only
     run_script("run_local_parallel.py", "--jobs", "2", "--galaxy-tag", "res1_s",
-               "--layout-sub", "")
+               "--run", "r_main")
 
     # ---- viewer tiles export
-    run_script("export_viewer_tiles.py", "--galaxy-tag", "res1_s", "--layout-sub", "")
+    run_script("export_viewer_tiles.py", "--galaxy-tag", "res1_s", "--run", "r_main")
     sp = os.path.join(BASE, "spatial")
     boot = json.load(open(os.path.join(sp, "bootstrap.json"), encoding="utf-8"))
     assert len(boot["galaxies"]) == G

@@ -1,99 +1,125 @@
-"""Canonical data layout (policy agreed 2026-09-25).
+"""Canonical data-directory layout for wikiuniverse (run-based layout).
 
-    <base>/dump/        元の Wikipedia ダンプ(.sql.gz)
-    <base>/parsed/      ダンプから抽出・変換した中間データ
-                        (記事表・ハッシュ表・リダイレクト解決表・meta)
-    <base>/graph/       全 ns0 グラフ(解決済みエッジ・次数・統計)と subsets/
-    <base>/community/   Leiden・階層コミュニティの出力(必要になった時点で作成)
+Everything produced by the pipeline lives under a single `--base` directory
+(default `data/`), organized BY PIPELINE STAGE so intermediate artifacts are
+separated instead of piled into one folder:
 
-将来の予約名(必要に応じて追加、今は作らない):
-    <base>/layout/      グローバル・ローカル 3D 座標
-    <base>/spatial/     Morton/Octree・空間チャンク・LOD
-    <base>/final/       Web 配信用の最終データ
+    data/
+      dump/         raw Wikipedia dumps            input, re-downloadable
+      parsed/       page/linktarget/redirect       intermediate (rebuilt by `parse`)
+      graph/        edges + degree/stats artifacts intermediate (rebuilt by `edges`)
+        subsets/    per-subset node/edge cuts      intermediate (Phase-1 PoC)
+      community/    Leiden outputs                 result
+        full/       full-graph runs: membership_<tag>.npy, pairs, metrics, purity
+        <subset>/   Phase-1 per-subset analyze runs
+      final/        galaxy/macro catalog           product (layout + viewer contract)
+      layout/       one directory per layout run   product of the coordinate stage
+        <run>/      galaxy/macro/article positions + metas + previews
+      spatial/      published viewer delivery      product, consumed over HTTP
+        tiles/      per-galaxy streaming tiles
 
-コード・レポート等は data/ 外の既存構成(wu/ scripts/ tests/ notebooks/ results/)を維持。
+Layout run naming: `<YYYYMMDD>_<slug>` (e.g. `20260926_baseline`). The slug
+says what the run is; exact parameters and timestamps live in that run's
+`layout_meta.json`. `ACTIVE_LAYOUT_RUN` below names the run currently published
+to `spatial/` and is the default of every layout script.
+
+Artifact classes (used when deciding what may be deleted):
+    raw          dump/                             re-downloadable input
+    intermediate parsed/, graph/, subsets/         mechanically rebuildable from upstream
+    product      community/, final/, layout/<run>/*.parquet, spatial/
+    cache        *_checkpoint.json, layout/<run>/article_shards/   freely deletable
+
+community/full tag convention: `res<R>` = one-shot macro partition,
+`res<R>_sub` = two-stage (galaxy) partition, `*_body` = body-link graph variant,
+`*_B40` etc. = pruned-graph variant. Canonical partition: galaxies = res1_sub,
+macros = res1.
+
+Retired layout runs are moved out of data/layout/ into local untracked storage
+(e.g. an archive/ directory at the repo root); the adoption procedure for new
+runs is documented in LOCAL_SETUP.md §6.
+
+This module is the single source of truth for data paths: scripts must derive
+paths from `Dirs` instead of assembling them by hand.
 """
 from __future__ import annotations
 
-import os
+from dataclasses import dataclass
+from pathlib import Path
 
-FUTURE_RESERVED = ("layout", "spatial", "final")
+# The published (canonical) layout run. Updating this one constant switches
+# every layout script and the tile export to a different data/layout/<run>/.
+ACTIVE_LAYOUT_RUN = "20260926_baseline"
 
 
+@dataclass
 class Dirs:
-    """All canonical artifact paths in one place (single source of truth)."""
+    """All canonical paths, derived from one base directory.
 
-    def __init__(self, base: str = "data"):
-        self.base = base
-        self.dump = os.path.join(base, "dump")
-        self.parsed = os.path.join(base, "parsed")
-        self.graph = os.path.join(base, "graph")
-        self.community = os.path.join(base, "community")
-        self.subsets = os.path.join(self.graph, "subsets")
+    Pass an absolute base (e.g. /content/drive/MyDrive/wudata) when running on
+    Colab so large artifacts persist; locally use the default ./data.
+    """
 
-    # ---- parsed/ (dump → intermediate) ----
-    @property
-    def meta(self) -> str:
-        return os.path.join(self.parsed, "meta.json")
+    base: Path
 
-    @property
-    def articles_parquet(self) -> str:
-        return os.path.join(self.parsed, "articles.parquet")
+    def __post_init__(self) -> None:
+        self.base = Path(self.base)
+        # --- stage directories
+        self.dump = self.base / "dump"
+        self.parsed = self.base / "parsed"
+        self.graph = self.base / "graph"
+        self.subsets = self.graph / "subsets"
+        self.community = self.base / "community"
+        self.community_full = self.community / "full"
+        self.final = self.base / "final"
+        self.layout = self.base / "layout"
+        self.spatial = self.base / "spatial"
+        self.tiles = self.spatial / "tiles"
+        # --- frequently-used file paths
+        self.meta = self.parsed / "meta.json"
+        self.articles = self.parsed / "articles.parquet"
+        self.article_ids = self.parsed / "article_ids.npy"
+        self.article_hashes = self.parsed / "article_hashes_sorted_by_id.npy"
+        self.edges_bin = self.graph / "edges_ns0.bin"
+        self.edges_ckpt = self.graph / "edges_checkpoint.json"
+        self.indeg = self.graph / "indeg.npy"
+        self.outdeg = self.graph / "outdeg.npy"
+        self.full_stats = self.graph / "full_stats.json"
 
-    @property
-    def article_ids(self) -> str:
-        return os.path.join(self.parsed, "article_ids.npy")
+    # --- creation ----------------------------------------------------------
+    @staticmethod
+    def ensure(path) -> Path:
+        """Create `path` (and parents) if missing and return it."""
+        p = Path(path)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
 
-    @property
-    def article_hashes(self) -> str:
-        return os.path.join(self.parsed, "article_hashes_sorted_by_id.npy")
+    def ensure_core(self) -> "Dirs":
+        for d in (self.base, self.dump, self.parsed, self.graph,
+                  self.subsets, self.community):
+            d.mkdir(parents=True, exist_ok=True)
+        return self
 
-    @property
-    def ns0_hashes(self) -> str:
-        return os.path.join(self.parsed, "ns0_all_hashes.npz")
-
-    @property
-    def lt_hash(self) -> str:
-        return os.path.join(self.parsed, "lt_hash_ns0.npy")
-
-    @property
-    def rd_map(self) -> str:
-        return os.path.join(self.parsed, "rd_map.npz")
-
-    # ---- graph/ (full ns0 graph + subsets) ----
-    @property
-    def edges_bin(self) -> str:
-        return os.path.join(self.graph, "edges_ns0.bin")
-
-    @property
-    def edges_ckpt(self) -> str:
-        return os.path.join(self.graph, "edges_checkpoint.json")
-
-    @property
-    def indeg(self) -> str:
-        return os.path.join(self.graph, "indeg.npy")
-
-    @property
-    def outdeg(self) -> str:
-        return os.path.join(self.graph, "outdeg.npy")
-
-    @property
-    def full_stats(self) -> str:
-        return os.path.join(self.graph, "full_stats.json")
-
-    # ---- helpers ----
-    def dump_file(self, name: str) -> str:
-        return os.path.join(self.dump, name)
+    # --- derived names -----------------------------------------------------
+    def dump_file(self, local_name: str) -> Path:
+        """Path of a dump file by local name (see wu.dumpio.FILES for keys)."""
+        return self.dump / local_name
 
     def subset(self, name: str) -> str:
-        return os.path.join(self.subsets, name)
+        """Per-subset cut directory under graph/subsets/ (str for os.path use)."""
+        return str(self.subsets / name)
 
     def community_run(self, name: str) -> str:
-        return os.path.join(self.community, name)
+        """Community-detection run directory under community/ (str)."""
+        return str(self.community / name)
 
-    def ensure(self, *dirs: str):
-        for d in dirs:
-            os.makedirs(d, exist_ok=True)
+    def layout_run(self, run: str | None = None) -> Path:
+        """Return data/layout/<run>, defaulting to ACTIVE_LAYOUT_RUN.
 
-    def ensure_core(self):
-        self.ensure(self.parsed, self.graph)
+        The run name must be a single path segment: separators are rejected so
+        a typo cannot escape the layout tree.
+        """
+        name = ACTIVE_LAYOUT_RUN if run is None else run
+        if (not isinstance(name, str) or not name or name in (".", "..")
+                or "/" in name or "\\" in name or Path(name).is_absolute()):
+            raise ValueError(f"invalid layout run name: {name!r}")
+        return self.layout / name

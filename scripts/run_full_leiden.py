@@ -71,7 +71,7 @@ def _res_tag(res: float) -> str:
 
 
 def _full_dir(dirs: Dirs) -> str:
-    d = os.path.join(dirs.community, "full")
+    d = str(dirs.community_full)
     os.makedirs(d, exist_ok=True)
     return d
 

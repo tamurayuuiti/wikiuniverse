@@ -3,10 +3,11 @@ change (e.g. --z-squash / --r-spacing). Avoids the ~1h layout_local re-run:
 each galaxy's article cloud is translated to the new center and scaled by the
 new/old radius ratio (internal shape preserved).
 
-Usage:
-  python scripts/layout_global.py --base data --macro-dim 3 --out-sub canon2
-  python scripts/recompose_articles.py --base data --from-sub canon --to-sub canon2
-  python scripts/export_viewer_tiles.py --base data --layout-sub canon2
+Usage (run names follow the <YYYYMMDD>_<slug> convention; see wu/paths.py):
+  python scripts/layout_global.py --base data --macro-dim 3 --run 20260928_newglobal
+  python scripts/recompose_articles.py --base data \
+      --from-run 20260926_baseline --to-run 20260928_newglobal
+  python scripts/export_viewer_tiles.py --base data --run 20260928_newglobal
 """
 from __future__ import annotations
 
@@ -25,16 +26,18 @@ from wu.paths import Dirs  # noqa: E402
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="data")
-    ap.add_argument("--from-sub", required=True)
-    ap.add_argument("--to-sub", required=True)
+    ap.add_argument("--from-run", required=True,
+                    help="source layout run (provides the article positions)")
+    ap.add_argument("--to-run", required=True,
+                    help="target layout run (provides the new galaxy centers/radii)")
     a = ap.parse_args()
     dirs = Dirs(a.base)
     t0 = time.time()
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    lo = os.path.join(dirs.base, "layout", a.from_sub)
-    ln = os.path.join(dirs.base, "layout", a.to_sub)
+    lo = str(dirs.layout_run(a.from_run))
+    ln = str(dirs.layout_run(a.to_run))
     go = pq.read_table(os.path.join(lo, "galaxy_positions.parquet")).to_pydict()
     gn = pq.read_table(os.path.join(ln, "galaxy_positions.parquet")).to_pydict()
     co = np.stack([go["x"], go["y"], go["z"]], axis=1)
@@ -56,7 +59,7 @@ def main():
         "y": pa.array(P[:, 1].astype(np.float32)),
         "z": pa.array(P[:, 2].astype(np.float32)),
     }), os.path.join(ln, "article_positions.parquet"), compression="zstd")
-    print(f"[recompose] {len(P):,} articles {a.from_sub} -> {a.to_sub} "
+    print(f"[recompose] {len(P):,} articles {a.from_run} -> {a.to_run} "
           f"({time.time()-t0:.0f}s)")
 
 

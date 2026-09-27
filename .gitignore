@@ -1,17 +1,3 @@
-# =============================================================================
-# wikiuniverse .gitignore
-#
-# 方針:
-#   Git が追うもの   = コード(wu/ scripts/ tests/)・文書・notebooks・
-#                      curated レポート(results/)・PROVENANCE.json
-#   Git が追わないもの = data/ 以下の全生成物(dump/parsed/graph/community、
-#                      将来の layout/spatial/final も含む)と環境・キャッシュ
-#
-# 大きな run 成果物(全グラフのコミュニティ割当など)は results/ ではなく
-# data/community/ に置く運用(→ 自動的に Git 対象外)。results/ には
-# 共有したいレポート(report.md / metrics.json / プロット)だけを置く。
-# =============================================================================
-
 # ---- 生成データ(工程別データディレクトリ、丸ごと対象外) ----------------------
 /data/
 
@@ -28,45 +14,18 @@
 *.sqlite
 *.db
 
-# ---- Node.js / React 依存関係・ビルド生成物 ----------------------------------
+# ---- Node / ビューア -----------------------------------------------------------
 node_modules/
-.pnpm-store/
-.yarn/cache/
-.yarn/unplugged/
-.yarn/build-state.yml
-.pnp
-.pnp.js
+viewer/dist/
+*.tsbuildinfo
 
-# ビルド出力 (Vite, Next.js, CRA, Webpack 等)
-# ※ build/ dist/ は Python セクションにも定義済み
-out/
-.next/
-.nuxt/
-.astro/
-.svelte-kit/
-.vercel/
-
-# React / JS ツール系キャッシュ・ログ
-.eslintcache
-.stylelintcache
-.turbo/
-.parcel-cache/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# ---- Python 仮想環境・環境変数 ------------------------------------------------
+# ---- Python 仮想環境 ----------------------------------------------------------
 .venv/
 venv/
 env/
 ENV/
 .env
 .env.*
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
 
 # ---- Python 生成物・キャッシュ -------------------------------------------------
 __pycache__/
@@ -89,7 +48,6 @@ wheels/
 .nox/
 .coverage
 .coverage.*
-coverage/
 coverage.xml
 htmlcov/
 
@@ -117,15 +75,6 @@ tmp/
 .tmp/
 *.tmp
 
-# ---- 個人用ローカルフォルダ(リポジトリ直下、追跡しない) -------------------------
+# ---- 個人用ローカルフォルダ -------------------------
 /notes/
 /archive/
-
-# =============================================================================
-# オプション(必要になったらコメント解除)
-# =============================================================================
-# results/ からノード単位の割当データだけ除外してリポジトリを軽くする場合:
-# /results/*/communities.parquet
-#
-# results/ 全体を追跡しない場合(レポートは data/community/ 側で管理する運用):
-# /results/

@@ -79,8 +79,8 @@ def main():
     ap.add_argument("--top-pairs", type=int, default=30000)
     a = ap.parse_args()
     dirs = Dirs(a.base)
-    full = os.path.join(dirs.community, "full")
-    out_dir = os.path.join(dirs.base, "final")
+    full = str(dirs.community_full)
+    out_dir = str(dirs.final)
     os.makedirs(out_dir, exist_ok=True)
 
     import pyarrow as pa

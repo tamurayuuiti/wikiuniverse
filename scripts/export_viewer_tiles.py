@@ -15,7 +15,9 @@ so the universe+galaxy views need a single fetch; article data streams per tile.
 
 Usage:
   python scripts/export_viewer_tiles.py --base data [--galaxy-tag res1_sub]
-      [--layout-sub canon] [--cross-cap 4]
+      [--run <layout run>] [--cross-cap 8]
+(--run default = wu.paths.ACTIVE_LAYOUT_RUN. data/spatial/ is the published,
+run-name-independent viewer contract; the source run is recorded in bootstrap.json.)
 """
 from __future__ import annotations
 
@@ -30,7 +32,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wu.dumpio import write_json  # noqa: E402
-from wu.paths import Dirs  # noqa: E402
+from wu.paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 from wu.stats import load_edges_mmap, load_titles  # noqa: E402
 
 
@@ -38,24 +40,26 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="data")
     ap.add_argument("--galaxy-tag", default="res1_sub")
-    ap.add_argument("--layout-sub", default="canon")
+    ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
+                    help="source layout run under data/layout "
+                         "(default: wu.paths.ACTIVE_LAYOUT_RUN)")
     ap.add_argument("--cross-cap", type=int, default=8)
     a = ap.parse_args()
     dirs = Dirs(a.base)
     t0 = time.time()
-    lay = os.path.join(dirs.base, "layout", a.layout_sub)
-    spatial = os.path.join(dirs.base, "spatial")
-    tiles = os.path.join(spatial, "tiles")
+    lay = str(dirs.layout_run(a.run))
+    spatial = str(dirs.spatial)
+    tiles = str(dirs.tiles)
     os.makedirs(tiles, exist_ok=True)
 
     import pyarrow.parquet as pq
 
-    memb = np.load(os.path.join(dirs.community, "full", f"membership_{a.galaxy_tag}.npy"))
+    memb = np.load(dirs.community_full / f"membership_{a.galaxy_tag}.npy")
     n = len(memb)
     G = int(memb.max()) + 1
     gpos = pq.read_table(os.path.join(lay, "galaxy_positions.parquet")).to_pydict()
     mpos = pq.read_table(os.path.join(lay, "macro_positions.parquet")).to_pydict()
-    cat = pq.read_table(os.path.join(dirs.base, "final", "galaxies.parquet")).to_pydict()
+    cat = pq.read_table(dirs.final / "galaxies.parquet").to_pydict()
     apq = pq.read_table(os.path.join(lay, "article_positions.parquet"))
     P = np.stack([apq.column("x").to_numpy(), apq.column("y").to_numpy(),
                   apq.column("z").to_numpy()], axis=1).astype(np.float32)
@@ -160,7 +164,8 @@ def main():
             print(f"  tiles pass2 {i + len(blk):,}/{len(E):,} ({time.time()-t0:.0f}s)", flush=True)
     assert np.array_equal(e_fill, e_off[1:]) and np.array_equal(x_fill, x_off[1:])
 
-    # ---- write tiles
+    # ---- write tiles (with per-galaxy index validation; 2026-09-27 NaN 事象の防御)
+    sizes = np.bincount(memb, minlength=G)
     cls_code = {"galaxy": 0, "medium": 1, "dust": 2}
     for g in range(G):
         members = order[starts[g] : ends[g]]
@@ -170,6 +175,17 @@ def main():
         pos_g = P[members]
         eg = e_buf[e_off[g] : e_off[g + 1]]
         xg = x_buf[x_off[g] : x_off[g + 1]]
+        if ng:
+            bad_e = (eg[:, 0] >= ng) | (eg[:, 1] >= ng)
+            bad_x0 = xg[:, 0] >= ng
+            bad_x2 = xg[:, 2] >= sizes[np.minimum(xg[:, 1], G - 1)]
+            if bad_e.any() or bad_x0.any() or bad_x2.any():
+                print(f"[tiles][warn] galaxy {g}: bad indices edges={int(bad_e.sum())} "
+                      f"cross_local={int(bad_x0.sum())} cross_remote={int(bad_x2.sum())} "
+                      f"(clamped at export; investigate local_idx path)")
+                eg = eg[~bad_e]
+                keep_x = ~(bad_x0 | bad_x2)
+                xg = xg[keep_x]
         hdr = np.array([ng, len(eg), len(xg)], dtype=np.uint32)
         with open(os.path.join(tiles, f"gal_{g:06d}.bin"), "wb") as f:
             f.write(hdr.tobytes())
@@ -181,11 +197,11 @@ def main():
     print(f"[tiles] wrote {G:,} tiles ({time.time()-t0:.0f}s)")
 
     # ---- bootstrap
-    mac = pq.read_table(os.path.join(dirs.base, "final", "macros.parquet")).to_pydict()
-    mpq = pq.read_table(os.path.join(dirs.base, "final", "macro_pairs.parquet")).to_pydict()
-    gpq = pq.read_table(os.path.join(dirs.base, "final", "galaxy_pairs_topK.parquet")).to_pydict()
+    mac = pq.read_table(dirs.final / "macros.parquet").to_pydict()
+    mpq = pq.read_table(dirs.final / "macro_pairs.parquet").to_pydict()
+    gpq = pq.read_table(dirs.final / "galaxy_pairs_topK.parquet").to_pydict()
     boot = {
-        "meta": {"galaxy_tag": a.galaxy_tag, "layout_sub": a.layout_sub,
+        "meta": {"galaxy_tag": a.galaxy_tag, "layout_run": a.run,
                  "n_articles": n, "n_galaxies": G,
                  "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                  "cross_cap": a.cross_cap},

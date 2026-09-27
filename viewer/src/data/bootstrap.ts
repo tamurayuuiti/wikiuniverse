@@ -9,7 +9,7 @@
 // 注意:
 // - gid は galaxies 配列の添字(生成側の規約)。
 // - hue はデータにないため黄金比ハッシュで決定論的に生成する。
-// - canon 配置では銀河アンカー z = マクロ z(dir_z=0)→ gz に利用。
+// - 現行グローバル配置では銀河アンカー z = マクロ z(dir_z=0)→ gz に利用。
 
 import type { BootstrapData, GalaxyMeta, RawBootstrap, TileIndex } from '@/types/catalog'
 

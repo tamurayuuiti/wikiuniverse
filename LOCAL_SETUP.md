@@ -1,35 +1,39 @@
-# ローカル環境セットアップ手順(ハンドオフ)
+# ローカル環境セットアップと運用手順
 
-作成: 2026-09-25 / 対象: jawiki グラフ分割 PoC(宇宙・銀河プロジェクト)
+対象: jawiki グラフ分割・可視化パイプライン(宇宙・銀河プロジェクト)。
+概要とコマンドの全体像は README.md、結果の正典は results/SUMMARY.md。
 
-## 0. なぜローカルか
+## 0. なぜローカル実行か
 
-サンドボックス(チャット側ワークスペース)は **RAM 1GB / 2 vCPU** の制約があり、以下が実行できません。
+チャット側サンドボックスは **RAM 1GB / 2 vCPU** 相当の制約があり、役割を分ける:
 
 | 処理 | 必要 RAM(実測ベース) | サンドボックス | ローカル 32GB |
 |---|---|---|---|
-| 全グラフ構築(142M エッジ) | ~1GB(ストリーミング) | ✅(済) | ✅ 数分 |
-| 100k サブセット Leiden | ~600MB | ✅(済) | ✅ |
-| 150k+ サブセット / 複数並列 | 1–4GB | ❌ | ✅ |
-| **全 1.45M グラフ一括 Leiden** | **~12–16GB**(igraph ~58B/edge) | ❌ | ✅(本命) |
-| 全グラフ 2 段階分割(粗分割→銀河内精密) | 8–16GB | ❌ | ✅ |
+| サブセット抽出・解析(〜100k) | ~600MB | ✅ | ✅ |
+| 小規模レイアウト・テスト・レポート分析 | <1GB | ✅ | ✅ |
+| **全 1.45M グラフ一括 Leiden** | **~12–16GB**(igraph ~58B/edge) | ❌ | ✅ |
+| 全グラフ 2 段階分割 + 銀河カタログ + 座標 + 出版 | 8–16GB | ❌ | ✅ |
 
-**役割分担の推奨**: コード改良・小実験・レポート分析 = どちらでも可 / 大規模計算・本番データ生成 = ローカル。
+**役割分担**: コード改良・小実験・レポート分析 = どちらでも可 / 大規模計算・本番データ生成 = ローカル。
 
-## 1. ローカルに反映するファイル
+## 1. リポジトリの内容とデータ配置
 
-`wikiuniverse_handoff.zip`(またはワークスペースの `wikiuniverse/` ディレクトリ)を任意の場所に展開してください。**データ(ダンプ・中間生成物)は含まれていません** — §3 で取得します(合計 ~2.5GB 生成)。
+Git リポジトリ(または同期したワークスペース写し)を任意の場所に置く。**データ
+(ダンプ・中間生成物)はリポジトリに含まれない** — §3 で取得する(SQL 4 種 ~1.13GB、
+本文リンク用 XML 4.7GB、カテゴリ 176MB)。
 
 ```
 wikiuniverse/
-├── README.md               # 全体像・コマンド・指標定義・スケーリングメモ
+├── README.md               # 全体像・全工程コマンド・指標定義・コミット規約
 ├── LOCAL_SETUP.md          # 本書
-├── PROVENANCE.json         # 使用ダンプの SHA-256(完全性検証用)
-├── wu/                     # 本体パッケージ(純 Python、~2,500 行)
-│   ├── __init__.py
-│   ├── paths.py            #   ★ データレイアウトの単一の真実(Dirs クラス)
+├── PROVENANCE.json         # 基準ダンプ(2026-09-02 版)の SHA-256(完全性検証用)
+├── requirements.txt        # Python 依存(検証バージョン準拠)
+├── wu/                     # 本体パッケージ(純 Python)
+│   ├── paths.py            #   ★ データ配置の単一の真実源(Dirs + ACTIVE_LAYOUT_RUN)
 │   ├── dumpio.py           #   ダウンロード(resume/並列)・gz ストリーム
 │   ├── sqlparse.py         #   page/linktarget/redirect 解析 → ハッシュ表(parsed/)
+│   ├── xmlparse.py         #   pages-articles XML → 本文リンク抽出(body-edges)
+│   ├── catparse.py         #   categorylinks → 記事×カテゴリ対(categories)
 │   ├── buildedges.py       #   pagelinks → 解決済みエッジ(チェックポイント resume 可)
 │   ├── stats.py            #   全グラフ次数統計・ハブ top
 │   ├── subsets.py          #   BFS / ID窓 サブセット抽出(メガハブ除外付き)
@@ -37,57 +41,67 @@ wikiuniverse/
 │   ├── pipeline.py         #   エンドツーエンド解析(sweep→一次選択→hub 処理→レポート)
 │   ├── report.py           #   プロット + Markdown レポート
 │   └── cli.py              #   サブコマンド(python -m wu.cli ...)
-├── scripts/                # 補助(show_stats / summarize_runs / make_notebook 等)
-├── tests/test_synthetic.py # 合成データ自己テスト(ネットワーク不要・全経路検証)
-├── notebooks/poc_colab.ipynb  # Colab 版(自己完結 25 セル)
-└── results/                # 第1回検証の全成果物(~23MB)
-    ├── SUMMARY.md          # ★ 評価レポート本体(暫定判定 B)
-    ├── runs_table.txt      # 全 run 比較表
-    └── bfs_geo_100k_raw/ 他 16 ディレクトリ
-        ├── report.md       #   日本語レポート
-        ├── metrics.json    #   全数値(再解析・比較用)
-        ├── communities.parquet  # ノード→コミュニティ割当
-        └── *.png           #   サイズ分布 / out_ratio / conductance / 独立性マップ / 階層
+├── scripts/                # フルグラフ系 9 本(run_full_leiden / layout_* / catalog / export 他)
+├── tests/                  # 合成データ自己テスト 6 本(スクリプト式・synth_data/ は実行時再生成)
+├── viewer/                 # React+TS+three ビューア(v6)
+├── notebooks/poc_colab.ipynb  # Colab 実行版 PoC(閲覧用)
+└── results/SUMMARY.md      # ★ 評価レポート(最新状態・テーマ別)
 ```
 
-### ローカルで生成されるデータ(`--base data` 既定、工程別分離 — 方針 2026-09-25)
+### ローカルで生成されるデータ(`--base data` 既定、工程別分離、すべて Git 追跡対象外)
 
 ```
 data/
-├── dump/        # 元の Wikipedia ダンプ 4 ファイル(~1.13GB)
-├── parsed/      # 中間データ: articles.parquet / article_ids.npy / ns0_all_hashes.npz /
-│                #   lt_hash_ns0.npy / rd_map.npz / meta.json(~190MB)
-├── graph/       # edges_ns0.bin(1.14GB)/ indeg.npy / outdeg.npy / full_stats.json /
-│   └── subsets/ #   サブセット別 nodes.parquet, edges_internal.npy, node_stats.npz
-└── community/   # analyze の既定出力先(metrics.json, communities.parquet, report.md, *.png)
-
-# 将来の予約名(必要になった時点で追加): data/layout/, data/spatial/, data/final/
+├── dump/        # [原始] Wikipedia ダンプ(SQL 5 ファイル + pages-articles XML。再取得可)
+├── parsed/      # [中間] articles.parquet / article_ids.npy / hash 表 / rd_map.npz / meta.json
+├── graph/       # [中間] edges_ns0.bin / edges_undirected_unique.bin / edges_body_* /
+│   └── subsets/ #   次数・統計・catlinks 系 / サブセット切り身
+├── community/   # [成果] Leiden 出力(full/ = フルグラフ run。tag 規約は下記)
+├── final/       # [成果=契約] 銀河/マクロ台帳(galaxies / macros / pairs / catalog_meta)
+├── layout/      # [成果] 座標 run 別ディレクトリ(命名 <YYYYMMDD>_<slug>、§6)
+│   └── <run>/   #   macro/galaxy/article_positions + layout_meta + preview + shards(キャッシュ)
+└── spatial/     # [成果=配信] ビューア公開面(bootstrap.json + tiles/)。URL は run 名と無縁
 ```
 
-パスを触る改修は `wu/paths.py` の `Dirs` クラスに集約してください(ハードコード禁止の運用)。
+- パスを触る改修は `wu/paths.py` の `Dirs` クラスと `ACTIVE_LAYOUT_RUN` に集約する
+  (ハードコード禁止の運用)。ファイル別の生成者/消費者/削除可否の完全版は
+  paths.py の docstring が正典。
+- community の tag 規約: `res<R>`=マクロ一括 / `res<R>_sub`=2 段階(銀河)/
+  `_body`=本文リンクグラフ / `_B40` 等=剪定グラフ系。
+- `data/` の中間生成物(parsed/graph/shards/チェックポイント)は上流から再生成できる。
+  成果物(community/final/layout の positions/spatial)は原則保持。
 
 ## 2. 環境要件
 
-- **Python 3.10–3.12**(検証: 3.11.2)
-- パッケージ(検証バージョン): `numpy 2.4.6 / scipy 1.17.1 / pandas 3.0.6 / pyarrow / matplotlib / python-igraph 1.0.0 / leidenalg 0.12.0`
+- **Python 3.10–3.13**(検証: 3.11.2 / 3.13.11)
+- 依存: `pip install -r requirements.txt`
+  (検証バージョン: numpy 2.4.6 / scipy 1.17.1 / pandas 3.0.6 / pyarrow / matplotlib / python-igraph 1.0.0 / leidenalg 0.12.0)
+- **ディスク**: フルパイプラインで ~15GB 空き(dump 1.13GB + XML 4.7GB + edges 1.14GB +
+  本文 edges 0.6GB + parsed/community/final/layout/spatial)
+- **RAM**: 16GB でサブセット実験まで / **32GB 推奨**(全グラフ Leiden 用、実測 RSS 7–9GB)
+- **OS**: Windows/macOS/Linux いずれも可。コードはクロスプラットフォーム(メモリ返却最適化
+  `malloc_trim` は Linux 専用だが不在時は自動無効化)。Windows でメモリが気になる場合は WSL2 推奨。
+- ビューアは Node.js(npm)+ 静的配信用の http サーバ(Python 同梱のもので可)。
+
+### 動作確認(ネット不要・数分)
+
+テストはスクリプト式(pytest ではない)。6 本を順に実行し、それぞれ末尾の PASS 表示を確認する:
 
 ```bash
-pip install numpy scipy pandas pyarrow matplotlib igraph leidenalg
+python tests/test_synthetic.py    # パイプライン E2E(合成ダンプ)
+python tests/test_paths.py        # Dirs / run 命名規約
+python tests/test_bodylinks.py    # 本文リンク抽出(合成 XML)
+python tests/test_catlinks.py     # カテゴリ解析(合成 SQL)
+python tests/test_subdivide.py    # 2 段階分割の回帰(構造アサート)
+python tests/test_catalog.py      # カタログ→レイアウト→タイル出版の E2E(合成)
 ```
 
-- **ディスク**: ~8GB 空き(ダンプ 1.13GB + parsed/ ~0.2GB + graph/edges_ns0.bin 1.14GB + サブセット/解析出力)
-- **RAM**: 16GB でサブセット実験まで / **32GB 推奨**(全グラフ Leiden 用)
-- **OS**: Windows/macOS/Linux いずれも可。コードはクロスプラットフォーム(メモリ返却最適化 `malloc_trim` は Linux 専用だが不在時は自動無効化)。Windows でメモリが気になる場合は WSL2 推奨。
-- 動作確認: 展開ディレクトリで
+`tests/synth_data/` は実行時に再生成される作業用フィクスチャ(削除自由)。
 
-```bash
-python -m pytest tests/ -q 2>/dev/null || python tests/test_synthetic.py
-# 末尾に "*** ALL SYNTHETIC TESTS PASSED ***" が出れば OK(ネット不要・数秒)
-```
+## 3. データセットの取得
 
-## 3. データセットの取得(ローカルで再ダウンロードが正解)
-
-サンドボックスの `.cache/` にもダンプ実体はありますが、(a) 永続スナップショット対象外・(b) 合計 1.1GB+edges 1.14GB で転送非現実的、のため **Wikimedia 公式から直接取得してください**(同じファイルです)。家庭回線なら数分で終わる規模です。
+ダンプは大容量のため転送ではなく **Wikimedia 公式から直接取得する**(PROVENANCE.json と
+同一ファイル)。家庭回線なら SQL 4 種で数分の規模。
 
 ### 方法 A: 同梱ダウンローダ(resume・並列対応、推奨)
 
@@ -108,20 +122,28 @@ python -m wu.cli --base data download --files page,redirect,linktarget,pagelinks
 | jawiki-latest-linktarget.sql.gz | 140,849,240 B |
 | jawiki-latest-pagelinks.sql.gz | 800,089,153 B |
 
+### 追加ファイル(本文リンク・カテゴリ工程用)
+
+| ファイル | サイズ | 使う工程 |
+|---|---|---|
+| jawiki-latest-pages-articles.xml.bz2 | ~4.7GB | `body-edges`(本文リンクグラフ) |
+| jawiki-latest-categorylinks.sql.gz | ~176MB | `categories`(カテゴリ純度・銀河命名) |
+
+いずれも `download --files pages-articles` / `--files categorylinks` で取得できる。
+
 ### 完全性検証(任意だが推奨)
 
-`PROVENANCE.json` にサンドボックスが実際に解析した 4 ファイルの SHA-256 を記録してあります。
+`PROVENANCE.json` に基準ダンプ(SQL 4 ファイル)の SHA-256 を記録してある。
 
 ```bash
 sha256sum data/dump/*.gz   # Windows: certutil -hashfile <file> SHA256
 ```
 
-- **一致** → 第1回検証と完全に同一データ。下の検証値も一致するはずです。
-- **不一致(latest が更新されていた場合)** → それでも問題ありません。`parse` の `--dump-date` を新しい日付にし、§4 の検証値が数%程度ずれることを許容してください(構造結論は変わりません)。
+- **一致** → §4 の検証値が完全一致するはず。
+- **不一致(latest が更新されていた場合)** → それでも問題ない。`parse` の `--dump-date` を
+  新しい日付にし、§4 の検証値が数%程度ずれることを許容する(構造結論は変わらない)。
 
-> 次のフェーズでカテゴリ基準サブセットをやる場合は `jawiki-latest-categorylinks.sql.gz`(176MB)も同様に取得できます(パーサは未実装 — 次ターンで追加予定)。
-
-## 4. グラフ構築と検証(ローカルでの初回実行)
+## 4. グラフ構築と検証(初回実行)
 
 ```bash
 cd wikiuniverse
@@ -149,41 +171,85 @@ python -m wu.cli --base data stats
 | `data/graph/edges_ns0.bin` サイズ | 1,139,569,272 B |
 | 平均次数 / 最大次数 | 93.9 / 421,728(日本) |
 
-`edges` は **チェックポイント付き**(`data/graph/edges_checkpoint.json`)なので、中断したら同じコマンドを再実行すれば続きから進みます。
+`edges` は **チェックポイント付き**(`data/graph/edges_checkpoint.json`)なので、中断したら
+同じコマンドを再実行すれば続きから進む。
 
-## 5. 第1回検証の再現(任意)
+## 5. サブセット検証の再現(小規模・任意)
+
+README「使い方(サブセット解析)」の通り `subset-bfs` → `analyze`。代表例(地理系 100k):
 
 ```bash
-# 100k 地理サブセット( extraction ~1分)
 python -m wu.cli --base data subset-bfs \
   --seeds "東京都,大阪府,京都府,北海道,福岡県,愛知県,宮城県,広島県,新潟県,長野県,日本の地理,市町村" \
   --max-nodes 100000 --cap 60 --hops 4 --max-in-degree 10000 --name bfs_geo_100k
 
-# 解析(~2分。ローカルなら resolutions を増やしても軽い)
 python -m wu.cli --base data analyze --subset bfs_geo_100k \
-  --out-dir results/bfs_geo_100k_raw --resolutions 0.5,1.0,2.0 --engine igraph
+  --resolutions 0.5,1.0,2.0 --engine igraph
+# 出力先: data/community/bfs_geo_100k/(--out-dir で変更可。場所はどこでもよい)
 ```
 
 期待される概略値: `res=0.5: C=11 largest≈0.30 crossF≈0.24 mod≈0.65`。
-Leiden には乱択性があるため **membership の完全一致は保証されません**(seed=42 固定・同一バージョンなら通常一致しますが、igraph のバージョン差で変わり得ます)。指標が ±数% 以内に収まれば再現成功とみなしてください。
+Leiden には乱択性があるため **membership の完全一致は保証されない**(seed=42 固定・
+同一バージョンなら通常一致するが、igraph のバージョン差で変わり得る)。指標が
+±数% 以内に収まれば再現成功とみなす。
 
-## 6. ローカル移行後に最初にやること(次フェーズ)
+## 6. フルパイプライン → 座標出版(run 運用)
 
-1. **全グラフ一括 Leiden** — ✅ 完了(2026-09-26、ユーザーローカル)。結果は results/SUMMARY.md フェーズ 2/2b/2c 参照
-2. **2 段階分割(subdivide)** — ✅ 完了。銀河 1,535 個(中央値 279)
-3. **E1/E2 剪定実験** — ✅ 完了。銀河 oR ≈0.72 は剪定に頑健 → E3 が決定的
-4. **E3: 本文リンクグラフ** — ✅ 実装完了(`wu/xmlparse.py` + `body-edges` + 汎用 dedup + compare スクリプト)。フルランは README「本文リンクグラフ」節のコマンドで(ディスク +4.7GB、所要 ~20-60 分)
-5. **categorylinks パーサ追加**(カテゴリ基準サブセット)— 未実装
-6. **境界情報フォーマット設計(§12.2)と銀河バッチレイアウト試作** — E3 結果を受けて設計
+§4 のグラフ構築が済んだら、以下が本番データの一本道(各コマンドの詳細と期待値は
+README の該当セクション、実測結果は results/SUMMARY.md):
+
+```bash
+# 1) コミュニティ検出(マクロ → 銀河の 2 段階)
+python scripts/run_full_leiden.py --base data dedup
+python scripts/run_full_leiden.py --base data detect --resolutions 1.0
+python scripts/run_full_leiden.py --base data subdivide --resolution 1.0 --max-galaxy 10000
+python scripts/run_full_leiden.py --base data metrics --tag res1_sub
+python scripts/run_full_leiden.py --base data cluster --tag res1_sub
+python scripts/run_full_leiden.py --base data export  --tag res1_sub
+
+# 2) (任意) 本文リンク・カテゴリ: README「本文リンクグラフ」「カテゴリ整合性」
+
+# 3) 銀河カタログ(data/final/ = データ契約)
+python scripts/build_galaxy_catalog.py --base data --galaxy-tag res1_sub --macro-tag res1
+
+# 4) 座標 run の生成(① マクロ+銀河 → ② 銀河内記事 → マージ)
+python scripts/layout_global.py      --base data --run <RUN> --macro-dim 3
+python scripts/run_local_parallel.py --base data --run <RUN> --jobs 8   # フルラン ~63分
+
+# 5) 出版(spatial/ へ。ビューアは常にここを読む)
+python scripts/export_viewer_tiles.py --base data --run <RUN>
+
+# 6) 配信とビューア
+python -m http.server 8000        # リポジトリルート(別ターミナル)
+cd viewer && npm install && npm run dev    # http://localhost:5173
+```
+
+### run の命名と採用
+
+- run 名 = `data/layout/` 直下のディレクトリ名。**規約: `<YYYYMMDD>_<slug>`**
+  (ASCII 小文字。日付は生成日、slug は「その run が何か」= 役割・主要パラメータ)。
+  正確なパラメータと品質指標は各 run の `layout_meta.json` が正典。
+- **正典ポインタ**: `wu/paths.py` の `ACTIVE_LAYOUT_RUN`。全レイアウト系スクリプト
+  (layout_global / layout_local / run_local_parallel / export_viewer_tiles)の `--run`
+  既定値であり、「いま公開中の座標」を指す。
+- 新しい座標 run を**採用**する手順: 4)→5) を新 run 名で実行 →
+  `wu/paths.py` の `ACTIVE_LAYOUT_RUN` を新 run 名に更新してコミット。
+  比較実験は run を並べるだけでよい(上書き事故が起きない)。
+- 既存 run の記事座標を再利用する場合は 4) の run_local_parallel の代わりに
+  `python scripts/recompose_articles.py --base data --from-run <旧RUN> --to-run <新RUN>`。
+- `article_shards/` と `layout_local_checkpoint.json` はマージ完了後削除してよい(キャッシュ)。
+- 退役した旧 run は `data/layout/` の外(リポジトリ直下 `archive/` など、Git 管理外の
+  保管場所)へ移動すればよい。
 
 ## 7. トラブルシュート
 
 | 症状 | 対処 |
 |---|---|
-| **生成した .md/.json が VS Code で文字化け** | 2026-09-25 以前のコードは Windows 既定(cp932)で書き出していた。**修正済みファイルを同期後、`stats` や `analyze` を再実行して再生成**(または VS Code 右下の encoding →「Reopen with Encoding」→ Shift JIS →「Save with Encoding」→ UTF-8 で変換)。恒久保険として環境変数 `PYTHONUTF8=1` の設定も推奨 |
+| **生成した .md/.json が文字化け** | コードは UTF-8 明示書き込み。それでも化ける場合は環境変数 `PYTHONUTF8=1` を設定して再生成する(Windows 既定 cp932 への保険)。既存ファイルは VS Code 右下の encoding →「Reopen with Encoding」→ Shift JIS →「Save with Encoding」→ UTF-8 で変換可 |
 | download が途中で切れる | 同じコマンド再実行(Range resume 対応) |
 | `edges` がメモリ不足 | 元々 ~400MB ピーク設計。他アプリ終了。それでもダメなら `--chunk-bytes 8388608` |
 | analyze が OOM(巨大サブセット) | `--engine igraph` を使う(leidenalg は 2 倍消費)/ `--degree-budget 40 --degree-budget-mode smart` でレイアウト用グラフ化 |
 | pandas/pyarrow バージョン差エラー | `pip install -U pandas pyarrow`(pandas 2.x でも概ね動作、検証は 3.0.6) |
 | Windows で RSS が高止まり | `malloc_trim` 不在のため。WSL2 なら Linux と同挙動 |
 | 数値が検証値と微妙に違う | ダンプが更新されている可能性(§3 の SHA-256 確認) |
+| ビューアがデータを取得できない | リポジトリルートで `python -m http.server 8000` が起動しているか(vite proxy の転送先)。file:// 直オープンは CORS で不可 |

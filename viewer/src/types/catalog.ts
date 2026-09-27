@@ -23,7 +23,7 @@ export type RawPair = [number, number, number]
 export interface RawBootstrap {
   meta: {
     galaxy_tag: string
-    layout_sub: string
+    layout_run: string
     n_articles: number
     n_galaxies: number
     generated_at: string
@@ -93,7 +93,7 @@ export interface GalaxyMeta {
   z: number
   r: number
   hue: number
-  /** z 再構成用: アンカー z(=マクロ z、canon 配置の規約)。 */
+  /** z 再構成用: アンカー z(=マクロ z、グローバル配置の規約)。 */
   gz: number
 }
 

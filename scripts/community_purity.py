@@ -49,7 +49,7 @@ def main():
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    memb = np.load(os.path.join(dirs.community, "full", f"membership_{a.tag}.npy"))
+    memb = np.load(str(dirs.community_full / f"membership_{a.tag}.npy"))
     n = len(memb)
     C = int(memb.max()) + 1
     ac_path = os.path.join(dirs.graph, "article_categories.bin")
@@ -139,7 +139,7 @@ def main():
             top3s.append(" / ".join(f"{cat_titles[ku_f[s + j]]}"
                                     f"({cnt_f[s + j] / max(1, f_awc[c]):.2f})" for j in order))
 
-    out_pq = os.path.join(dirs.community, "full", f"purity_{a.tag}.parquet")
+    out_pq = str(dirs.community_full / f"purity_{a.tag}.parquet")
     pa_tbl = pa.table({
         "comm": pa.array(np.arange(C, dtype=np.int32)),
         "N_c": pa.array(n_c),
@@ -189,7 +189,7 @@ def main():
         "nameable_share_effective_comms": round(float(nameable.sum() / max(1, eff.sum())), 4),
         "name_threshold": a.name_th,
     }
-    write_json(os.path.join(dirs.community, "full", f"purity_{a.tag}.json"), agg)
+    write_json(str(dirs.community_full / f"purity_{a.tag}.json"), agg)
 
     print(json.dumps(agg, ensure_ascii=False, indent=1))
     order = np.argsort(-n_c)

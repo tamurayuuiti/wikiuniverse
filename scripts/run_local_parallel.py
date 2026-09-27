@@ -2,7 +2,7 @@
 (Windows-safe; each galaxy shard is independent = the \u00a712 batch model).
 
 Usage:
-  python scripts/run_local_parallel.py --base data --jobs 8 [--layout-sub canon]
+  python scripts/run_local_parallel.py --base data --jobs 8 [--run <layout run>]
 Finishes with a merge pass (layout_local --galaxies all).
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wu.dumpio import read_json  # noqa: E402
-from wu.paths import Dirs  # noqa: E402
+from wu.paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 
 
 def main():
@@ -25,11 +25,13 @@ def main():
     ap.add_argument("--base", default="data")
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--galaxy-tag", default="res1_sub")
-    ap.add_argument("--layout-sub", default="canon")
+    ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
+                    help="layout run name under data/layout "
+                         "(default: wu.paths.ACTIVE_LAYOUT_RUN)")
     a = ap.parse_args()
     dirs = Dirs(a.base)
-    lay = os.path.join(dirs.base, "layout", a.layout_sub)
-    memb_path = os.path.join(dirs.community, "full", f"membership_{a.galaxy_tag}.npy")
+    lay = str(dirs.layout_run(a.run))
+    memb_path = str(dirs.community_full / f"membership_{a.galaxy_tag}.npy")
     import numpy as np
     G = int(np.load(memb_path).max()) + 1
     ck = read_json(os.path.join(lay, "layout_local_checkpoint.json"), {}) or {}
@@ -47,7 +49,7 @@ def main():
             lo, hi = int(ch.min()), int(ch.max())
             cmd = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                    "layout_local.py"), "--base", a.base, "--galaxies", f"{lo}-{hi}",
-                   "--galaxy-tag", a.galaxy_tag, "--layout-sub", a.layout_sub]
+                   "--galaxy-tag", a.galaxy_tag, "--run", a.run]
             procs.append(subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                                           stderr=subprocess.PIPE))
             print(f"[parallel] spawned job {lo}-{hi}")
@@ -63,7 +65,7 @@ def main():
             sys.exit("some jobs failed; rerun to resume")
     subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                   "layout_local.py"), "--base", a.base, "--galaxies", "all",
-                    "--galaxy-tag", a.galaxy_tag, "--layout-sub", a.layout_sub], check=True)
+                    "--galaxy-tag", a.galaxy_tag, "--run", a.run], check=True)
 
 
 if __name__ == "__main__":

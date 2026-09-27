@@ -16,15 +16,16 @@ full 3D inside each galaxy ball.
   4. Intra-macro xy disk relaxation + radial clamp inside macro disk.
   5. Dust galaxies (n=1) get positions on a far shell (cosmic dust ring).
 
-Outputs (data/layout/):
+Outputs (data/layout/<run>/ - run name via --run, default wu.paths.ACTIVE_LAYOUT_RUN):
   galaxy_positions.parquet  galaxy_id, macro_id, x, y, z, radius, display_class, n_articles
   macro_positions.parquet   macro_id, x, y, z, radius, n_articles, n_galaxies
-  layout_meta.json          params/seed/timings
+  layout_meta.json          params/seed/timings + run name
   preview.png               2D projection (xy)
+  preview_<mode>.html       interactive three.js preview (z-compress slider)
 
 Usage:
-  python scripts/layout_global.py --base data [--dim 3] [--pack 0.6] [--seed 42]
-      [--pairs catalog|npz] [--galaxy-tag res1_sub]
+  python scripts/layout_global.py --base data --run 20260926_baseline
+      [--dim 3] [--pack 0.6] [--seed 42] [--pairs catalog|npz] [--galaxy-tag res1_sub]
 """
 from __future__ import annotations
 
@@ -41,7 +42,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wu.dumpio import write_json  # noqa: E402
-from wu.paths import Dirs  # noqa: E402
+from wu.paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 
 R_TOTAL = 1000.0  # canvas scale: disk areas sum to pi*R_TOTAL^2
 
@@ -289,8 +290,9 @@ def main():
     ap.add_argument("--macro-z-squash", type=float, default=1.0,
                     help="with --macro-dim 3: squash macro sphere z (hybrid ellipsoid "
                          "universe, e.g. 0.5)")
-    ap.add_argument("--out-sub", default="",
-                    help="output subdir under data/layout (e.g. 25d / 3d / hyb)")
+    ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
+                    help="layout run name = output subdir under data/layout "
+                         "(default: wu.paths.ACTIVE_LAYOUT_RUN)")
     ap.add_argument("--views", type=int, default=24)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--pairs", default="catalog", choices=["catalog", "npz"],
@@ -298,9 +300,8 @@ def main():
     ap.add_argument("--galaxy-tag", default="res1_sub")
     a = ap.parse_args()
     dirs = Dirs(a.base)
-    final = os.path.join(dirs.base, "final")
-    out_dir = os.path.join(dirs.base, "layout", a.out_sub) if a.out_sub \
-        else os.path.join(dirs.base, "layout")
+    final = str(dirs.final)
+    out_dir = str(dirs.layout_run(a.run))
     os.makedirs(out_dir, exist_ok=True)
     t0 = time.time()
 
@@ -373,7 +374,7 @@ def main():
 
     # ---------- 2. galaxy pairs ----------
     if a.pairs == "npz":
-        pz = np.load(os.path.join(dirs.community, "full", f"pairs_{a.galaxy_tag}.npz"))
+        pz = np.load(dirs.community_full / f"pairs_{a.galaxy_tag}.npz")
         gp_a, gp_b, gp_w = pz["a"].astype(np.int64), pz["b"].astype(np.int64), pz["w"].astype(np.float64)
     else:
         gpq = pq.read_table(os.path.join(final, "galaxy_pairs_topK.parquet")).to_pydict()
@@ -475,7 +476,7 @@ def main():
         "is_dust": pa.array(dust_m),
     }), os.path.join(out_dir, "macro_positions.parquet"), compression="zstd")
 
-    meta = {"generated_at": _now(), "dim": a.dim, "pack": a.pack,
+    meta = {"generated_at": _now(), "run": a.run, "dim": a.dim, "pack": a.pack,
             "z_squash": a.z_squash, "seed": a.seed,
             "pairs_source": a.pairs, "galaxy_tag": a.galaxy_tag,
             "n_galaxies": G, "n_macros_effective": int(len(eff_m)),
