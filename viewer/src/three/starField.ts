@@ -19,10 +19,13 @@
 //   加算は星点と ego 網(本数有界)のみ残す。
 // - フォーカス dim はエントリ単位の乗数(所属銀河の member 度から算出)。
 //   出現ライフサイクル(shown)とは独立で、dim が小さくてもタイルは保持する。
+// - タイルキャッシュは「描画の生死」を決めない(点群は geometry が pos を参照
+//   保持)。よって浮上中の銀河は pinTiles で追い出しから保護し、Entry に
+//   titles の参照を持って hover 名をキャッシュ状態から独立させる。
 
 import * as THREE from 'three'
 import type { TileIndex } from '@/types/catalog'
-import { peekTile, fetchTile } from '@/data/tileCache'
+import { peekTile, fetchTile, pinTiles } from '@/data/tileCache'
 import { LOD, STAR_PX_FACTOR, EXPOSURE, emergeAlpha, edgesAlpha, crossAlpha, edgeExposure, crossExposure, edgeInk } from './lod'
 import { dimOf, galaxyMember } from './focus'
 import type { FocusState } from './focus'
@@ -46,6 +49,11 @@ interface Entry {
   drawnCross: number // 構築済みクロスアーク本数(露出 1/n の基準)
   n: number
   maxDeg: number
+  // タイトルへの参照(タイルが LRU 追い出しされても hover 名を維持する。
+  // geometry が pos 配列を参照保持するのと同じ理由で、コピーではなく参照)。
+  titles: string[]
+  // タイル喪失時の自己修復フェッチの次回許可時刻(秒。this.time 基準)。
+  nextRetry: number
 }
 
 // スターフィールドの VS(色温度・瞬き・px サイズ=親塊 px 比例)。
@@ -123,6 +131,10 @@ export class StarField {
     for (const g of tiles.keys()) cand.push(g)
     cand.sort((a, b) => (tiles.get(b) ?? 0) - (tiles.get(a) ?? 0))
     const emerged = new Set(cand.slice(0, LOD.budget).filter(g => (tiles.get(g) ?? 0) >= LOD.clump))
+    // 浮上中タイルの追い出し保護。点群は geometry が pos を参照保持するため
+    // タイルがキャッシュから消えても星は描画され続け、代わりにタイトル/エッジ/
+    // クロスアークだけが劣化する(hover 名が local#NN になる症状の根因)。
+    pinTiles(emerged)
     // 追い出し(hover 中は除外、平滑 α が消えてから)。
     for (const [g, e] of this.entries) {
       if (!emerged.has(g)) {
@@ -170,6 +182,12 @@ export class StarField {
       mat.opacity = e.shown * e.dim
       // 内部エッジ(px 則×露出 1/n: 本数に依らず画面インクを一定化)。
       const tile = peekTile(e.g)
+      // タイル喪失(clearTiles 等)時の自己修復。fetchTile は inflight 重複排除済み、
+      // nextRetry で失敗時の再試行を間引く(毎フレームの fetch 連鎖を防ぐ)。
+      if (!tile && this.time >= e.nextRetry) {
+        e.nextRetry = this.time + 2
+        fetchTile(e.g).catch(() => {})
+      }
       const drawn = tile ? Math.min(tile.eSrc.length, INTERNAL_CAP) : INTERNAL_CAP
       const ea = edgesAlpha(px) * e.shown * e.dim * edgeExposure(drawn)
       if (ea > 0.004) {
@@ -216,8 +234,10 @@ export class StarField {
     const h = hits[0]
     const e = active.find(x => x.points === h.object)
     if (!e || h.index == null) return
-    const tile = peekTile(e.g)
-    const title = tile && h.index < tile.n ? tile.titles[h.index] : `local#${h.index}`
+    // タイトルは Entry 保持の参照から引く(peekTile しない)。
+    // 理由: タイルが LRU 追い出しされても星は描画され続けるため、
+    // キャッシュ経由にすると「見えるのに名前だけ local#NN」に劣化する。
+    const title = (h.index < e.n ? e.titles[h.index] : undefined) ?? `local#${h.index}`
     const key = (e.g << 24) | (h.index >>> 0)
     if (kind === 'hover') {
       if (this.hoverKey !== key) {
@@ -320,7 +340,7 @@ export class StarField {
     points.renderOrder = 6
     points.userData.galaxy = g
     this.group.add(points)
-    return { g, alpha: 0, shown: 0, dim: 1, points, edges: null, cross: null, crossRequested: new Set(), drawnCross: 0, n: tile.n, maxDeg }
+    return { g, alpha: 0, shown: 0, dim: 1, points, edges: null, cross: null, crossRequested: new Set(), drawnCross: 0, n: tile.n, maxDeg, titles: tile.titles, nextRetry: 0 }
   }
 
   // エントリを破棄する。
