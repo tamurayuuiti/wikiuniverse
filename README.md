@@ -37,7 +37,7 @@ wikiuniverse/
 │   ├── pipeline.py        # 1 サブセットのエンドツーエンド解析(resolution スイープ→一次選択→レポート)
 │   ├── report.py          # プロット(matplotlib)+ Markdown レポート
 │   └── cli.py             # サブコマンド群(python -m wu.cli …)
-├── scripts/               # フルグラフ系スクリプト 9 本
+├── scripts/               # フルグラフ系スクリプト 11 本
 │   ├── run_full_leiden.py         # dedup/detect/subdivide/metrics/cluster/export/prune
 │   ├── layout_global.py           # ① マクロ+銀河の座標(3D パッキング/FR)
 │   ├── layout_local.py            # ② 銀河内記事座標(アンカーバネ、銀河単位バッチ)
@@ -46,7 +46,9 @@ wikiuniverse/
 │   ├── build_galaxy_catalog.py    # data/final/ 銀河・マクロ台帳の生成
 │   ├── export_viewer_tiles.py     # data/spatial/ への出版(bootstrap + tiles)
 │   ├── community_purity.py        # カテゴリ純度(purity v2、tf-idf 命名)
-│   └── compare_body_vs_pagelinks.py  # 本文次数 vs pagelinks 次数の対比較
+│   ├── compare_body_vs_pagelinks.py  # 本文次数 vs pagelinks 次数の対比較
+│   ├── audit_tiles.py             # [検査] data/spatial/ のタイル+サイドカー整合(読み取り専用)
+│   └── audit_names.py             # [検査] data/final/ の銀河・銀河団命名の内訳(読み取り専用)
 ├── tests/                 # 合成データ自己テスト 6 本(スクリプト式・ネットワーク不要。
 │                          #   test_synthetic / test_paths / test_bodylinks / test_catlinks /
 │                          #   test_subdivide / test_catalog。synth_data/ は実行時再生成)
@@ -325,6 +327,10 @@ npm run dev        # http://localhost:5173 (vite proxy が /data を :8000 へ)
   edges u32 ne×2 + cross u32 nx×3、全配列 rank 順。sidecar json = タイトル(rank 順)。
   deg はクライアント算出。z スライダはキャッシュタイルの z を in-place 再構成
   (gz=マクロ z アンカー、zBase=canonical コピー)。
+  タイトル解決は sidecar json(正)→ 浮上エントリ保持の参照(タイルが LRU 追い出し
+  されても hover 名を維持)→ `local#NN`(最後のフォールバック = データ欠落か版ズレの
+  兆候。`scripts/audit_tiles.py` で計測)。点群は geometry が pos を参照保持するため
+  タイル喪失後も描画され続ける → 浮上中銀河は `pinTiles` で追い出しから保護する。
 
 ## 指標定義(評価レポート共通)
 

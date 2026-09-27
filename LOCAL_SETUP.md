@@ -74,8 +74,7 @@ data/
 ## 2. 環境要件
 
 - **Python 3.10–3.13**(検証: 3.11.2 / 3.13.11)
-- 依存: `pip install -r requirements.txt`
-  (検証バージョン: numpy 2.4.6 / scipy 1.17.1 / pandas 3.0.6 / pyarrow / matplotlib / python-igraph 1.0.0 / leidenalg 0.12.0)
+- 依存: `pip install -r requirements.txt`(ピン留め — バージョンは同ファイルが正)
 - **ディスク**: フルパイプラインで ~15GB 空き(dump 1.13GB + XML 4.7GB + edges 1.14GB +
   本文 edges 0.6GB + parsed/community/final/layout/spatial)
 - **RAM**: 16GB でサブセット実験まで / **32GB 推奨**(全グラフ Leiden 用、実測 RSS 7–9GB)
@@ -253,3 +252,4 @@ cd viewer && npm install && npm run dev    # http://localhost:5173
 | Windows で RSS が高止まり | `malloc_trim` 不在のため。WSL2 なら Linux と同挙動 |
 | 数値が検証値と微妙に違う | ダンプが更新されている可能性(§3 の SHA-256 確認) |
 | ビューアがデータを取得できない | リポジトリルートで `python -m http.server 8000` が起動しているか(vite proxy の転送先)。file:// 直オープンは CORS で不可 |
+| 星の hover 名が `local#NN` になる | 記事が無いのではなく**タイトルが引けていない**状態。①`python scripts/audit_tiles.py --base data` でサイドカー(`spatial/tiles/gal_*.json`)の欠落・不足を計測(欠落があれば `export_viewer_tiles.py` を再実行)②データ側が 0 件ならビューア側のタイル LRU 追い出しが原因(浮上中銀河は `pinTiles` で保護・`Entry.titles` 参照で hover 名をキャッシュ状態から独立させ済み。DevTools の `[tile N] サイドカー…` 警告で判別) |

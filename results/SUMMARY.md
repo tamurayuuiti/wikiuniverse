@@ -9,7 +9,7 @@
   - SQL 4 ファイル: page 171MB / redirect 14MB / linktarget 141MB / pagelinks 800MB
   - pages-articles XML 4.7GB(本文リンク抽出用)/ categorylinks 176MB(カテゴリ純度用)
 - シード: 42(Leiden / BFS サンプリング共通)
-- ライブラリ: Python 3.11–3.13, numpy 2.4.6, scipy 1.17.1, pyarrow(pandas 3.0.6), python-igraph 1.0.0, leidenalg 0.12.0
+- ライブラリ: Python 3.11–3.13、依存は requirements.txt にピン留め(numpy / scipy / pandas / pyarrow / python-igraph / leidenalg ほか)
 - 計測環境: 小規模実験 = 2 vCPU / RAM 1GB のサンドボックス、フルグラフ = ローカル 32GB / Windows 11 / Python 3.13.11
 - コマンド手順: README.md(工程別)/ LOCAL_SETUP.md(環境・取得・出版)
 
@@ -247,6 +247,49 @@ modularity(igraph, geo100k): res0.5=**0.649** / res1.0=0.578 / res2.0=0.512(mixe
 
 **rep_titles による銀河の実名確認(res1_sub top12)**: メディア産業(YouTube/オリコン/DVD)、**年代(2007年…、oR 0.965)**、北海道地理、神道(神社/神道/日本書紀)、サッカー(oR 0.590)、**学術識別子(DOI/ISSN/PubMed)**、出版(東京/岩波書店/朝日新聞社)、**元号(昭和/平成/大正、oR 0.924)**、理工(物理学/技術/工学)、分類学(学名/目/科)。
 → **年代・元号・汎用ハブ・識別子は oR 0.92–0.97 の「媒介銀河」を形成**(銀河間物質の実証)。ビューアでは特別描画(半透明の星間ガス/バンドルハブ)が適する。主題銀河(サッカー 0.59、メディア 0.72 等)は命名・色付け可能。
+
+### 7.1 名称の決定手順(現行実装)
+
+**銀河**(`data/final/galaxies.parquet` の `name` / `name_source`。`build_galaxy_catalog.py`):
+
+1. **category** — purity v2 が tf-idf で選んだ最良カテゴリ(`name`)と上位 3 候補(`top3_filt`)を
+   スコア降順に検討し、**シェア ≥ 0.15 かつ `NAME_BLACKLIST` 非該当**の最初の 1 件を採用。
+   `NAME_BLACKLIST` は技術・保守系カテゴリ名の正規表現(「を使用しているページ」
+   「ウィキデータにある/にない」「誤りがあるページ」「仮リンク」「保護中のページ」
+   「翻訳を必要とする」「にbackgroundと」「すべての…」「…曖昧さ回避」「…不明」「…名目録」
+   「Template…」「Pages …」「Articles …」「Use dmy…」。完全な一覧は同ファイルの
+   `NAME_BLACKLIST` が正)。
+2. **rep** — 1 も無ければ**銀河内次数最大の代表記事タイトル**(`rep_titles` の先頭。
+   代表が複数あれば末尾に「等」)。`rep_titles` = 各コミュニティの内部次数 top3。
+3. **none** — 代表記事も無い(空)→ ビューア側で `galaxy#<id>` 表示。
+
+**表示クラス**(`display_class`、名称とは別軸): `dust` = 記事数 ≤ 1 /
+`medium`(媒介銀河)= 代表記事が年・元号・世紀(`^\d{1,4}年`、昭和・平成・大正・明治・慶応・
+江戸時代・19〜21世紀)または汎用ハブ集合(日本・英語・アメリカ合衆国・ISBN・ISSN・PubMed・
+地理座標系・日本の郵便番号・ウェイバックマシン・YouTube・X(SNS)・デジタルオブジェクト識別子・
+国立国会図書館・NDL・VIAF・LCCN・CiNii・GND)/ あるいは記事数 ≥ 1000 かつ out_ratio ≥ 0.90 /
+それ以外 = `galaxy`。
+
+**銀河団(マクロ)**: 主題名キュレーションは**無い**。ビューアのラベルは
+`macros.parquet` の `rep_titles`(カンマ区切りの代表記事 top3)の**先頭 1 件を 16 文字で切ったもの**、
+空なら `銀河団<id+1>`。つまり「内部次数が最大の代表記事名」がそのまま銀河団名になる。
+
+**L2 銀河団**: `galaxies.parquet` の `cluster_l2` に算出済み(実質 ~24)だが、
+ビューアは未使用 = **名称なし**。
+
+### 7.2 「〜のスタブ」という銀河名
+
+jawiki には**主題別の保守カテゴリ** `Category:〜のスタブ`(例: 日本の地理のスタブ、映画のスタブ)
+があり、スタブ(書きかけ)記事を主題 XX 単位で集めている。全局カテゴリ「すべてのスタブ記事」は
+巨大なので `--max-cat-freq 20000` で除外されるが、**主題別スタブカテゴリは成員数百〜数千で
+頻度フィルタを通過し、tf-idf で勝つ**ため銀河名が「〜のスタブ」になる。中身は実際に
+「XX に関する短い記事の集まり」なので主題的には正しいが、保守ラベルに見える。
+
+抑制するには `build_galaxy_catalog.py` の `NAME_BLACKLIST` へ該当する正規表現(「〜のスタブ」
+末尾一致)を追加し、`build_galaxy_catalog.py` → `export_viewer_tiles.py` を再実行すればよい
+(**再 Leiden・再レイアウトは不要**、カタログと出版だけの数分作業)。名前が落ちた銀河は
+自動的に 2 位以下のカテゴリか代表記事名へフォールバックする。
+保守ラベル混入の実測内訳は `python scripts/audit_names.py --base data` で確認できる。
 
 ---
 
