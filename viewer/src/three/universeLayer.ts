@@ -5,6 +5,8 @@
 // 責務:
 // - 自己相似 LOD の親側: 塊スプライトの px clamp(遠景で一点化)と
 //   距離フェード、子出現時の α 減光(受け渡し)
+// - 潜入フォーカス測光: 非フォーカス実体のディミング(dim)と
+//   焦点/包含実体の自塊ベール消灯(veil)
 // - エッジ tier の α(マクロ/銀河バンドル)を距離帯から設定
 // - 銀河名ラベルの距離 LOD(top-N プール)
 // - 銀河/マクロのクリック・hover ピック
@@ -14,10 +16,14 @@
 // - 球殻は近距離のみ表示(fade)、遠景ではクラスタだけ。
 // - 測光: 塊スプライトとバンドルは通常ブレンド(重なりが線色へ収束し白飛びしない)。
 //   バンドルは次数由来のハブ抑制 ink を頂点色へ焼き、ハブ交差点の放射状白飛びを縛る。
+// - ベール消灯はフォーカス重みと包含距離(containVeil)の max: カメラが実体内に
+//   入れば同一性追跡の状態に関係なく自塊が必ず消える(画面覆われ防止)。
 
 import * as THREE from 'three'
 import type { BootstrapData, TileIndex } from '@/types/catalog'
 import { LOD, EXPOSURE, screenPx, clumpAlpha, galaxyLabelAlpha, macroLabelAlpha, edgeInk } from './lod'
+import { FOCUS, containVeil, dimOf, galaxyMember } from './focus'
+import type { FocusState } from './focus'
 
 // ラベルプール上限。
 const LABEL_POOL = 42
@@ -289,8 +295,8 @@ export class UniverseLayer {
     this.galaxyBundleLines.visible = visible && galaxyA > 0.01
   }
 
-  // 毎フレーム更新(塊の自己相似 px・距離フェード・ラベル LOD)。
-  update(camera: THREE.PerspectiveCamera, tiles: Map<number, number>, shellsOn: boolean, labelsOn: boolean): void {
+  // 毎フレーム更新(塊の自己相似 px・距離フェード・フォーカス測光・ラベル LOD)。
+  update(camera: THREE.PerspectiveCamera, tiles: Map<number, number>, shellsOn: boolean, labelsOn: boolean, focus: FocusState): void {
     this.camPos.copy(camera.position)
     const rect = this.getSize()
     this.innerH = rect.h
@@ -303,21 +309,27 @@ export class UniverseLayer {
       const d = this.camPos.distanceTo(tmpV)
       const px = screenPx(m.r, d, this.innerH, this.fov)
       const fade = px < 2 ? 0 : px < 10 ? (px - 2) / 8 : 1
+      // フォーカス測光: 非焦点団はディミング、焦点/包含団は自塊ベールを消灯。
+      const dim = dimOf(focus, i === focus.mac ? 1 : 0)
+      const veil = Math.max(i === focus.mac ? focus.macW : 0, containVeil(d, m.r, FOCUS.macVeilIn, FOCUS.macVeilOut))
+      const vis = dim * (1 - veil)
       const clumpPx = Math.max(px, 4.5)
       const worldSize = (clumpPx * d) / this.proj
       this.macroClumps[i].scale.setScalar(worldSize * 1.25)
       this.macroGlows[i].scale.setScalar(worldSize * 2.4)
-      ;(this.macroClumps[i].material as THREE.SpriteMaterial).opacity = 0.92 * fade
-      ;(this.macroGlows[i].material as THREE.SpriteMaterial).opacity = 0.16 * fade
-      this.macroShells[i].visible = shellsOn && fade > 0.85 && d < m.r * 26
-      const la = labelsOn ? macroLabelAlpha(px) * fade : 0
+      ;(this.macroClumps[i].material as THREE.SpriteMaterial).opacity = 0.92 * fade * vis
+      ;(this.macroGlows[i].material as THREE.SpriteMaterial).opacity = 0.16 * fade * vis
+      const shMat = this.macroShells[i].material as THREE.LineBasicMaterial
+      shMat.opacity = 0.16 * vis
+      this.macroShells[i].visible = shellsOn && fade > 0.85 && d < m.r * 26 && shMat.opacity > 0.012
+      const la = labelsOn ? macroLabelAlpha(px) * fade * dim : 0
       const lmat = this.macroLabels[i].material as THREE.SpriteMaterial
       lmat.opacity = la
       this.macroLabels[i].visible = la > 0.02
       this.macroLabels[i].scale.set(worldSize * 1.7, worldSize * 1.7 * 0.13, 1)
     }
     // 銀河。
-    const labelCand: { g: number; i: number; px: number; d: number }[] = []
+    const labelCand: { g: number; i: number; px: number; d: number; dim: number }[] = []
     for (let i = 0; i < this.galClumps.length; i++) {
       const s = this.galClumps[i]
       const g = this.boot.galaxies[i]
@@ -329,13 +341,18 @@ export class UniverseLayer {
       const emerge = tilePx >= LOD.clump ? 1 : 0
       // 距離フェード(子がない状態で遠すぎる銀河は淡く、近すぎてデカい場合は常時)。
       const fade = emerge === 1 ? 1 : px < 1.4 ? Math.max(0, px / 1.4) : 1
-      const alpha = emerge === 1 ? clumpAlpha(tilePx) : fade
+      // フォーカス測光: 銀河潜入時は同胞銀河も保護を失い、焦点銀河の自塊は消灯。
+      const dim = dimOf(focus, galaxyMember(focus, g.gid, g.macro))
+      const veil = Math.max(g.gid === focus.gal ? focus.galW : 0, containVeil(d, g.r, FOCUS.galVeilIn, FOCUS.galVeilOut))
+      const alpha = (emerge === 1 ? clumpAlpha(tilePx) : fade) * dim * (1 - veil)
       const clumpPx = Math.max(effPx, 3.2)
       const worldSize = (clumpPx * d) / this.proj
       s.scale.setScalar(worldSize * 1.45)
       ;(s.material as THREE.SpriteMaterial).opacity = 0.9 * alpha
       s.visible = alpha > 0.02
-      this.galShells[i].visible = shellsOn && emerge === 1 && tilePx > LOD.resolve * 0.8
+      const gshMat = this.galShells[i].material as THREE.LineBasicMaterial
+      gshMat.opacity = 0.16 * dim * (1 - veil)
+      this.galShells[i].visible = shellsOn && emerge === 1 && tilePx > LOD.resolve * 0.8 && gshMat.opacity > 0.012
       const hub = this.galHubs[i]
       const hmat = hub.material as THREE.ShaderMaterial
       hub.visible = emerge === 1 && tilePx > LOD.emerge
@@ -344,7 +361,7 @@ export class UniverseLayer {
         hmat.uniforms.uOpacity.value = Math.min(1, alpha * 0.55)
       }
       if (labelsOn && alpha > 0.05) {
-        labelCand.push({ g: g.gid, i, px: effPx, d })
+        labelCand.push({ g: g.gid, i, px: effPx, d, dim })
       }
     }
     this.updateGalaxyLabels(labelCand, labelsOn)
@@ -490,8 +507,8 @@ void main() {
     return ls
   }
 
-  // 銀河名ラベルプールを更新する(px 上位 N、距離 LOD α)。
-  private updateGalaxyLabels(cand: { g: number; i: number; px: number; d: number }[], labelsOn: boolean): void {
+  // 銀河名ラベルプールを更新する(px 上位 N、距離 LOD α × フォーカス dim)。
+  private updateGalaxyLabels(cand: { g: number; i: number; px: number; d: number; dim: number }[], labelsOn: boolean): void {
     if (!labelsOn) {
       for (const s of this.galLabelPool) s.visible = false
       return
@@ -521,7 +538,7 @@ void main() {
       const worldSize = (Math.max(c.px, 3.2) * c.d) / this.proj
       spr.position.set(g.x, g.y + worldSize * 0.9, g.z)
       spr.scale.set(worldSize * 1.5, worldSize * 1.5 * 0.16, 1)
-      const a = galaxyLabelAlpha(c.px)
+      const a = galaxyLabelAlpha(c.px) * c.dim
       ;(spr.material as THREE.SpriteMaterial).opacity = a
       spr.visible = a > 0.03
     }

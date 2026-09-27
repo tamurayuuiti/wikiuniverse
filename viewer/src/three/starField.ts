@@ -6,6 +6,7 @@
 // - 出現 α のヒステリシス平滑と LRU 追い出し(budget)によるコスト受け渡し
 // - 点群シェーダ(色温度・瞬き・px サイズは親塊 px 比例)
 // - 内部エッジ(px 則 α)/ 実クロスアーク(隣接タイルが揃った分だけ進歩的に追加)
+// - 潜入フォーカス測光: 非フォーカス銀河の星・エッジ・アークのディミング
 // - hover/click ピックと ego 網ハイライト
 //
 // 注意:
@@ -16,11 +17,15 @@
 // - 測光: エッジ類は通常ブレンド+露出(1/n)+ハブ抑制 ink(vertex color)で
 //   累積光束を有界化する(加算ブレンドは本数に比例して白飛びするため廃止)。
 //   加算は星点と ego 網(本数有界)のみ残す。
+// - フォーカス dim はエントリ単位の乗数(所属銀河の member 度から算出)。
+//   出現ライフサイクル(shown)とは独立で、dim が小さくてもタイルは保持する。
 
 import * as THREE from 'three'
 import type { TileIndex } from '@/types/catalog'
 import { peekTile, fetchTile } from '@/data/tileCache'
 import { LOD, STAR_PX_FACTOR, EXPOSURE, emergeAlpha, edgesAlpha, crossAlpha, edgeExposure, crossExposure, edgeInk } from './lod'
+import { dimOf, galaxyMember } from './focus'
+import type { FocusState } from './focus'
 
 // 1 銀河あたりクロスアークの描画上限(サンプリング)。
 const CROSS_ARC_CAP = 700
@@ -33,6 +38,7 @@ interface Entry {
   g: number
   alpha: number // 目標出現 α
   shown: number // 表示 α(ヒステリシス平滑)
+  dim: number // フォーカス減光乗数(0..1、毎フレーム更新)
   points: THREE.Points
   edges: THREE.LineSegments | null
   cross: THREE.LineSegments | null
@@ -110,8 +116,8 @@ export class StarField {
     this.index = index
   }
 
-  // 出現集合をタイル px から再計算する。
-  sync(tiles: Map<number, number>, dt: number, crossOn: boolean): void {
+  // 出現集合をタイル px から再計算する(フォーカス減光を適用)。
+  sync(tiles: Map<number, number>, dt: number, crossOn: boolean, focus: FocusState): void {
     this.time += dt
     const cand: number[] = []
     for (const g of tiles.keys()) cand.push(g)
@@ -145,6 +151,9 @@ export class StarField {
       const px = tiles.get(g) ?? 0
       const rate = e.shown < e.alpha ? 1 - Math.exp(-dt * 4.5) : 1 - Math.exp(-dt * 2.2)
       e.shown += (e.alpha - e.shown) * rate
+      // フォーカス減光(所属銀河の member 度から。ライフサイクルには影響させない)。
+      const meta = this.index.galaxies.get(e.g)
+      e.dim = dimOf(focus, galaxyMember(focus, e.g, meta?.mid ?? -1))
       const visible = e.shown > 0.01
       e.points.visible = visible
       if (!visible) {
@@ -157,12 +166,12 @@ export class StarField {
       const mat = e.points.material as THREE.ShaderMaterial
       mat.uniforms.uPx.value = px * STAR_PX_FACTOR
       mat.uniforms.uTime.value = this.time
-      mat.uniforms.uOpacity.value = e.shown
-      mat.opacity = e.shown
+      mat.uniforms.uOpacity.value = e.shown * e.dim
+      mat.opacity = e.shown * e.dim
       // 内部エッジ(px 則×露出 1/n: 本数に依らず画面インクを一定化)。
       const tile = peekTile(e.g)
       const drawn = tile ? Math.min(tile.eSrc.length, INTERNAL_CAP) : INTERNAL_CAP
-      const ea = edgesAlpha(px) * e.shown * edgeExposure(drawn)
+      const ea = edgesAlpha(px) * e.shown * e.dim * edgeExposure(drawn)
       if (ea > 0.004) {
         if (!e.edges) e.edges = this.buildEdges(e)
         if (e.edges) {
@@ -173,7 +182,7 @@ export class StarField {
         e.edges.visible = false
       }
       // 実クロスアーク(隣接タイルを要求しつつ進歩的に構築、露出 1/n)。
-      const ca = crossOn ? crossAlpha(px) * e.shown * crossExposure(e.drawnCross || CROSS_ARC_CAP) : 0
+      const ca = crossOn ? crossAlpha(px) * e.shown * e.dim * crossExposure(e.drawnCross || CROSS_ARC_CAP) : 0
       if (ca > 0.008) {
         this.buildCross(e, ca, crossAlpha(px) * e.shown > 0.1)
       } else if (e.cross) {
@@ -185,7 +194,7 @@ export class StarField {
 
   // hover/click ピックを実行する。
   pick(ndc: THREE.Vector2, camera: THREE.PerspectiveCamera, kind: 'hover' | 'click'): void {
-    const active = [...this.entries.values()].filter(e => e.shown > 0.3 && e.points.visible)
+    const active = [...this.entries.values()].filter(e => e.shown > 0.3 && e.dim > 0.25 && e.points.visible)
     if (active.length === 0) {
       if (kind === 'hover') {
         this.hoverKey = -1
@@ -311,7 +320,7 @@ export class StarField {
     points.renderOrder = 6
     points.userData.galaxy = g
     this.group.add(points)
-    return { g, alpha: 0, shown: 0, points, edges: null, cross: null, crossRequested: new Set(), drawnCross: 0, n: tile.n, maxDeg }
+    return { g, alpha: 0, shown: 0, dim: 1, points, edges: null, cross: null, crossRequested: new Set(), drawnCross: 0, n: tile.n, maxDeg }
   }
 
   // エントリを破棄する。

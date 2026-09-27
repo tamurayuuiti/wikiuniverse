@@ -4,10 +4,11 @@
 // 責務:
 // - 選択(selection: none/galaxy/article)と hover の保持
 // - パネル表示モデル(kind: overview/loading/galaxy/article)
-// - 表示トグル・z スライダ・ズーム帯ラベル・ジャンプ要求
+// - 表示トグル・z スライダ・ズーム帯ラベル・潜入フォーカス読み取り値・ジャンプ要求
 //
 // 注意:
-// - 段階(stage)/離散 focus は存在しない。zoomLabel は表示専用読み取り値。
+// - 段階(stage)/離散 focus モードは存在しない。zoomLabel と focusInfo は
+//   連続幾何(focus.ts)由来の表示専用読み取り値。
 // - jumpRequest は検索など UI 起点の fly-to 要求(core が購読して消費)。
 
 import { create } from 'zustand'
@@ -64,6 +65,16 @@ export interface Toggles {
   dust: boolean
 }
 
+// 潜入フォーカスの読み取り値(HUD 表示用)。
+export interface FocusInfo {
+  /** 潜入中の実体種別。 */
+  kind: 'macro' | 'galaxy'
+  /** 実体名。 */
+  label: string
+  /** 潜入重み(0..1)。 */
+  w: number
+}
+
 // パフォーマンス統計。
 export interface Stats {
   fps: number
@@ -82,6 +93,7 @@ export interface ViewerState {
   toggles: Toggles
   zSquash: number
   zoomLabel: string
+  focusInfo: FocusInfo | null
   jumpRequest: { pos: [number, number, number]; dist: number; seq: number } | null
   stats: Stats
 }
@@ -106,6 +118,7 @@ export const useStore = create<ViewerState & ViewerActions>((set, get) => ({
   toggles: { stars: true, edges: true, cross: true, labels: true, shells: true, dust: true },
   zSquash: 1,
   zoomLabel: 'universe',
+  focusInfo: null,
   jumpRequest: null,
   stats: { fps: 0, emerged: 0, tiles: 0, zK: 1 },
   setHover: (h) => set({ hover: h }),

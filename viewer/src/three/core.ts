@@ -11,6 +11,8 @@
 // 注意:
 // - クリックによるテレポート/段階切替は行わない(理想形=連続性)。
 // - selection は表示専用コンテキストであり、描画は全て距離/px 駆動。
+// - 潜入フォーカス(focus.ts): 銀河団/銀河への進入を連続検知し、非フォーカス
+//   実体のディミングと自塊ベール消灯、Esc 段階上昇、ズーム帯ラベルを駆動する。
 // - 測光: エッジ/塊は通常ブレンド+露出(1/n)+ハブ抑制 ink(lod.ts EXPOSURE)で
 //   有界化済み。bloom threshold はエッジ飽和輝度と星コア輝度の間に置き、
 //   星コアのみ bloom させる。ACES がハイライトをロールオフさせ白飛びを最後に縛る。
@@ -21,13 +23,16 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
-import type { BootstrapData, Macro, TileIndex } from '@/types/catalog'
+import type { BootstrapData, TileIndex } from '@/types/catalog'
 import { useStore } from '@/state/store'
+import type { FocusInfo } from '@/state/store'
 import { peekTile, fetchTile, setIndex, recomposeTiles } from '@/data/tileCache'
 import { StarField } from './starField'
 import { UniverseLayer } from './universeLayer'
 import { makeStarSprite } from './textures'
-import { macroBundleAlpha, galaxyBundleAlpha, zoomLabel } from './lod'
+import { macroBundleAlpha, galaxyBundleAlpha } from './lod'
+import { FocusTracker, focusZoomLabel } from './focus'
+import type { FocusState } from './focus'
 
 // display_class コードを日本語名へ変換する。
 function displayClassName(code: number): string {
@@ -63,6 +68,7 @@ export class ViewerCore {
   private flying: { t: number; fromPos: THREE.Vector3; toPos: THREE.Vector3; fromTgt: THREE.Vector3; toTgt: THREE.Vector3 } | null = null
   private fpsSmooth = 60
   private statThrottle = 0
+  private focusTracker = new FocusTracker()
   private zK = 1
   private onResizeBound = () => this.onResize()
   private onWheelBound = (e: WheelEvent) => this.onWheel(e)
@@ -164,9 +170,10 @@ export class ViewerCore {
       if (t >= 1) this.flying = null
     }
     this.controls.update()
-    // 距離 D からの表示コンテキスト(読み取り専用)。
+    // 距離 D と潜入フォーカス(読み取り専用コンテキスト)。
     const D = this.camera.position.distanceTo(this.controls.target)
-    const zl = zoomLabel(D)
+    const focus = this.focusTracker.update(this.camera.position, this.controls.target, dt, this.boot)
+    const zl = focusZoomLabel(focus, D)
     if (zl !== s.zoomLabel) useStore.setState({ zoomLabel: zl })
     // タイル px 集合(銀河クラスタ実 px)。
     const proj = this.projFactor()
@@ -175,14 +182,18 @@ export class ViewerCore {
       const d = this.camera.position.distanceTo(tmpVec.set(g.x, g.y, g.z))
       tiles.set(g.gid, (g.r * proj) / Math.max(d, 1e-6))
     }
-    // StarField 同期(星・内部エッジ・クロスアーク・ego)。
+    // StarField 同期(星・内部エッジ・クロスアーク・ego、フォーカス減光込み)。
     this.stars.group.visible = s.toggles.stars
-    if (s.toggles.stars) this.stars.sync(tiles, dt, s.toggles.cross)
-    // 骨格更新(塊 px・ラベル・フェード)。
-    this.uni.update(this.camera, tiles, s.toggles.shells, s.toggles.labels)
+    if (s.toggles.stars) this.stars.sync(tiles, dt, s.toggles.cross, focus)
+    // 骨格更新(塊 px・ラベル・フェード・フォーカス測光)。
+    this.uni.update(this.camera, tiles, s.toggles.shells, s.toggles.labels, focus)
     this.uni.tick(this.time)
-    // エッジ tier α(距離帯)。
-    this.uni.setBundleAlphas(macroBundleAlpha(D), galaxyBundleAlpha(D), s.toggles.edges)
+    // エッジ tier α(距離帯 × 潜入フェード: 焦点内では飾り線が実アークに主役を譲る)。
+    this.uni.setBundleAlphas(
+      macroBundleAlpha(D) * (1 - 0.6 * focus.macW),
+      galaxyBundleAlpha(D) * (1 - 0.85 * focus.galW),
+      s.toggles.edges,
+    )
     // HUD stats(250ms 間引き)。
     this.statThrottle += dt
     if (this.statThrottle > 0.25) {
@@ -192,6 +203,7 @@ export class ViewerCore {
       const viewW = 2 * D * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.aspect
       useStore.setState({
         stats: { fps: Math.round(this.fpsSmooth), emerged, tiles: this.stars.entryCount, zK: this.zK, viewWidthU: Math.round(viewW) },
+        focusInfo: this.focusInfoOf(focus),
       })
     }
     this.composer.render()
@@ -411,7 +423,7 @@ export class ViewerCore {
     }
   }
 
-  // Esc: ego 解除 → 親マクロ俯瞰 → home へ段階的上昇(全て連続飛行)。
+  // Esc: ego 解除 → 銀河俯瞰 → 銀河団俯瞰 → home の段階的上昇(全て連続飛行)。
   private onKeyDown(e: KeyboardEvent): void {
     if (e.key !== 'Escape') return
     const s = useStore.getState()
@@ -423,19 +435,42 @@ export class ViewerCore {
       })
       return
     }
-    const D = this.camera.position.distanceTo(this.controls.target)
-    if (D < 2200) {
-      let best: { m: Macro; d: number } | null = null
-      for (const m of this.boot.macros) {
-        const d = this.controls.target.distanceTo(tmpVec.set(m.x, m.y, m.z))
-        if (!best || d < best.d) best = { m, d }
+    // 潜入フォーカスを参照して 1 段ずつ上昇する(俯瞰距離に達していれば次段へ)。
+    const f = this.focusTracker.current
+    if (f.gal >= 0) {
+      const g = this.boot.galaxies[f.gal]
+      if (g) {
+        const dCam = this.camera.position.distanceTo(tmpVec.set(g.x, g.y, g.z))
+        if (dCam < g.r * 4.5) {
+          this.flyTo(new THREE.Vector3(g.x, g.y, g.z), Math.max(g.r * 5, 12))
+          return
+        }
       }
-      if (best && best.d < best.m.r * 3.2) {
-        this.flyTo(new THREE.Vector3(best.m.x, best.m.y, best.m.z), Math.max(best.m.r * 2.6, 120))
-        return
+    }
+    if (f.mac >= 0) {
+      const m = this.boot.macros[f.mac]
+      if (m) {
+        const dCam = this.camera.position.distanceTo(tmpVec.set(m.x, m.y, m.z))
+        if (dCam < m.r * 2.45) {
+          this.flyTo(new THREE.Vector3(m.x, m.y, m.z), Math.max(m.r * 2.6, 120))
+          return
+        }
       }
     }
     this.flyTo(HOME_TARGET.clone(), HOME_POS.length())
+  }
+
+  // HUD 用の潜入フォーカス読み取り値を作る(重み僅少なら null)。
+  private focusInfoOf(f: FocusState): FocusInfo | null {
+    if (f.gal >= 0 && f.galW > 0.05) {
+      const g = this.boot.galaxies[f.gal]
+      if (g) return { kind: 'galaxy', label: g.label, w: f.galW }
+    }
+    if (f.mac >= 0 && f.macW > 0.05) {
+      const m = this.boot.macros[f.mac]
+      if (m) return { kind: 'macro', label: m.label, w: f.macW }
+    }
+    return null
   }
 
   // 破棄する。

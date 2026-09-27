@@ -2,7 +2,7 @@
 // 上部 HUD(v6): 統計・ズーム帯読み取り・視界幅・トグル・z スライダ・検索・ジャンプ。
 //
 // 責務:
-// - stats(fps/浮上数/タイル数/視界幅)とズーム帯ラベルの表示
+// - stats(fps/浮上数/タイル数/視界幅)とズーム帯ラベル・潜入フォーカスの表示
 // - 表示トグル(星/銀河内エッジ/クロスリンク/ラベル/球殻/星屑)
 // - z-compress スライダ・検索(連続 fly-to)・ランダム/ホーム
 //
@@ -30,6 +30,7 @@ const ZOOM_JA: Record<string, string> = {
 export function Hud({ commands }: Props) {
   const stats = useStore(s => s.stats)
   const zoom = useStore(s => s.zoomLabel)
+  const focusInfo = useStore(s => s.focusInfo)
   const toggles = useStore(s => s.toggles)
   const setToggle = useStore(s => s.setToggle)
   const zSquash = useStore(s => s.zSquash)
@@ -59,6 +60,11 @@ export function Hud({ commands }: Props) {
       <div className="hud-group">
         <span className="hud-title">WikiUniverse</span>
         <span className="hud-stat zoom">{ZOOM_JA[zoom] ?? zoom}</span>
+        {focusInfo && (
+          <span className="hud-stat zoom" title="潜入フォーカス(非フォーカスは減光中)">
+            潜入{focusInfo.kind === 'galaxy' ? '銀河' : '銀河団'}: {focusInfo.label} {Math.round(focusInfo.w * 100)}%
+          </span>
+        )}
       </div>
       <div className="hud-group">
         <span className="hud-stat">fps {stats.fps}</span>

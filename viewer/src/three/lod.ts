@@ -10,6 +10,7 @@
 // 注意:
 // - 閾値は「親塊の画面 px 半径」基準で統一する(自己相似性の要)。
 // - エッジ tier の帯はカメラ→target 距離 D で定義する(レイアウトスケール依存定数)。
+// - ゾーム帯ラベルは focus.ts(focusZoomLabel)が包含状態から導く。BAND はその距離帯定数。
 // - エッジ類は全て通常ブレンド(線色へ収束し白飛びしない)。加算は星・ego のみ。
 // - 露出は「描画本数 n に対し α ∝ 1/n」。重なり層数が n に比例するため、
 //   画面インク総量が n に依らず一定になる(稠密銀河でもベール化しない)。
@@ -139,11 +140,3 @@ export function macroLabelAlpha(px: number): number {
 
 // 星の px サイズ倍率(親 px 比例=自己相似)。
 export const STAR_PX_FACTOR = 0.071
-
-// カメラ距離からズーム帯ラベル(表示専用、モードではない)を返す。
-export function zoomLabel(D: number): string {
-  if (D < BAND.galaxy) return 'article'
-  if (D < 800) return 'galaxy'
-  if (D < BAND.universe) return 'cluster'
-  return 'universe'
-}
