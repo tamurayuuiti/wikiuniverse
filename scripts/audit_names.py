@@ -14,19 +14,25 @@ Why "XXのスタブ" shows up: jawiki has topic-specific maintenance categories
 (`Category:日本の地理のスタブ`, `Category:映画のスタブ`, ...). The global
 `すべてのスタブ記事` is huge and is dropped by purity's `--max-cat-freq`
 (default 20000), but a topic stub category with a few hundred–few thousand
-members survives the frequency filter and can win the tf-idf naming score, so
-the galaxy gets named after the stub category instead of its topic.
-Such names are topically real (that galaxy *is* the short articles about XX)
-but read like maintenance labels. To suppress them, add the patterns printed
-below to NAME_BLACKLIST in build_galaxy_catalog.py and re-run
-build_galaxy_catalog.py + export_viewer_tiles.py (no re-Leiden, no re-layout).
+members survives the frequency filter and can win the tf-idf naming score.
+Countermeasure (implemented): build_galaxy_catalog.py stem-normalizes such
+names ("シングル関連のスタブ項目" -> "シングル", name_source=category_stem),
+so stub-suffixed names should no longer appear after a catalog rebuild; if
+they do, the pattern is not covered by MAINT_SUFFIX_RE there.
+
+Macro (galaxy-cluster) labels default to macros.rep_titles[0][:16] and can be
+hand-curated via data/final/macro_label_overrides.json. `--dump-macro-labels`
+writes an editable template (macro size, default label, top member galaxy
+names) to data/final/macro_label_overrides.template.json; export_viewer_tiles.py
+applies non-empty labels from macro_label_overrides.json at publish time.
 
 Usage:
-  python scripts/audit_names.py --base data [--top 25]
+  python scripts/audit_names.py --base data [--top 25] [--dump-macro-labels]
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -55,6 +61,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="data")
     ap.add_argument("--top", type=int, default=25)
+    ap.add_argument("--dump-macro-labels", action="store_true",
+                    help="write final/macro_label_overrides.template.json "
+                         "(editable macro-label override template)")
     a = ap.parse_args()
     dirs = Dirs(a.base)
 
@@ -98,8 +107,10 @@ def main() -> int:
         sample = ", ".join(names[i] for i in sorted(hits, key=lambda i: -nart[i])[:4])
         print(f"  {label:10s}: {len(hits):5,d} 銀河 / {arts:9,d} 記事   例: {sample}")
     print(f"  (重複計上あり: 1 銀河が複数パターンに該当しうる)")
-    print(f"  → 抑制したい場合は build_galaxy_catalog.py の NAME_BLACKLIST へ正規表現を追加し、")
-    print(f"    build_galaxy_catalog.py → export_viewer_tiles.py を再実行(再 Leiden/再レイアウト不要)。")
+    print(f"  → スタブ/一覧系は build_galaxy_catalog.py の語幹正規化(name_source=category_stem)")
+    print(f"    適用済みのはず。残存があれば正規化対象外パターンなので NAME_BLACKLIST への")
+    print(f"    追加を検討し、build_galaxy_catalog.py → export_viewer_tiles.py を再実行")
+    print(f"    (再 Leiden/再レイアウト不要)。")
 
     # 大きい銀河ほど名前が重要: サイズ降順で確認
     print(f"\n[names] ---- サイズ上位 {a.top} 銀河 ----")
@@ -110,7 +121,7 @@ def main() -> int:
         print(f"  {int(gal['galaxy_id'][i]):6d} {nart[i]:6,d} {cls[i]:8s} {sh_s:>6s} "
               f"{srcs[i]:8s} {names[i] or '(無名)'}  |  {reps[i][:56]}")
 
-    # マクロ(銀河団)ラベル = ビューア表示そのままの導出
+    # マクロ(銀河団)ラベル = ビューア表示そのままの導出(+オーバーライド反映)
     if os.path.exists(mp):
         mac = pq.read_table(mp).to_pydict()
         M = len(mac["macro_id"])
@@ -118,18 +129,62 @@ def main() -> int:
         mn = [int(x) for x in mac["n_articles"]]
         mdust = [bool(x) for x in mac.get("is_dust", [False] * M)]
         eff = [i for i in range(M) if not mdust[i] and mn[i] > 1]
-        print(f"\n[names] macros={M:,} (実効={len(eff):,} / dust={M - len(eff):,})")
-        print("  銀河団ラベルは「内部次数最大の代表記事タイトル先頭 16 文字」(export 側の導出):")
+
+        # export_viewer_tiles.py が出版時に適用するオーバーライド(同一形式を読む)
+        ovr = {}
+        ovr_path = os.path.join(str(dirs.final), "macro_label_overrides.json")
+        if os.path.exists(ovr_path):
+            with open(ovr_path, encoding="utf-8") as f:
+                for ent in json.load(f).get("macros", []):
+                    lbl = str(ent.get("label") or "").strip()
+                    if lbl:
+                        ovr[int(ent["macro_id"])] = lbl
+
+        def default_label(i: int) -> str:
+            return mrep[i].split(",")[0].strip()[:16] or f"銀河団{i + 1}"
+
+        print(f"\n[names] macros={M:,} (実効={len(eff):,} / dust={M - len(eff):,})"
+              + (f"  overrides={len(ovr)} 件" if ovr else ""))
+        print("  既定ラベル=「内部次数最大の代表記事タイトル先頭 16 文字」。"
+              "macro_label_overrides.json があれば優先される (ovr):")
         for i in sorted(eff, key=lambda i: -mn[i])[: a.top]:
-            label = mrep[i].split(",")[0].strip()[:16] or f"銀河団{i + 1}"
-            print(f"    macro {int(mac['macro_id'][i]):4d} n={mn[i]:8,d}  "
-                  f"label=「{label}」  rep_titles={mrep[i][:60]}")
-        print("  ※ 銀河団には主題名キュレーションが無い(代表記事名そのまま)。")
-        print("    L2 銀河団(galaxies.cluster_l2)は算出済みだがビューア未使用 = 名称なし。")
+            mid = int(mac["macro_id"][i])
+            label = ovr.get(mid, default_label(i))
+            mark = " (ovr)" if mid in ovr else ""
+            print(f"    macro {mid:4d} n={mn[i]:8,d}  "
+                  f"label=「{label}」{mark}  rep_titles={mrep[i][:60]}")
+        print("  ※ L2 銀河団(galaxies.cluster_l2)は算出済みだがビューア未使用 = 名称なし。")
+
+        if a.dump_macro_labels:
+            # マクロごとの所属銀河名(サイズ降順・dust 除く・名前ありのみ)= キュレーションのヒント
+            by_macro = {}
+            for i in range(G):
+                if cls[i] != "dust" and names[i]:
+                    by_macro.setdefault(int(gal["macro_id"][i]), []).append((nart[i], names[i]))
+            tmpl = {"_comment": "マクロラベルのオーバーライド。label を編集して "
+                                 "data/final/macro_label_overrides.json として保存 → "
+                                 "export_viewer_tiles.py を再実行すると出版に反映される。"
+                                 "_ で始まるキーと空 label は無視される。",
+                    "macros": []}
+            for i in sorted(eff, key=lambda i: -mn[i]):
+                mid = int(mac["macro_id"][i])
+                gals = sorted(by_macro.get(mid, []), reverse=True)[:5]
+                tmpl["macros"].append({
+                    "macro_id": mid, "n_articles": mn[i],
+                    "default_label": default_label(i),
+                    "top_galaxies": " / ".join(f"{nm}({n:,})" for n, nm in gals),
+                    "label": ovr.get(mid, default_label(i))})
+            out_p = os.path.join(str(dirs.final), "macro_label_overrides.template.json")
+            with open(out_p, "w", encoding="utf-8") as f:
+                json.dump(tmpl, f, ensure_ascii=False, indent=1)
+            print(f"\n[names] テンプレート出力: {out_p} (実効マクロ {len(tmpl['macros'])} 件)")
+            print("        label を編集して data/final/macro_label_overrides.json として保存し、")
+            print("        python scripts/export_viewer_tiles.py --base data を再実行してください。")
     else:
         print(f"\n[names] macros.parquet が見つかりません: {mp}")
 
-    print("\n[names] 判定: 上記の件数を見て NAME_BLACKLIST 拡張の要否を判断してください。")
+    print("\n[names] 判定: 上記の件数が許容範囲か確認してください"
+          "(スタブ系は語幹正規化後は 0 件になっているはず)。")
     return 0
 
 

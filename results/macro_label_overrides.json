@@ -1,0 +1,257 @@
+{
+ "_comment": "銀河団(マクロ)ラベルの手動キュレーション表 = 正典。export_viewer_tiles.py は data/final/macro_label_overrides.json を読むため、このファイルをそこへコピーして使う。空 label のマクロは既定導出(rep_titles 先頭 16 文字)。_ で始まるキーは無視される。大規模な再レイアウト後は audit_names.py --dump-macro-labels の新テンプレートと突き合わせて見直す。",
+ "macros": [
+  {
+   "macro_id": 2,
+   "label": "地理・場所"
+  },
+  {
+   "macro_id": 1,
+   "label": "世界・軍事"
+  },
+  {
+   "macro_id": 8,
+   "label": "芸能・メディア"
+  },
+  {
+   "macro_id": 10,
+   "label": "映画・ゲーム"
+  },
+  {
+   "macro_id": 9,
+   "label": "音楽"
+  },
+  {
+   "macro_id": 4,
+   "label": "学術・政治"
+  },
+  {
+   "macro_id": 7,
+   "label": "科学・自然"
+  },
+  {
+   "macro_id": 13,
+   "label": "日本の歴史・宗教"
+  },
+  {
+   "macro_id": 3,
+   "label": "サッカー"
+  },
+  {
+   "macro_id": 0,
+   "label": "数学・情報科学"
+  },
+  {
+   "macro_id": 5,
+   "label": "中国"
+  },
+  {
+   "macro_id": 17,
+   "label": "スポーツ"
+  },
+  {
+   "macro_id": 22,
+   "label": "野球"
+  },
+  {
+   "macro_id": 6,
+   "label": "自動車・モータースポーツ"
+  },
+  {
+   "macro_id": 27,
+   "label": "朝鮮半島"
+  },
+  {
+   "macro_id": 23,
+   "label": "天文学・宇宙"
+  },
+  {
+   "macro_id": 21,
+   "label": "格闘技"
+  },
+  {
+   "macro_id": 15,
+   "label": "バスケットボール・アメフト"
+  },
+  {
+   "macro_id": 16,
+   "label": "競馬"
+  },
+  {
+   "macro_id": 28,
+   "label": "日本の道路"
+  },
+  {
+   "macro_id": 18,
+   "label": "イタリア"
+  },
+  {
+   "macro_id": 12,
+   "label": "アメリカの地理"
+  },
+  {
+   "macro_id": 36,
+   "label": "ラグビーユニオン"
+  },
+  {
+   "macro_id": 19,
+   "label": "ボードゲーム"
+  },
+  {
+   "macro_id": 20,
+   "label": "大相撲"
+  },
+  {
+   "macro_id": 32,
+   "label": "テニス"
+  },
+  {
+   "macro_id": 33,
+   "label": "舞台芸術・宝塚"
+  },
+  {
+   "macro_id": 31,
+   "label": "ギリシア神話"
+  },
+  {
+   "macro_id": 29,
+   "label": "温泉"
+  },
+  {
+   "macro_id": 42,
+   "label": "九州の道路・地名"
+  },
+  {
+   "macro_id": 25,
+   "label": "芸術家・建築家"
+  },
+  {
+   "macro_id": 26,
+   "label": "ファッション・服飾"
+  },
+  {
+   "macro_id": 35,
+   "label": "北海道の道路"
+  },
+  {
+   "macro_id": 37,
+   "label": "貨車・コンテナ"
+  },
+  {
+   "macro_id": 47,
+   "label": "世界の行政区画"
+  },
+  {
+   "macro_id": 34,
+   "label": "福島県の地名"
+  },
+  {
+   "macro_id": 62,
+   "label": "岡崎・西尾の地名"
+  },
+  {
+   "macro_id": 38,
+   "label": "雑多な記事"
+  },
+  {
+   "macro_id": 48,
+   "label": "豊田市の地名"
+  },
+  {
+   "macro_id": 30,
+   "label": "北欧神話"
+  },
+  {
+   "macro_id": 24,
+   "label": "クトゥルフ神話"
+  },
+  {
+   "macro_id": 40,
+   "label": "群馬県の地名"
+  },
+  {
+   "macro_id": 57,
+   "label": "市原市の地名"
+  },
+  {
+   "macro_id": 52,
+   "label": "稲沢市の地名"
+  },
+  {
+   "macro_id": 43,
+   "label": "旧警察組織"
+  },
+  {
+   "macro_id": 53,
+   "label": "豊橋市の地名"
+  },
+  {
+   "macro_id": 44,
+   "label": "造園・庭園家"
+  },
+  {
+   "macro_id": 46,
+   "label": "弘前市の地名"
+  },
+  {
+   "macro_id": 41,
+   "label": "一宮市の地名"
+  },
+  {
+   "macro_id": 54,
+   "label": "ヨーロッパの道路"
+  },
+  {
+   "macro_id": 39,
+   "label": "在日外交使節"
+  },
+  {
+   "macro_id": 50,
+   "label": "半田市の地名"
+  },
+  {
+   "macro_id": 51,
+   "label": "徳島市の地名"
+  },
+  {
+   "macro_id": 87,
+   "label": "豊川市の地名"
+  },
+  {
+   "macro_id": 85,
+   "label": "碧南市の地名"
+  },
+  {
+   "macro_id": 45,
+   "label": "沖縄県の道路"
+  },
+  {
+   "macro_id": 59,
+   "label": "クルアーンのスーラ"
+  },
+  {
+   "macro_id": 11,
+   "label": "デリー・メトロ"
+  },
+  {
+   "macro_id": 14,
+   "label": "台風の名前"
+  },
+  {
+   "macro_id": 61,
+   "label": "大江秀夫の監督映画"
+  },
+  {
+   "macro_id": 133,
+   "label": ""
+  },
+  {
+   "macro_id": 256,
+   "label": ""
+  },
+  {
+   "macro_id": 487,
+   "label": ""
+  }
+ ]
+}

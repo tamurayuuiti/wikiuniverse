@@ -103,6 +103,23 @@ def main():
     assert set(g["display_class"]) <= {"galaxy", "medium", "dust"}
     assert sum(g["display_class"][i] == "dust" for i in range(G)) == meta["n_dust"]
 
+    # ---- 保守サフィックスの語幹正規化(_stem_name 単体)
+    spec_n = importlib.util.spec_from_file_location(
+        "bgc_names", os.path.join(ROOT, "scripts", "build_galaxy_catalog.py"))
+    bgc = importlib.util.module_from_spec(spec_n)
+    spec_n.loader.exec_module(bgc)
+    for _src, _want in [("シングル関連のスタブ項目", "シングル"),
+                        ("アイドルに関するスタブ", "アイドル"),
+                        ("山岳関連のスタブ項目", "山岳"),
+                        ("神道関連のスタブ項目", "神道"),
+                        ("サッカー選手に関するスタブ項目", "サッカー選手"),
+                        ("野球に関する記事", "野球"),
+                        ("天文学に関する記事の一覧", "天文学"),
+                        ("地理座標系の一覧", "地理座標系")]:
+        assert bgc._stem_name(_src) == _want, (_src, bgc._stem_name(_src))
+    for _src in ["数学", "スタブ", "すべてのスタブ記事の一覧", "Xのスタブ"]:
+        assert bgc._stem_name(_src) == "", _src  # 非該当/語幹短すぎ/ブラックリスト
+
     # ---- global layout smoke (dim=2 for speed)
     out2 = run_script("layout_global.py", "--dim", "2", "--galaxy-tag", "res1_s",
                       "--run", "r_main")
@@ -215,6 +232,22 @@ def main():
     assert nn > 0 and os.path.getsize(t0f) == 12 + nn * 12 + ne * 8 + nx * 12
     assert os.path.exists(os.path.join(sp, "tiles", "gal_000000.json"))
     assert os.path.exists(os.path.join(sp, "tiles_meta.json"))
+
+    # ---- macro label overrides: export must prefer hand-curated labels
+    #      (empty labels are ignored; removing the file restores defaults)
+    with open(os.path.join(final, "macro_label_overrides.json"), "w",
+              encoding="utf-8") as f:
+        json.dump({"macros": [{"macro_id": 0, "label": "テスト銀河団名"},
+                              {"macro_id": 1, "label": ""}]}, f, ensure_ascii=False)
+    run_script("export_viewer_tiles.py", "--galaxy-tag", "res1_s", "--run", "r_main")
+    boot2 = json.load(open(os.path.join(sp, "bootstrap.json"), encoding="utf-8"))
+    assert any(row[5] == "テスト銀河団名" for row in boot2["macros"]), boot2["macros"][:3]
+    os.remove(os.path.join(final, "macro_label_overrides.json"))
+    run_script("export_viewer_tiles.py", "--galaxy-tag", "res1_s", "--run", "r_main")
+    boot3 = json.load(open(os.path.join(sp, "bootstrap.json"), encoding="utf-8"))
+    assert all(row[5] != "テスト銀河団名" for row in boot3["macros"])
+    # 空 label のオーバーライドは無視される(= 既定導出のまま)
+    assert boot2["macros"][1][5] == boot3["macros"][1][5]
 
     # ---- tile CONTENT round-trip: local idx must map back to the exact global
     #      undirected internal edges of the galaxy (catches searchsorted-on-

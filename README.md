@@ -48,13 +48,15 @@ wikiuniverse/
 │   ├── community_purity.py        # カテゴリ純度(purity v2、tf-idf 命名)
 │   ├── compare_body_vs_pagelinks.py  # 本文次数 vs pagelinks 次数の対比較
 │   ├── audit_tiles.py             # [検査] data/spatial/ のタイル+サイドカー整合(読み取り専用)
-│   └── audit_names.py             # [検査] data/final/ の銀河・銀河団命名の内訳(読み取り専用)
+│   └── audit_names.py             # [検査] 命名内訳 + 銀河団ラベルのテンプレ出力(読み取り専用)
 ├── tests/                 # 合成データ自己テスト 6 本(スクリプト式・ネットワーク不要。
 │                          #   test_synthetic / test_paths / test_bodylinks / test_catlinks /
 │                          #   test_subdivide / test_catalog。synth_data/ は実行時再生成)
 ├── viewer/                # React+TS+three ビューア(v6「連続宇宙」)
 ├── notebooks/poc_colab.ipynb  # Colab 実行版 PoC ノートブック(閲覧用)
-└── results/SUMMARY.md     # ★ 評価レポート(最新状態・テーマ別)
+└── results/
+    ├── SUMMARY.md         # ★ 評価レポート(最新状態・テーマ別)
+    └── macro_label_overrides.json  # 銀河団ラベルのキュレーション表(正典。data/final/ へコピーして使用)
 ```
 
 ### データ生成物(`--base data` 既定、Git 追跡対象外)
@@ -71,6 +73,8 @@ data/
 ├── community/   # [成果] Leiden 出力
 │   └── full/    #   フルグラフ run: membership_<tag>.npy, pairs, metrics, purity, clusters(L2)
 ├── final/       # [成果=契約] 銀河/マクロ台帳(build_galaxy_catalog → galaxies/macros/pairs)
+│                #   + macro_label_overrides.json(任意 = 銀河団ラベルの手動キュレーション。
+│                #     追跡下の正典コピーは results/macro_label_overrides.json)
 ├── layout/      # [成果] 座標 run。1 run = 1 ディレクトリ(命名 <YYYYMMDD>_<slug>)
 │   └── <run>/   #   macro/galaxy/article_positions.parquet + layout_meta + preview + shards
 └── spatial/     # [成果=配信] ビューア公開面: bootstrap.json + tiles/(run 名と無縁の固定 URL)
@@ -221,8 +225,9 @@ python scripts/community_purity.py --base data --tag res1_body_sub   # 本文グ
 ```bash
 python scripts/build_galaxy_catalog.py --base data --galaxy-tag res1_sub --macro-tag res1
 #   → data/final/galaxies.parquet        銀河台帳(macro_id, n_articles, e_in/out, out_ratio,
-#                                         is_dust, name(カテゴリ), rep_titles, top_neighbors,
-#                                         n_neighbors, cluster_l2)
+#                                         is_dust, name(カテゴリ名。スタブ等の保守サフィックスは
+#                                         語幹正規化 → results/SUMMARY.md §7.1), rep_titles,
+#                                         top_neighbors, n_neighbors, cluster_l2)
 #   → data/final/macros.parquet          マクロ台帳(実効 63 行 + 統計 + top_galaxies)
 #   → data/final/galaxy_pairs_topK.parquet  中景用バンドル(重み top-K)
 #   → data/final/macro_pairs.parquet     遠景用「数本」(マクロ間集約重み)
@@ -287,6 +292,10 @@ galaxy_positions 由来。「銀河 = アンカー制約付きレイアウト単
 
 ```bash
 python scripts/export_viewer_tiles.py --base data    # --run 既定 = wu/paths.py の ACTIVE_LAYOUT_RUN
+#   銀河団ラベル = rep_titles 先頭 16 文字。data/final/macro_label_overrides.json
+#   (手動キュレーション・任意)があれば非空 label が優先される。キュレーション表の
+#   正典コピーは results/macro_label_overrides.json(data/final/ へコピーして使う)。
+#   テンプレ再生成(見直し用): python scripts/audit_names.py --base data --dump-macro-labels
 python -m http.server 8000                           # リポジトリルートで起動(/data を配信)
 
 cd viewer && npm install

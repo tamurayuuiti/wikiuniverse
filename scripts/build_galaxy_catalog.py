@@ -19,6 +19,11 @@ Outputs (data/final/):
   macro_pairs.parquet     macro_a, macro_b, w (aggregated; the "few lines" for far zoom)
   catalog_meta.json       counts, params, containment check
 
+Naming: purity tf-idf category (share >= 0.15, non-blacklisted; maintenance
+suffixes such as "...stub items" are stem-normalized -> name_source
+"category_stem") -> representative article title (+ "etc.") -> "" (the viewer
+then shows galaxy#<id>).
+
 Usage:
   python scripts/build_galaxy_catalog.py --base data \
       --galaxy-tag res1_sub --macro-tag res1 [--top-neighbors 8] [--top-pairs 30000]
@@ -59,6 +64,33 @@ MEDIUM_HUBS = {"日本", "英語", "ISBN", "地理座標系", "ウェイバッ�
 
 def _blacklisted(title: str) -> bool:
     return any(r.search(title) for r in NAME_BLACKLIST_RE)
+
+
+# 保守サフィックスの語幹正規化。主題別スタブカテゴリ(「〜関連のスタブ項目」等)は
+# 成員数百〜数千で頻度フィルタを通過し tf-idf で勝つため、単純除外すると rep
+# フォールバック(ハブ記事汚染: 「YouTube等」「日本等」)へ品質が劣化する。
+# そこで保守部分を除いた主題語幹を採用する(「シングル関連のスタブ項目」→「シングル」、
+# 「野球に関する記事」→「野球」、「地理座標系の一覧」→「地理座標系」)。
+# 語幹が空・短すぎ・ブラックリスト該当の場合は "" を返し、従来のフォールバックに委ねる。
+MAINT_SUFFIX_RE = [
+    re.compile(r"^(?P<stem>.+?)(?:に関する|関連の|関連)?スタブ(?:項目|記事)?$"),
+    re.compile(r"^(?P<stem>.+?)に関する記事(?:の一覧)?$"),
+    re.compile(r"^(?P<stem>.+?)の一覧$"),
+]
+
+
+def _stem_name(title: str) -> str:
+    """カテゴリ名 → 主題語幹。正規化できない(しない)場合は ""。"""
+    if not title or _blacklisted(title):
+        return ""
+    for rx in MAINT_SUFFIX_RE:
+        m = rx.match(title)
+        if not m:
+            continue
+        stem = m.group("stem").rstrip("の_ ・")
+        if len(stem) >= 2 and not _blacklisted(stem):
+            return stem
+    return ""
 
 
 def _parse_top3(s3: str):
@@ -169,6 +201,7 @@ def main():
         else:
             display_classes.append("galaxy")
         # 3) name: filtered category (non-blacklisted, share>=0.15) -> rep fallback
+        #    採用カテゴリ名は保守サフィックスの語幹正規化を通す(category_stem)
         chosen, src = "", "none"
         cands = _parse_top3(top3_filt[g_i]) if top3_filt is not None else []
         if raw_names[g_i] and not _blacklisted(raw_names[g_i]) and \
@@ -176,7 +209,8 @@ def main():
             cands = [(raw_names[g_i], name_shares[g_i])] + cands
         for t, sh in cands:
             if sh >= 0.15 and not _blacklisted(t):
-                chosen, src = t, "category"
+                stem = _stem_name(t)
+                chosen, src = (stem, "category_stem") if stem else (t, "category")
                 break
         if not chosen and rep_list:
             chosen, src = (rep_list[0] + ("等" if len(rep_list) > 1 else "")), "rep"
@@ -186,7 +220,9 @@ def main():
     n_by_cat = name_sources.count("category")
     print(f"[catalog] display_class: galaxy={display_classes.count('galaxy')} "
           f"medium={n_medium} dust={display_classes.count('dust')}; "
-          f"name_source: category={n_by_cat} rep={name_sources.count('rep')}")
+          f"name_source: category={n_by_cat} "
+          f"category_stem={name_sources.count('category_stem')} "
+          f"rep={name_sources.count('rep')}")
 
     galaxies = pa.table({
         "galaxy_id": pa.array(np.arange(G, dtype=np.int32)),

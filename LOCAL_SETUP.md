@@ -211,6 +211,13 @@ python scripts/run_full_leiden.py --base data export  --tag res1_sub
 # 3) 銀河カタログ(data/final/ = データ契約)
 python scripts/build_galaxy_catalog.py --base data --galaxy-tag res1_sub --macro-tag res1
 
+# 3b) 銀河団ラベルのキュレーション: 正典コピー(リポジトリ追跡下)は
+#     results/macro_label_overrides.json。data/final/ へコピーすると (5) の出版時に
+#     適用される。編集し直す場合はテンプレ出力 → label 編集 → data/final/ に保存 →
+#     変更を正典コピーにも反映(両方まとめてコミット)
+cp results/macro_label_overrides.json data/final/macro_label_overrides.json
+python scripts/audit_names.py --base data --dump-macro-labels   # テンプレ再生成(見直し用)
+
 # 4) 座標 run の生成(① マクロ+銀河 → ② 銀河内記事 → マージ)
 python scripts/layout_global.py      --base data --run <RUN> --macro-dim 3
 python scripts/run_local_parallel.py --base data --run <RUN> --jobs 8   # フルラン ~63分
@@ -253,3 +260,5 @@ cd viewer && npm install && npm run dev    # http://localhost:5173
 | 数値が検証値と微妙に違う | ダンプが更新されている可能性(§3 の SHA-256 確認) |
 | ビューアがデータを取得できない | リポジトリルートで `python -m http.server 8000` が起動しているか(vite proxy の転送先)。file:// 直オープンは CORS で不可 |
 | 星の hover 名が `local#NN` になる | 記事が無いのではなく**タイトルが引けていない**状態。①`python scripts/audit_tiles.py --base data` でサイドカー(`spatial/tiles/gal_*.json`)の欠落・不足を計測(欠落があれば `export_viewer_tiles.py` を再実行)②データ側が 0 件ならビューア側のタイル LRU 追い出しが原因(浮上中銀河は `pinTiles` で保護・`Entry.titles` 参照で hover 名をキャッシュ状態から独立させ済み。DevTools の `[tile N] サイドカー…` 警告で判別) |
+| 銀河名が「〜のスタブ」等のまま | 保守サフィックスは語幹正規化済み(`build_galaxy_catalog.py` の `_stem_name`)。`python scripts/audit_names.py --base data` で再計測し、残存パターンがあれば `MAINT_SUFFIX_RE` か `NAME_BLACKLIST` に追加 → catalog + export 再実行(再 Leiden/再レイアウト不要) |
+| 銀河団ラベルが「ISBN」「地理座標系」等ハブ記事名になる | 既定導出(rep_titles 先頭 16 文字)の限界。リポジトリ同梱のキュレーション表(正典)`results/macro_label_overrides.json` を `data/final/` へコピー → `export_viewer_tiles.py` 再実行(§6 の 3b)。編集し直す場合: `python scripts/audit_names.py --base data --dump-macro-labels` → `final/macro_label_overrides.template.json` の label を編集 → `final/macro_label_overrides.json` として保存(正典コピーへの反映も忘れずに) |
