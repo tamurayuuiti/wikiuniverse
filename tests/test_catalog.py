@@ -120,8 +120,9 @@ def main():
     for _src in ["数学", "スタブ", "すべてのスタブ記事の一覧", "Xのスタブ"]:
         assert bgc._stem_name(_src) == "", _src  # 非該当/語幹短すぎ/ブラックリスト
 
-    # ---- global layout smoke (dim=2 for speed)
-    out2 = run_script("layout_global.py", "--dim", "2", "--galaxy-tag", "res1_s",
+    # ---- global layout smoke (v1.5 canonical: full 3D, sphere relax,
+    #      bary placement for mediums AND unlinked galaxies, no baked lens)
+    out2 = run_script("layout_global.py", "--galaxy-tag", "res1_s",
                       "--run", "r_main")
 
     # ---- version-skew regression: pre-v2 catalog (macros without is_dust,
@@ -133,7 +134,7 @@ def main():
     _gpath = os.path.join(final, "galaxies.parquet")
     _gt = pq.read_table(_gpath)
     pq.write_table(_gt.drop(["display_class"]), _gpath)
-    out_skew = run_script("layout_global.py", "--dim", "2", "--galaxy-tag", "res1_s",
+    out_skew = run_script("layout_global.py", "--galaxy-tag", "res1_s",
                           "--run", "r_main")
     assert "pre-v2" in out_skew, "skew warning not emitted"
     # restore v2 catalog files (skew block degraded them in place)
@@ -153,34 +154,112 @@ def main():
     lm = json.load(open(os.path.join(lay, "layout_meta.json"), encoding="utf-8"))
     assert lm["n_galaxies"] == G
     assert set(lm["quality"]) >= {"macro_native_overlap_frac", "galaxy_spill_frac",
-                                  "galaxy_spill_count", "macro_proj_overlap"}, lm
+                                  "galaxy_spill_count", "macro_proj_overlap",
+                                  "galaxy_overlap_frac", "galaxy_flat_mean",
+                                  "galaxy_flat_p90", "galaxy_flat_n_macros",
+                                  "macro_adj_recall_top5",
+                                  "macro_adj_spearman"}, lm
     assert set(lm["quality"]["macro_proj_overlap"]) >= {"top_z", "side_x", "random_mean"}
+    # v1.5 canonical: the old placement knobs are gone from the schema entirely
+    for gone in ("dim", "z_squash", "galaxy_relax", "medium_place"):
+        assert gone not in lm, f"{gone} should have been removed"
+        assert gone not in lm["mode"], f"mode.{gone} should have been removed"
+    assert lm["mode"]["canonical"] is True, lm["mode"]
+    assert lm["mode"]["macro_dim"] == 3
     assert os.path.exists(os.path.join(lay, "preview.png"))
-    assert any(f.startswith("preview_macro2d") and f.endswith(".html")
+    assert any(f.startswith("preview_macro3d") and f.endswith(".html")
                for f in os.listdir(lay)), os.listdir(lay)
 
-    # ---- full-3D arm (macro-dim 3) into its own subdir
-    run_script("layout_global.py", "--dim", "3", "--macro-dim", "3",
-               "--run", "r_3d", "--galaxy-tag", "res1_s")
-    lay3 = os.path.join(BASE, "layout", "r_3d")
-    lm3 = json.load(open(os.path.join(lay3, "layout_meta.json"), encoding="utf-8"))
-    assert lm3["mode"]["macro_dim"] == 3
-    # --- 3D containment regression: every placed non-dust galaxy center must lie
-    #     inside its macro sphere (catches z-composition bugs like the 2026-09-26 one)
-    gpos3 = pq.read_table(os.path.join(lay3, "galaxy_positions.parquet")).to_pydict()
-    mpos3 = pq.read_table(os.path.join(lay3, "macro_positions.parquet")).to_pydict()
-    mxyz = _np.stack([mpos3["x"], mpos3["y"], mpos3["z"]], axis=1)
-    mr = _np.asarray(mpos3["radius"])
-    gxyz = _np.stack([gpos3["x"], gpos3["y"], gpos3["z"]], axis=1)
-    gr = _np.asarray(gpos3["radius"])
+    # --- 3D containment regression on the canonical run: every placed non-dust
+    #     galaxy sphere must fit inside its macro sphere (|c| + r <= Rm). Catches
+    #     z-composition bugs (2026-09-26) and the pancake/lens regimes (v1.5).
+    mpos = pq.read_table(os.path.join(lay, "macro_positions.parquet")).to_pydict()
+    mxyz = _np.stack([mpos["x"], mpos["y"], mpos["z"]], axis=1)
+    mr = _np.asarray(mpos["radius"])
+    gxyz = _np.stack([gpos["x"], gpos["y"], gpos["z"]], axis=1)
+    gr = _np.asarray(gpos["radius"])
     placed_mask = gr > 0
-    mi = _np.asarray(gpos3["macro_id"])[placed_mask]
-    d3 = _np.linalg.norm(gxyz[placed_mask] - mxyz[mi], axis=1)
-    assert (d3 <= mr[mi] * 1.15).mean() > 0.98, \
-        f"galaxies outside macro spheres in 3D: {(d3 > mr[mi] * 1.15).sum()}"
-    assert os.path.exists(os.path.join(lay3, "preview.png"))
-    assert any(f.startswith("preview_macro3d") and f.endswith(".html")
-               for f in os.listdir(lay3)), os.listdir(lay3)
+    cls_g = [str(c) for c in gpos["display_class"]]
+    nondust = placed_mask & _np.asarray([c != "dust" for c in cls_g])
+    mi_nd = _np.asarray(gpos["macro_id"])[nondust]
+    d3_nd = _np.linalg.norm(gxyz[nondust] - mxyz[mi_nd], axis=1)
+    assert (d3_nd + gr[nondust] <= mr[mi_nd] * 1.02 + 1e-9).all(), \
+        f"non-dust galaxy bodies outside macro sphere: " \
+        f"{int((d3_nd + gr[nondust] > mr[mi_nd] * 1.02).sum())}"
+    q = lm["quality"]
+    if q["galaxy_flat_mean"] is not None:
+        assert 0.0 <= q["galaxy_flat_mean"] <= 1.0, q
+        assert 0.0 <= q["galaxy_flat_p90"] <= 1.0, q
+
+    # ---- v1.5 helper unit tests (flatness / adjacency / medium_local / fib slots)
+    spec_lg = importlib.util.spec_from_file_location(
+        "layout_global_mod", os.path.join(ROOT, "scripts", "layout_global.py"))
+    lg = importlib.util.module_from_spec(spec_lg)
+    spec_lg.loader.exec_module(lg)
+
+    rng_t = _np.random.default_rng(7)
+    planar = _np.stack([rng_t.normal(size=200), rng_t.normal(size=200),
+                        _np.zeros(200)], axis=1)
+    f_pl = lg.flatness(planar)
+    f_sp = lg.flatness(rng_t.normal(size=(200, 3)))
+    assert f_pl > 0.95, f_pl                                   # pancake ~ 1
+    assert f_sp < f_pl - 0.1, (f_sp, f_pl)                     # isotropic < pancake
+    assert lg.flatness(_np.zeros((2, 3))) == 0.0               # degenerate
+
+    # chain graph on a line, weights decreasing with distance -> perfect recall
+    centers_t = _np.array([[0.0, 0, 0], [10, 0, 0], [25, 0, 0], [45, 0, 0]])
+    adjm = lg.macro_adjacency(centers_t, [(0, 1), (1, 2), (2, 3)],
+                              [3.0, 2.0, 1.0], k=3)
+    assert adjm["recall"] == 1.0, adjm
+    assert adjm["spearman"] is not None and adjm["spearman"] < -0.9, adjm
+    tiny = lg.macro_adjacency(_np.zeros((2, 3)), [(0, 1)], [1.0])
+    assert tiny["recall"] is None and tiny["spearman"] is None
+
+    # medium_local: intra-macro centroid / cross-macro boundary point / fallback
+    mcen = _np.array([[0.0, 0, 0], [200, 0, 0]])
+    mof = _np.array([0, 0, 0, 1])          # gid0 = medium, 1/2 regular, 3 other macro
+    midx_t = {0: 0, 1: 1}
+    reg_local = {1: _np.array([-10.0, 0, 0]), 2: _np.array([10.0, 0, 0])}
+    p_in = lg.medium_local(reg_local, [(1, 1.0), (2, 1.0)], mcen, mof,
+                           midx_t, 0, 50.0, 1.0, 42)
+    assert _np.allclose(p_in, [0, 0, 0], atol=1e-9), p_in
+    p_cross = lg.medium_local(reg_local, [(3, 1.0)], mcen, mof, midx_t,
+                              0, 50.0, 1.0, 42)
+    assert abs(p_cross[0] - (50.0 - 1.0) * 0.85) < 1e-9, p_cross
+    assert _np.allclose(p_cross[1:], [0, 0], atol=1e-9), p_cross
+    p_fb = lg.medium_local(reg_local, [], mcen, mof, midx_t, 0, 50.0, 1.0, 42)
+    assert 0 < _np.linalg.norm(p_fb) <= (50.0 - 1.0) * 0.6 * 1.2, p_fb
+    p_fb2 = lg.medium_local(reg_local, [], mcen, mof, midx_t, 0, 50.0, 1.0, 42,
+                            fallback=_np.array([1.0, 2.0, 3.0]))
+    assert _np.allclose(p_fb2, [1.0, 2.0, 3.0]), p_fb2
+
+    # _fib_ball_slots: volume-uniform BALL (not a plane), deterministic, bounded
+    S = lg._fib_ball_slots(60, 10.0, 42)
+    assert S.shape == (60, 3)
+    assert (_np.linalg.norm(S, axis=1) <= 10.0 + 1e-9).all()
+    assert lg.flatness(S) < 0.9, lg.flatness(S)
+    assert _np.allclose(S, lg._fib_ball_slots(60, 10.0, 42))
+    assert lg._fib_ball_slots(0, 10.0).shape == (0, 3)
+
+    # relax_disks: exactly-coincident bodies must separate (the zero-vector
+    # degeneracy that stacked unlinked galaxies onto one point, 2026-09-29)
+    stk = lg.relax_disks(_np.zeros((12, 3)), _np.ones(12) * 5.0, iters=120)
+    dd = _np.linalg.norm(stk[:, None, :] - stk[None, :, :], axis=2)
+    ii_t, jj_t = _np.triu_indices(12, 1)
+    assert (dd[ii_t, jj_t] >= 10.2 * 0.99).all(), dd[ii_t, jj_t].min()
+
+    # fr_layout isolated nodes: 3D arm must fill a BALL (pancake regression
+    # guard, 2026-09-29); the dim=2 experimental arm keeps the planar spiral
+    edges_c = [(i, i + 1) for i in range(9)]              # chain over nodes 0..9
+    C3 = lg.fr_layout(40, edges_c, None, 3, 42)
+    iso3 = C3[10:]
+    assert len(iso3) == 30
+    assert lg.flatness(iso3) < 0.9, lg.flatness(iso3)      # NOT a disk
+    assert (_np.linalg.norm(C3, axis=1) <= 1.0 + 1e-6).all()
+    C2 = lg.fr_layout(40, edges_c, None, 2, 42)
+    assert C2.shape == (40, 2)
+    n2 = _np.linalg.norm(C2[10:], axis=1)
+    assert (n2 > 1e-6).all() and (n2 <= 1.0 + 1e-6).all()   # spiral, not origin
 
     # ---- local (intra-galaxy) article layout, batch range + merge
     run_script("layout_local.py", "--galaxies", "0-11", "--galaxy-tag", "res1_s",
@@ -203,7 +282,7 @@ def main():
     # ---- recompose: new global params -> article positions without re-run
     # NOTE: z_squash has no effect on tiny synthetic graphs (igraph FR init is
     # planar for n<=~6), so we vary --pack to force a radius/scale change.
-    run_script("layout_global.py", "--dim", "2", "--pack", "0.3",
+    run_script("layout_global.py", "--pack", "0.3",
                "--run", "r_c2", "--galaxy-tag", "res1_s")
     run_script("recompose_articles.py", "--from-run", "r_main", "--to-run", "r_c2")
     p_old = pq.read_table(os.path.join(lay, "article_positions.parquet")).to_pydict()

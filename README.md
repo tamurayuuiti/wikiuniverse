@@ -242,30 +242,44 @@ python scripts/build_galaxy_catalog.py --base data --galaxy-tag res1_sub --macro
 銀河カタログから階層レイアウトを生成する(上位コミュニティ配置 → 下位配置 → 座標合成):
 
 ```bash
-python scripts/layout_global.py --base data --run <RUN> --macro-dim 3 --pack 0.6 --seed 42
+python scripts/layout_global.py --base data --run <RUN> --pack 0.6 --seed 42
 #   <RUN> = data/layout/<run>/ の名前(規約 <YYYYMMDD>_<slug>。省略時は wu/paths.py の
 #   ACTIVE_LAYOUT_RUN)。run の採用手順は LOCAL_SETUP.md §6
-#   --z-squash 既定 0.85(銀河の z レンズ圧縮。正典 run は 0.35 で生成 — 各 run の実値は
-#   その run の layout_meta.json が正史)、--r-spacing 1.5(銀河半径フロア r>=1.5*n^(1/3)、
-#   小銀河の記事詰まり防止)
+#   正準 = 完全 3D(既定のまま): マクロ 3D 球パッキング + 銀河の 3D 球緩和/クランプ。
+#   焼き込みレンズは無い — 地図/hybrid ビューは視聴時の z 圧縮(ビューアのスライダー)で
+#   行う(D17)。実験腕: --macro-dim 2 / --macro-z-squash <1 / --macro-w-power >1
+#   --r-spacing 1.5(銀河半径フロア r>=1.5*n^(1/3)、小銀河の記事詰まり防止)
 #   → data/layout/<run>/galaxy_positions.parquet  (galaxy_id, macro_id, x,y,z, radius, display_class)
 #   → data/layout/<run>/macro_positions.parquet   (マクロの中心と半径)
 #   → data/layout/<run>/layout_meta.json / preview.png / preview_*.html
 ```
 
-アルゴリズム(階層レイアウト v1.3、**正準方針 = 完全 3D**):
-①マクロ配置(`--macro-dim 3` 正準)= 3D 球パッキング(macro_pairs 重み付き FR + 球分離緩和、
-重なり ≤2%)。**hybrid/地図ビューはレイアウトではなく視点パラメータ**: HTML プレビューの
+アルゴリズム(階層レイアウト v1.5、**正準方針 = 完全 3D**):
+①マクロ配置(既定 `--macro-dim 3`)= 3D 球パッキング(macro_pairs 重み付き FR + 球分離緩和、
+重なり ≤2%)。`--macro-w-power τ` は FR 引力の重み温度(w^τ。1.0=中立、>1 で強いリンクの
+近接を強調)。**hybrid/地図ビューはレイアウトではなく視点パラメータ**: プレビュー/ビューアの
 z-compress スライダー(1.0=純 3D ↔ 0.05=ほぼ地図)が視聴時に z を圧縮する(xy 不変なので
-俯瞰は同一、レイアウト焼き直し不要)。`--macro-dim 2` / `--macro-z-squash <1` は実験腕として
-維持(本番規模で再検討する際の比較基準)。
-②マクロ内で銀河を 3D FR 配置、xy で円盤緩和・クランプ、z は `--z-squash` 圧縮レンズ
-→ ③dust は遠方シェル。半径はマクロ R_M ∝ √記事数、銀河 r_g = pack·R_M·√(n_g/n_M)。
-品質は `layout_meta.json` の `quality`: `macro_native_overlap_frac`(配置次元での重なり)、
-`macro_proj_overlap`(top/side/ランダム視点射影の重なり率 = 「地図らしさ」の視点依存性)、
-`galaxy_spill_frac`。比較実行は `--run <name>` で別ディレクトリへ。
-preview.png(4 パネル: xy/xz/yz/深度カラー)+ **preview_macro*.html**(three.js・OrbitControls・
-z-compress スライダー、データ埋め込み)。1,971 銀河 + 63 マクロなら ~1 秒。
+俯瞰は同一、レイアウト焼き直し不要)。
+②マクロ内で銀河を配置: **マクロ内ペアを持つ(連結な)銀河**は重み付き FR(3D)、
+**マクロ内ペアを1本も持たない銀河**(top-K リンクが全てマクロ外 = 外向きの銀河)は
+リンク先の重み付き重心(他マクロの隣接=そのマクロ方向の境界点)へ配置し、ペア自体が
+無い場合はフィボナッチ球スロットへ。その後、3D 球緩和 + 3D 放射クランプ(|中心|+r ≤ R_M)
+でマクロ球に収める(完全一致点は決定的方向で分離される)。半径はマクロ R_M ∝ √記事数、
+銀河 r_g = max(pack·R_M·√(n_g/n_M), r_spacing·n_g^(1/3))、体積キャップ (Σr³)^(1/3) ≤ 0.9·R_M。
+③**媒介銀河(display_class=medium)も同じ重心規則**で配置し(「銀河間物質」が橋渡しの
+相手に面した位置に来る = D16 の特別描画の座標側裏付け)、通常銀河からの押し出し緩和で
+重なりを解く。
+④dust は遠方シェル(フィボナッチ球面)。品質は `layout_meta.json` の `quality`:
+`macro_native_overlap_frac`(配置次元でのマクロ重なり)、`macro_proj_overlap`
+(top/side/ランダム視点射影の重なり率 = 「地図らしさ」の視点依存性)、
+`galaxy_spill_frac`/`galaxy_spill_count`(3D 包含: 銀河球がマクロ球に収まっているか)、
+`galaxy_overlap_frac`(マクロ内の銀河球の重なり = 緩和品質、体積重み)、
+`galaxy_flat_mean`/`galaxy_flat_p90`(マクロ毎の銀河点群の PCA 異方性: ≈1=円盤状 /
+≈2/3=等方的。円盤化の客観指標)、`macro_adj_recall_top5`・`macro_adj_spearman`
+(マクロ配置の意味的近接の保持度: リンク強さ上位の隣接が空間的にも近いか /
+重みと空間距離の順位相関、負=強いリンクほど近い)。比較実行は `--run <name>` で
+別ディレクトリへ。preview.png(4 パネル: xy/xz/yz/深度カラー)+ **preview_macro*.html**
+(three.js・OrbitControls・z-compress スライダー、データ埋め込み)。1,971 銀河 + 63 マクロなら ~2 秒。
 
 ## 銀河内部ローカルレイアウト(記事座標)
 
