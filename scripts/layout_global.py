@@ -1,6 +1,21 @@
 """Global hierarchical layout (Phase 3, step 2): macros + galaxies in 3D.
 
 Design (matches D16 policy "銀河を空間的に分離して配置"; canonical = full 3D, D17).
+Version: v1.6 (2026-10-01; containment clamp unconditional + rim cone spread):
+  - the 3D radial clamp below now applies to EVERY macro. The old
+    `len(P) >= 2` gate skipped single-regular-galaxy macros, where a pairless
+    isolated galaxy on its fibonacci slot could stick out of the macro sphere
+    ((d3+r)/Rm up to 1.114, measured). With the clamp unconditional and the
+    volume cap (r <= 0.9 Rm), d3 + r <= Rm holds by construction:
+    galaxy_spill_count == 0 is now a structural guarantee (nonzero = bug).
+  - cross-macro centroid contributions no longer aim at a SINGLE rim point.
+    Galaxies sharing one dominant neighbour macro all landed on the identical
+    boundary point, which the clamp flattened into a thin cap (a driver of
+    galaxy_flat_p90 ~ 0.95). Each contribution is now spread inside a
+    deterministic cone around the neighbour direction (_cone_spread:
+    half-angle <= 0.75 rad, depth 0.35-0.95 of the rim, seeded per galaxy and
+    per neighbour macro = bit-reproducible, no RNG state). The depth cap 0.95
+    preserves containment. `boundary_frac` is gone (no callers).
 v1.5: canonical is fully three-dimensional with NO baked lens (the old
 --z-squash pancake lens and the pre-v1.4 xy disk regime are removed; map/hybrid
 views remain VIEW-TIME z-compression in the viewer/preview, per D17).
@@ -82,6 +97,47 @@ def _fib_ball_slots(count: int, radius: float, seed_off: int = 0) -> np.ndarray:
     rad = radius * ((k + 0.5) / n) ** (1.0 / 3.0)
     return np.stack([rad * rr * np.cos(phi), rad * rr * np.sin(phi), rad * y],
                     axis=1)
+
+
+_CONE_MAX = 0.75  # rad (~43 deg): half-angle of the rim cone spread (v1.6)
+
+
+def _fib_dir(k: int) -> np.ndarray:
+    """Deterministic unit direction #k (fibonacci sphere over 997 slots).
+    Used only to build a stable perpendicular frame for _cone_spread."""
+    y = 1 - 2 * (k + 0.5) / 997.0
+    rr = np.sqrt(max(0.0, 1 - y * y))
+    phi = k * 2.399963229728653
+    return np.array([rr * np.cos(phi), rr * np.sin(phi), float(y)])
+
+
+def _cone_spread(d_unit: np.ndarray, seed_key: int):
+    """(unit vector, depth factor 0.35-0.95): deterministic sample inside the
+    cone around `d_unit` (v1.6, rim-point de-concentration).
+
+    Uniform-on-disk cone sampling (sqrt for the half-angle) x azimuth x
+    radial depth, all derived from `seed_key` by irrational multipliers —
+    NO RNG state, so parallel/resume runs stay bit-reproducible. The depth
+    cap 0.95 preserves containment: 0.95*(Rm-r)+r <= Rm.
+    """
+    u1 = (seed_key * 0.6180339887498949) % 1.0
+    u2 = (seed_key * 0.7548776662466927) % 1.0
+    u3 = (seed_key * 0.5432109876543210) % 1.0
+    alpha = _CONE_MAX * np.sqrt(u1)
+    theta = 2 * np.pi * u2
+    h = _fib_dir(int(seed_key) % 997)
+    t = h - d_unit * np.dot(h, d_unit)
+    tn = np.linalg.norm(t)
+    if tn < 1e-9:  # d_unit (anti)parallel to h: deterministic fallback frame
+        e0 = (np.array([1.0, 0, 0]) if abs(d_unit[0]) < 0.9
+              else np.array([0, 1.0, 0]))
+        t = e0 - d_unit * np.dot(e0, d_unit)
+        tn = np.linalg.norm(t)
+    t = t / tn
+    b = np.cross(d_unit, t)
+    e_perp = t * np.cos(theta) + b * np.sin(theta)
+    v = d_unit * np.cos(alpha) + e_perp * np.sin(alpha)
+    return v, 0.35 + 0.60 * u3
 
 
 def fr_layout(n_nodes: int, edges, weights, dim: int, seed: int,
@@ -292,19 +348,24 @@ def macro_adjacency(centers: np.ndarray, edges, weights, k: int = 5) -> dict:
 
 def medium_local(reg_local: dict, pairs, macro_centers: np.ndarray,
                  macro_of, midx: dict, m_own, Rm: float, r_med: float,
-                 fallback_seed: int, boundary_frac: float = 0.85,
-                 fallback=None) -> np.ndarray:
+                 fallback_seed: int, fallback=None) -> np.ndarray:
     """Local position of one medium galaxy = weighted centroid of link targets.
 
     reg_local: dict gid -> local 3D vec of PLACED regular galaxies (this macro).
     pairs: iterable of (other_gid, weight) for the medium galaxy.
     Intra-macro neighbours contribute their placed local positions; cross-macro
-    neighbours contribute a boundary point of the macro sphere in the direction
-    of THEIR macro center (so mediums bridging other clusters sit near the rim
-    facing them). Neighbours without a placed position (e.g. other mediums) are
-    ignored; medium-medium separation is resolved by a later push pass. With no
-    usable pairs, returns `fallback` when given (e.g. a fibonacci-ball slot for
-    unlinked regular galaxies), else a deterministic golden-angle slot.
+    neighbours contribute a CONE-SPREAD point (v1.6) inside the macro sphere
+    around the direction of THEIR macro center (so mediums bridging other
+    clusters sit near the rim facing them): every galaxy sharing the same
+    dominant neighbour used to land on ONE identical rim point, which the
+    containment clamp then flattened into a thin cap (the pancake driver).
+    The cone sample is deterministic per (galaxy, neighbour macro) via
+    seed_key = fallback_seed + 7 * neighbour_macro_id — no RNG state, so
+    results are independent of job assignment / resume order. Neighbours
+    without a placed position (e.g. other mediums) are ignored; medium-medium
+    separation is resolved by a later push pass. With no usable pairs,
+    returns `fallback` when given (e.g. a fibonacci-ball slot for unlinked
+    regular galaxies), else a deterministic golden-angle slot.
     """
     num = np.zeros(3)
     wsum = 0.0
@@ -328,7 +389,9 @@ def medium_local(reg_local: dict, pairs, macro_centers: np.ndarray,
             dn = float(np.linalg.norm(d))
             if dn < 1e-9:
                 continue
-            num += wv * (d / dn * (rim * boundary_frac))
+            v, depthf = _cone_spread(d / dn,
+                                     int(fallback_seed) + 7 * int(mo))
+            num += wv * (v * (rim * depthf))
             wsum += wv
     if wsum > 0:
         return num / wsum
@@ -627,11 +690,17 @@ def main():
             else np.zeros((0, 3))
         if len(P) >= 2:
             P = relax_disks(P, g_radius[reg_all], iters=120)
-            # 3D radial clamp: keep every galaxy sphere inside the macro sphere
-            lim = np.maximum(Rm - g_radius[reg_all], 0.05 * Rm)
-            d3 = np.linalg.norm(P, axis=1)
-            sc = np.where(d3 > lim, lim / np.maximum(d3, 1e-9), 1.0)
-            P = P * sc[:, None]
+        # 3D radial clamp, applied UNCONDITIONALLY (v1.6): the old
+        # `len(P) >= 2` gate skipped single-regular-galaxy macros, where a
+        # pairless isolated galaxy on its fibonacci slot could stick out of
+        # the macro sphere (measured (d3+r)/Rm up to 1.114). With the volume
+        # cap (r <= 0.9 Rm) and lim = max(Rm-r, 0.05Rm), d3 + r <= Rm now
+        # holds by construction => galaxy_spill_count == 0 for every macro.
+        # Elementwise ops below are safe on the empty (len-0) P as well.
+        lim = np.maximum(Rm - g_radius[reg_all], 0.05 * Rm)
+        d3 = np.linalg.norm(P, axis=1)
+        sc = np.where(d3 > lim, lim / np.maximum(d3, 1e-9), 1.0)
+        P = P * sc[:, None]
         if len(reg_all):
             g_centers[reg_all] = m_centers[m_i] + P
             placed[reg_all] = True
@@ -773,10 +842,12 @@ def main():
             "n_dust_shell": int(len(dust_idx)), "R_TOTAL": R_TOTAL,
             "mode": {"macro_dim": a.macro_dim, "macro_z_squash": a.macro_z_squash,
                      "canonical": a.macro_dim == 3 and a.macro_z_squash == 1.0,
-                     "note": ("canonical policy (v1.5): full 3D, macro-dim 3 "
+                     "note": ("canonical policy (v1.6): full 3D, macro-dim 3 "
                               "unsquashed, sphere-relaxed galaxies, NO baked lens "
                               "(map/hybrid views are VIEW-TIME z-compression in "
-                              "the viewer, D17); unlinked galaxies are bary-placed")
+                              "the viewer, D17); unlinked galaxies are bary-placed "
+                              "(rim contributions cone-spread); containment clamp "
+                              "is unconditional => spill == 0 by construction")
                      if (a.macro_dim == 3 and a.macro_z_squash == 1.0) else
                      "experimental arm; canonical = --macro-dim 3 "
                      "--macro-z-squash 1.0"},

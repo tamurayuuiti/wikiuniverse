@@ -309,6 +309,64 @@ def main():
     assert any("galaxy_spill_ids" in w for w in res_w["warnings"]), \
         res_w["warnings"]
 
+    # ---- v1.6 containment regression (unconditional clamp): a macro with a
+    #      SINGLE regular, pairless galaxy used to skip the clamp entirely and
+    #      its fibonacci slot pushed the galaxy outside the macro sphere —
+    #      (d3+r)/Rm = 1.114 measured with the pre-v1.6 code on this exact
+    #      fixture shape (single n=20 galaxy + 5x200k-article macro). With the
+    #      clamp unconditional the galaxy is projected exactly onto the
+    #      boundary (ratio 1.000), spill vanishes by construction, and
+    #      audit_layout must agree end-to-end.
+    fxb = os.path.join(BASE, "spill_fixture")
+    fx_final = os.path.join(fxb, "final")
+    os.makedirs(fx_final, exist_ok=True)
+    pq.write_table(_pa.table({
+        "galaxy_id": _pa.array(np.arange(6), type=_pa.int32()),
+        "macro_id": _pa.array([0, 1, 1, 1, 1, 1], type=_pa.int32()),
+        "n_articles": _pa.array([20] + [200000] * 5, type=_pa.int32()),
+        "is_dust": [False] * 6,
+        "display_class": ["galaxy"] * 6,
+    }), os.path.join(fx_final, "galaxies.parquet"))
+    pq.write_table(_pa.table({
+        "macro_id": _pa.array([0, 1], type=_pa.int32()),
+        "n_articles": _pa.array([20, 1000000], type=_pa.int32()),
+        "n_galaxies": _pa.array([1, 5], type=_pa.int32()),
+        "is_dust": [False, False],
+    }), os.path.join(fx_final, "macros.parquet"))
+    pq.write_table(_pa.table({          # gid0: NO pairs at all (pairless)
+        "a": _pa.array([1, 2, 3, 4], type=_pa.int64()),
+        "b": _pa.array([2, 3, 4, 5], type=_pa.int64()),
+        "w": [4.0, 3.0, 2.0, 1.0],
+    }), os.path.join(fx_final, "galaxy_pairs_topK.parquet"))
+    pq.write_table(_pa.table({
+        "macro_a": _pa.array([0], type=_pa.int64()),
+        "macro_b": _pa.array([1], type=_pa.int64()),
+        "w": [10.0],
+    }), os.path.join(fx_final, "macro_pairs.parquet"))
+    r_fx = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "layout_global.py"),
+         "--base", fxb, "--run", "r_fx"], capture_output=True, text=True)
+    assert r_fx.returncode == 0, r_fx.stdout[-2000:] + r_fx.stderr[-2000:]
+    lm_fx = json.load(open(os.path.join(fxb, "layout", "r_fx",
+                                        "layout_meta.json"), encoding="utf-8"))
+    assert lm_fx["quality"]["galaxy_spill_count"] == 0, lm_fx["quality"]
+    assert lm_fx["quality"]["galaxy_spill_ids"] == [], lm_fx["quality"]
+    gpx = pq.read_table(os.path.join(
+        fxb, "layout", "r_fx", "galaxy_positions.parquet")).to_pydict()
+    mpx = pq.read_table(os.path.join(
+        fxb, "layout", "r_fx", "macro_positions.parquet")).to_pydict()
+    c0 = _np.array([gpx["x"][0], gpx["y"][0], gpx["z"][0]])
+    mc0 = _np.array([mpx["x"][0], mpx["y"][0], mpx["z"][0]])
+    R0, r0 = float(mpx["radius"][0]), float(gpx["radius"][0])
+    d0 = float(_np.linalg.norm(c0 - mc0))
+    assert r0 <= 0.9 * R0 + 1e-9, (r0, R0)            # volume cap active
+    assert d0 + r0 <= R0 + 1e-9, (d0, r0, R0)         # containment (was 1.114)
+    assert d0 + r0 >= R0 - 1e-9, (d0, r0, R0)         # clamped ONTO the limit
+    res_fx = al.audit(Dirs(fxb), "r_fx")
+    assert res_fx["summary"]["n_spill"] == 0 and res_fx["spill"] == []
+    assert not [w for w in res_fx["warnings"] if "WARN" in w], \
+        res_fx["warnings"]
+
     # ---- v1.5 helper unit tests (flatness / adjacency / medium_local / fib slots)
     spec_lg = importlib.util.spec_from_file_location(
         "layout_global_mod", os.path.join(ROOT, "scripts", "layout_global.py"))
@@ -341,10 +399,35 @@ def main():
     p_in = lg.medium_local(reg_local, [(1, 1.0), (2, 1.0)], mcen, mof,
                            midx_t, 0, 50.0, 1.0, 42)
     assert _np.allclose(p_in, [0, 0, 0], atol=1e-9), p_in
+    # v1.6 cone spread: a cross-macro contribution lands INSIDE a deterministic
+    # cone around the neighbour direction (was: one exact rim point at 0.85 that
+    # every galaxy sharing this neighbour collapsed onto -> flat cap)
+    rim_t = 50.0 - 1.0
     p_cross = lg.medium_local(reg_local, [(3, 1.0)], mcen, mof, midx_t,
                               0, 50.0, 1.0, 42)
-    assert abs(p_cross[0] - (50.0 - 1.0) * 0.85) < 1e-9, p_cross
-    assert _np.allclose(p_cross[1:], [0, 0], atol=1e-9), p_cross
+    assert p_cross[0] > 0, p_cross                        # faces the neighbour
+    ang_c = _np.arccos(_np.clip(p_cross[0] / _np.linalg.norm(p_cross), -1, 1))
+    assert ang_c <= lg._CONE_MAX + 1e-12, (ang_c, lg._CONE_MAX)
+    dep_c = _np.linalg.norm(p_cross) / rim_t
+    assert 0.35 - 1e-12 <= dep_c <= 0.95 + 1e-12, dep_c   # depth keeps containment
+    assert _np.array_equal(p_cross, lg.medium_local(      # deterministic
+        reg_local, [(3, 1.0)], mcen, mof, midx_t, 0, 50.0, 1.0, 42))
+    # 12 unlinked galaxies sharing ONE dominant neighbour macro: distinct
+    # positions (old impl: all identical -> min dist 0), off-plane cloud
+    # (old impl after relax: thin cap), inside the cone, inside the sphere
+    pts12 = _np.stack([lg.medium_local(reg_local, [(3, 1.0)], mcen, mof,
+                                       midx_t, 0, 50.0, 1.0, 42 + k)
+                       for k in range(12)])
+    dd12 = _np.linalg.norm(pts12[:, None] - pts12[None, :], axis=2)
+    iu12 = _np.triu_indices(12, 1)
+    assert dd12[iu12].min() > 1.0, dd12[iu12].min()       # measured 10.34
+    assert lg.flatness(pts12) < 0.9, lg.flatness(pts12)   # measured 0.8045
+    ang12 = _np.arccos(_np.clip(
+        pts12[:, 0] / _np.linalg.norm(pts12, axis=1), -1, 1))
+    assert ang12.max() <= lg._CONE_MAX + 1e-12, ang12.max()
+    dep12 = _np.linalg.norm(pts12, axis=1) / rim_t
+    assert (dep12 >= 0.35 - 1e-12).all() and (dep12 <= 0.95 + 1e-12).all()
+    assert (pts12[:, 0] > 0).all()
     p_fb = lg.medium_local(reg_local, [], mcen, mof, midx_t, 0, 50.0, 1.0, 42)
     assert 0 < _np.linalg.norm(p_fb) <= (50.0 - 1.0) * 0.6 * 1.2, p_fb
     p_fb2 = lg.medium_local(reg_local, [], mcen, mof, midx_t, 0, 50.0, 1.0, 42,
