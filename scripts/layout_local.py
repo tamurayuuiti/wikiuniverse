@@ -21,8 +21,16 @@ elastic prior, ball clamp) and all seeds are untouched, and job assignment
 
 Each galaxy remains a fully independent job:
   internal edges  -> igraph FR (3D) shape, scaled into the galaxy ball
-  anchor vectors  -> articles with cross-galaxy links are pulled toward the
-                     ball boundary facing their linked neighbour galaxies
+                     (B3: multilevel seed for n >= --ml-threshold;
+                      B2-a: recentred + robust p98 normalization, --fr-norm)
+  sector anchors  -> (B1) articles with cross-galaxy links are pulled toward
+                     the ball boundary facing their DOMINANT neighbour galaxy
+                     (top-1, blended with top-2 when comparable); the pull gain
+                     scales with the confidence = weight share of the blended
+                     neighbours, so diffuse articles stay interior
+  radial strata   -> (B2) target radius follows the within-galaxy rank
+                     quantile of external degree (scale-free), and internal
+                     hubs with few external links are pulled toward the core
   elastic prior   -> keeps the FR internal structure while anchors bend it
 
 Modes:
@@ -68,13 +76,14 @@ from wu.dumpio import read_json, write_json  # noqa: E402
 from wu.paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 from wu.stats import load_edges_mmap  # noqa: E402
 
-PREP_SCHEMA = 1
+PREP_SCHEMA = 2  # v2 adds int_deg.npy (B2 stratification)
 CH = 4_000_000  # edge-scan chunk size
 
 
 def _fr_unit(n: int, edges_local: np.ndarray, dim: int, seed: int,
              fr_mode: str = "ml", ml_threshold: int = 2000,
-             ml_niter: int = 100, stats: dict | None = None) -> np.ndarray:
+             ml_niter: int = 100, stats: dict | None = None,
+             fr_norm: str = "p98") -> np.ndarray:
     """FR layout normalized to unit ball (deterministic via random.seed).
 
     B3: for n >= ml_threshold the flat force-directed anneal is replaced by a
@@ -121,14 +130,29 @@ def _fr_unit(n: int, edges_local: np.ndarray, dim: int, seed: int,
         lay = g.layout_fruchterman_reingold(dim=dim)
         coords = np.asarray(lay.coords, np.float64)
     c = coords
-    r = np.linalg.norm(c, axis=1)
-    m = r.max()
-    if m > 1e-9:
-        c = c / m
+    if fr_norm == "p98":
+        # B2-a: recentre + robust scale. The legacy max-norm let a single
+        # isolated outlier article set the scale (cloud shrank to ~half the
+        # ball, off-centre; 02 §O-6). p98 -> 1.0 with outliers clamped onto
+        # the unit ball keeps the body filling the galaxy sphere.
+        c = c - c.mean(axis=0)
+        r = np.linalg.norm(c, axis=1)
+        sc = float(np.percentile(r, 98))
+        if sc > 1e-9:
+            c = c / sc
+            r = r / sc
+        over = r > 1.0
+        if over.any():
+            c[over] /= r[over][:, None]
     else:
-        rng = np.random.default_rng(seed)
-        c = rng.normal(size=(n, dim))
-        c /= max(np.linalg.norm(c, axis=1).max(), 1e-9)
+        r = np.linalg.norm(c, axis=1)
+        m = r.max()
+        if m > 1e-9:
+            c = c / m
+        else:
+            rng = np.random.default_rng(seed)
+            c = rng.normal(size=(n, dim))
+            c /= max(np.linalg.norm(c, axis=1).max(), 1e-9)
     return c
 
 
@@ -177,6 +201,7 @@ def _prep_paths(dirs: Dirs, tag: str) -> dict:
         "cg": d / "cross_g.npy",
         "cw": d / "cross_w.npy",
         "ext": d / "ext_deg.npy",
+        "int": d / "int_deg.npy",
         "meta": d / "prep_meta.json",
     }
 
@@ -193,7 +218,7 @@ def prep_is_fresh(pp: dict, memb_path: str, edges_path: str) -> bool:
     """Prep artifacts exist and their recorded inputs match the current ones."""
     if not pp["meta"].exists():
         return False
-    for k in ("offs", "buf", "cu", "cg", "cw", "ext"):
+    for k in ("offs", "buf", "cu", "cg", "cw", "ext", "int"):
         if not pp[k].exists():
             return False
     meta = read_json(pp["meta"], {}) or {}
@@ -283,6 +308,10 @@ def cmd_prep(dirs: Dirs, tag: str, memb_path: str, edges_path: str) -> dict:
                   f"({100.0 * (i + len(blk)) / max(1, len(E)):.0f}%, "
                   f"{time.time() - t0:.0f}s)", flush=True)
     assert np.array_equal(fill, offs[1:])
+    # per-article internal degree (B2 core/hub stratification input)
+    int_deg = (np.bincount(buf[:, 0].astype(np.int64), minlength=n)
+               + np.bincount(buf[:, 1].astype(np.int64), minlength=n))
+    int_deg = int_deg.astype(np.int32)
 
     np.save(pp["offs"], offs)
     np.save(pp["buf"], buf)
@@ -290,6 +319,7 @@ def cmd_prep(dirs: Dirs, tag: str, memb_path: str, edges_path: str) -> dict:
     np.save(pp["cg"], cg)
     np.save(pp["cw"], cw)
     np.save(pp["ext"], ext)
+    np.save(pp["int"], int_deg)
     meta = {"schema": PREP_SCHEMA, "generated_at": _now(), "tag": tag,
             "n_articles": n, "n_galaxies": G,
             "n_internal_edges": int(cnt.sum()),
@@ -325,6 +355,7 @@ def load_prep(pp: dict) -> dict:
         "cg": np.load(pp["cg"], mmap_mode="r"),
         "cw": np.load(pp["cw"], mmap_mode="r"),
         "ext": np.load(pp["ext"], mmap_mode="r"),
+        "int": np.load(pp["int"], mmap_mode="r"),
     }
 
 
@@ -346,6 +377,65 @@ def build_anchors(prep: dict, memb: np.ndarray, centers: np.ndarray,
             anchor[:, dim] += np.bincount(u64, weights=wv * dn[:, dim],
                                           minlength=n)
     return anchor
+
+
+def build_anchor_dirs(prep: dict, memb: np.ndarray, centers: np.ndarray,
+                      n: int, ratio: float = 0.5):
+    """B1 sector anchors: per-article direction toward its dominant neighbour.
+
+    Returns (dir, conf). dir = unit vector toward the top-1 neighbour galaxy,
+    blended with top-2 when w2 >= ratio*w1 (articles tied to two galaxies sit
+    between them); conf = share of the article's cross-edge weight carried by
+    the blended neighbours = pull gain (diffuse "cosmopolitan" articles get a
+    weak pull and stay interior). Replaces the legacy summed-unit-vector
+    anchor, where opposing links cancelled and multi-direction articles lost
+    their anchor entirely (02 §O, D34). Vectorized over the sorted grouped
+    cross pairs: one argsort by (article, weight desc) + segment heads.
+    """
+    cu, cg, cw = prep["cu"], prep["cg"], prep["cw"]
+    dirv = np.zeros((n, 3))
+    conf = np.zeros(n)
+    if len(cu) == 0:
+        return dirv, conf
+    wmax = int(cw.max())
+    keys = cu.astype(np.int64) * (wmax + 1) + (wmax - cw.astype(np.int64))
+    ordw = np.argsort(keys, kind="stable")
+    cu_s, cg_s, cw_s = cu[ordw], cg[ordw], cw[ordw]
+    starts = np.concatenate([[0], np.flatnonzero(np.diff(cu_s) != 0) + 1])
+    ends = np.concatenate([starts[1:], [len(cu_s)]])
+    i1 = starts
+    i2 = np.where(ends - starts > 1, starts + 1, -1)
+    safe2 = np.maximum(i2, 0)
+    u1 = cu_s[i1].astype(np.int64)
+    w1 = cw_s[i1].astype(np.float64)
+    w2 = np.where(i2 >= 0, cw_s[safe2], 0).astype(np.float64)
+    g1 = cg_s[i1].astype(np.int64)
+    g2 = np.where(i2 >= 0, cg_s[safe2], 0).astype(np.int64)
+    own = memb[u1]
+    d1 = centers[g1] - centers[own]
+    d1 /= np.maximum(np.linalg.norm(d1, axis=1, keepdims=True), 1e-9)
+    blend = (i2 >= 0) & (w2 >= ratio * w1)
+    d2 = centers[g2] - centers[own]
+    d2 /= np.maximum(np.linalg.norm(d2, axis=1, keepdims=True), 1e-9)
+    vec = w1[:, None] * d1 + np.where(blend[:, None], w2[:, None] * d2, 0.0)
+    vec /= np.maximum(np.linalg.norm(vec, axis=1, keepdims=True), 1e-9)
+    dirv[u1] = vec
+    used = w1 + np.where(blend, w2, 0.0)
+    extd = np.asarray(prep["ext"], np.float64)
+    conf[u1] = used / np.maximum(extd[u1], 1.0)
+    return dirv, conf
+
+
+def _rank_quantile(v: np.ndarray) -> np.ndarray:
+    """Within-galaxy rank quantile in [0, 1] (scale-free across galaxy sizes;
+    B2 replaces the fixed ext/20 saturation with this)."""
+    n = len(v)
+    if n < 2:
+        return np.zeros(n)
+    idx = np.argsort(v, kind="stable")
+    q = np.empty(n)
+    q[idx] = np.arange(n) / (n - 1)
+    return q
 
 
 def _now():
@@ -429,6 +519,15 @@ def main():
     ap.add_argument("--ml-niter", type=int, default=100,
                     help="FR refine iterations on top of the multilevel seed "
                          "(the flat path keeps igraph's default 500)")
+    ap.add_argument("--anchor-mode", default="sector", choices=["sector", "sum"],
+                    help="sector = B1 dominant-neighbour sector direction with "
+                         "confidence-scaled gain (default); sum = legacy "
+                         "summed-unit-vector anchor (comparison arm)")
+    ap.add_argument("--fr-norm", default="p98", choices=["p98", "max"],
+                    help="p98 = recentred + robust p98 scale with outlier clamp "
+                         "(B2-a, default); max = legacy max-norm (comparison arm)")
+    ap.add_argument("--sector-ratio", type=float, default=0.5,
+                    help="blend the top-2 neighbour direction when w2 >= ratio*w1")
     ap.add_argument("--iters", type=int, default=40)
     ap.add_argument("--kappa", type=float, default=0.05, help="anchor pull gain")
     ap.add_argument("--lam", type=float, default=0.06, help="elastic prior gain")
@@ -504,14 +603,19 @@ def main():
     #      e.g. preview-only) must not pay the multi-second anchor rebuild
     to_do = sum(1 for x in range(glo, ghi + 1)
                 if x not in done and (selected is None or x in selected))
-    anchor = ext_deg = None
+    anchor = anchor_dir = anchor_conf = ext_deg = int_deg = None
     anchor_secs = 0.0
     if to_do:
         ta = time.time()
-        print(f"[local] building anchors from {len(prep['cu']):,} grouped "
-              f"cross rows ...", flush=True)
-        anchor = build_anchors(prep, memb, centers, n)
+        print(f"[local] building {a.anchor_mode} anchors from "
+              f"{len(prep['cu']):,} grouped cross rows ...", flush=True)
         ext_deg = np.asarray(prep["ext"])
+        int_deg = np.asarray(prep["int"])
+        if a.anchor_mode == "sector":
+            anchor_dir, anchor_conf = build_anchor_dirs(
+                prep, memb, centers, n, ratio=a.sector_ratio)
+        else:
+            anchor = build_anchors(prep, memb, centers, n)
         anchor_secs = round(time.time() - ta, 1)
         print(f"[local] anchors from prep ({len(prep['cu']):,} grouped rows) "
               f"in {anchor_secs}s", flush=True)
@@ -533,7 +637,7 @@ def main():
     times = []
     n_done = 0
     fr_stats = {"ml": 0}
-    q_rec, q_cv, q_n = [], [], 0
+    q_rec, q_cv, q_rad, q_n = [], [], [], 0
     skipped = sum(1 for x in range(glo, ghi + 1)
                   if x in done and (selected is None or x in selected))
     print(f"[local] range {glo}-{ghi}: {skipped} already done (resume), "
@@ -557,19 +661,38 @@ def main():
                            axis=1).astype(np.int32)
             fr = _fr_unit(ng, loc, 3, a.seed + g, fr_mode=a.fr_mode,
                           ml_threshold=a.ml_threshold, ml_niter=a.ml_niter,
-                          stats=fr_stats)
+                          stats=fr_stats, fr_norm=a.fr_norm)
             pos_g = fr * (R * 0.92)
-            av = anchor[members]
-            avn = np.linalg.norm(av, axis=1)
-            has = avn > 1e-9
-            av_unit = np.zeros_like(av)
-            av_unit[has] = av[has] / avn[has][:, None]
-            # boundary radius per article: more external links -> closer to surface
-            tgt_r = R * (0.55 + 0.45 * np.clip(ext_deg[members] / 20.0, 0, 1))
-            target = av_unit * tgt_r[:, None]
+            ext_m = ext_deg[members].astype(np.float64)
+            if a.anchor_mode == "sector":
+                # B1: sector direction + confidence gain; B2: rank-quantile
+                # radial band + hub-core correction (scale-free per galaxy)
+                av = anchor_dir[members]
+                cf = anchor_conf[members]
+                has = cf > 1e-9
+                q_ext = _rank_quantile(ext_m)
+                q_int = _rank_quantile(int_deg[members].astype(np.float64))
+                tgt_r = R * (0.35 + 0.65 * q_ext)
+                core = (q_int > 0.9) & (q_ext < 0.5)
+                tgt_r[core] *= 0.6
+                target = av * tgt_r[:, None]
+                gain = np.zeros(ng)
+                gain[has] = a.kappa * cf[has]
+            else:
+                # legacy: summed-unit-vector anchor + fixed /20 band
+                av = anchor[members]
+                avn = np.linalg.norm(av, axis=1)
+                has = avn > 1e-9
+                av_unit = np.zeros_like(av)
+                av_unit[has] = av[has] / avn[has][:, None]
+                # boundary radius per article: more external links -> surface
+                tgt_r = R * (0.55 + 0.45 * np.clip(ext_m / 20.0, 0, 1))
+                target = av_unit * tgt_r[:, None]
+                gain = np.zeros(ng)
+                gain[has] = a.kappa
             for _ in range(a.iters):
                 pull = np.zeros_like(pos_g)
-                pull[has] = a.kappa * (target[has] - pos_g[has])
+                pull[has] = gain[has][:, None] * (target[has] - pos_g[has])
                 prior = a.lam * (fr * (R * 0.92) - pos_g)
                 pos_g = pos_g + pull + prior
                 rg = np.linalg.norm(pos_g, axis=1)
@@ -582,6 +705,7 @@ def main():
                 q_rec.append(q["adj_recall"])
                 if q["edge_len_cv"] is not None:
                     q_cv.append(q["edge_len_cv"])
+                q_rad.append(float(np.median(np.linalg.norm(pos_g, axis=1)) / R))
                 q_n += 1
         np.save(os.path.join(shard_dir, f"gal_{g:06d}.npy"),
                 (centers[g] + pos_g).astype(np.float32))
@@ -673,11 +797,14 @@ def main():
             "params": {"iters": a.iters, "kappa": a.kappa, "lam": a.lam,
                        "seed": a.seed, "fr_mode": a.fr_mode,
                        "ml_threshold": a.ml_threshold,
-                       "ml_niter": a.ml_niter},
+                       "ml_niter": a.ml_niter,
+                       "anchor_mode": a.anchor_mode, "fr_norm": a.fr_norm,
+                       "sector_ratio": a.sector_ratio},
             "fr_quality": {
                 "n_eval": q_n,
                 "adj_recall_mean": round(float(np.mean(q_rec)), 4) if q_rec else None,
                 "edge_len_cv_mean": round(float(np.mean(q_cv)), 4) if q_cv else None,
+                "radial_p50_mean": round(float(np.mean(q_rad)), 4) if q_rad else None,
                 "n_ml_applied": fr_stats["ml"]},
             "prep": {"dir": str(pp["dir"]), "anchor_secs": anchor_secs},
             "secs": round(time.time() - t0, 1)}
@@ -705,6 +832,7 @@ def main():
                            "adj_recall_sum": round(float(sum(q_rec)), 4),
                            "edge_len_cv_sum": round(float(sum(q_cv)), 4),
                            "n_cv": len(q_cv),
+                           "radial_sum": round(float(sum(q_rad)), 4),
                            "n_ml_applied": fr_stats["ml"]}})
     # parallel jobs skip the run meta write (the launcher's --merge-only owns it)
     if a.job_spec is None:
@@ -714,8 +842,11 @@ def main():
     eta = (float(np.mean(times)) * rem_all / 60) if times and rem_all else 0.0
     if q_rec:
         cv = f"{np.mean(q_cv):.3f}" if q_cv else "n/a"
-        print(f"[local] fr_quality: mode={a.fr_mode} ml_applied={fr_stats['ml']} "
-              f"adj_recall={np.mean(q_rec):.3f} edge_cv={cv} (n_eval={q_n})")
+        rad = f"{np.mean(q_rad):.3f}" if q_rad else "n/a"
+        print(f"[local] fr_quality: mode={a.fr_mode} anchor={a.anchor_mode} "
+              f"norm={a.fr_norm} ml_applied={fr_stats['ml']} "
+              f"adj_recall={np.mean(q_rec):.3f} edge_cv={cv} radial_p50={rad} "
+              f"(n_eval={q_n})")
     print(f"[local] done: {n_done} galaxies this run, {len(done):,}/{G:,} total "
           f"({meta['secs']}s"
           + (f", per-galaxy p50={meta['per_galaxy_secs']['p50']}s"

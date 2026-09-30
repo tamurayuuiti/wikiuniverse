@@ -241,6 +241,47 @@ def main():
     assert _np.allclose(S, lg._fib_ball_slots(60, 10.0, 42))
     assert lg._fib_ball_slots(0, 10.0).shape == (0, 3)
 
+    # ---- B1 sector anchors: dominant neighbour, top-2 blend, confidence
+    spec_ll = importlib.util.spec_from_file_location(
+        "layout_local_mod", os.path.join(ROOT, "scripts", "layout_local.py"))
+    ll = importlib.util.module_from_spec(spec_ll)
+    spec_ll.loader.exec_module(ll)
+    prep_t = {"cu": _np.array([0, 0, 1, 1], _np.int32),
+              "cg": _np.array([1, 2, 1, 2], _np.int32),
+              "cw": _np.array([3, 1, 2, 2], _np.int32),
+              "ext": _np.array([4, 4], _np.int32)}
+    cen_t = _np.array([[0.0, 0, 0], [10.0, 0, 0], [0.0, 10.0, 0]])
+    dv, cf = ll.build_anchor_dirs(prep_t, _np.array([0, 0, 0]), cen_t, 2,
+                                  ratio=0.5)
+    d1 = _np.array([1.0, 0, 0]); d2 = _np.array([0.0, 1.0, 0])
+    assert _np.allclose(dv[0], d1, atol=1e-12), dv[0]     # 1 < 0.5*3: no blend
+    assert abs(cf[0] - 0.75) < 1e-12, cf[0]
+    exp1 = (2 * d1 + 2 * d2); exp1 = exp1 / _np.linalg.norm(exp1)
+    assert _np.allclose(dv[1], exp1, atol=1e-12), dv[1]   # 2 >= 0.5*2: blend
+    assert abs(cf[1] - 1.0) < 1e-12, cf[1]
+    dv0, cf0 = ll.build_anchor_dirs(
+        {"cu": _np.zeros(0, _np.int32), "cg": _np.zeros(0, _np.int32),
+         "cw": _np.zeros(0, _np.int32), "ext": _np.zeros(2, _np.int32)},
+        _np.array([0, 0]), cen_t, 2)
+    assert not dv0.any() and not cf0.any()
+
+    # ---- B2 rank quantile
+    q_t = ll._rank_quantile(_np.array([10.0, 0.0, 5.0]))
+    assert _np.allclose(q_t, [1.0, 0.0, 0.5]), q_t
+    assert ll._rank_quantile(_np.array([7.0])).tolist() == [0.0]
+
+    # ---- B2-a robust norm: recentred, outlier-clamped, body fills the ball
+    #      (star 196 + 4 isolated outliers = the real-galaxy situation: a few
+    #      weakly-linked articles must not set the scale for the whole cloud)
+    star = [(0, i) for i in range(1, 196)]
+    c_p = ll._fr_unit(200, star, 3, 5, fr_mode="flat", fr_norm="p98")
+    c_m = ll._fr_unit(200, star, 3, 5, fr_mode="flat", fr_norm="max")
+    rp = _np.linalg.norm(c_p, axis=1)
+    rm = _np.linalg.norm(c_m, axis=1)
+    assert rp.max() <= 1.0 + 1e-9, rp.max()
+    assert _np.linalg.norm(c_p.mean(axis=0)) < 0.2, c_p.mean(axis=0)
+    assert _np.median(rp) > _np.median(rm) * 1.5, (_np.median(rp), _np.median(rm))
+
     # relax_disks: exactly-coincident bodies must separate (the zero-vector
     # degeneracy that stacked unlinked galaxies onto one point, 2026-09-29)
     stk = lg.relax_disks(_np.zeros((12, 3)), _np.ones(12) * 5.0, iters=120)
@@ -304,6 +345,16 @@ def main():
     for (u, gv), w in brute.items():
         ext_brute[u] += w
     assert _np.array_equal(ext, ext_brute), "ext_deg mismatch"
+    intd = _np.load(os.path.join(prep_dir, "int_deg.npy"))
+    int_brute = _np.zeros(len(memb_s), _np.int64)
+    for u, v in Eu.tolist():
+        if memb_s[u] == memb_s[v]:
+            int_brute[u] += 1
+            int_brute[v] += 1
+    assert _np.array_equal(intd, int_brute), "int_deg mismatch"
+    pmeta_s = json.load(open(os.path.join(prep_dir, "prep_meta.json"),
+                             encoding="utf-8"))
+    assert pmeta_s["schema"] == 2, pmeta_s
     # internal buckets: per-galaxy edge SET equals brute internal edges
     offs = _np.load(os.path.join(prep_dir, "internal_offs.npy"))
     buf = _np.load(os.path.join(prep_dir, "internal_buf.npy"))
@@ -435,6 +486,20 @@ def main():
     assert set(lm_b3["fr_quality"]) >= {"n_eval", "adj_recall_mean",
                                         "edge_len_cv_mean", "n_ml_applied"}
 
+    # ---- B1/B2 arms: default (sector+p98) must differ from the legacy arm
+    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_leg")
+    run_script("layout_local.py", "--galaxies", "0-11", "--galaxy-tag", "res1_s",
+               "--run", "r_leg", "--anchor-mode", "sum", "--fr-norm", "max")
+    sh_new = _np.load(os.path.join(lay, "article_shards", "gal_000000.npy"))
+    sh_leg = _np.load(os.path.join(BASE, "layout", "r_leg", "article_shards",
+                                   "gal_000000.npy"))
+    assert not _np.array_equal(sh_new, sh_leg), "B1/B2 arms must differ"
+    lm_def = json.load(open(os.path.join(BASE, "layout", "r_b3a",
+                                         "layout_local_meta.json"),
+                            encoding="utf-8"))
+    assert lm_def["params"]["anchor_mode"] == "sector"
+    assert lm_def["params"]["fr_norm"] == "p98"
+
     # ---- B3 launcher pass-through: --fr-mode must reach every job and the meta
     run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_b3c")
     run_script("run_local_parallel.py", "--jobs", "2", "--galaxy-tag", "res1_s",
@@ -445,8 +510,18 @@ def main():
     # fr_quality must survive parallel mode (aggregated from job metas; the
     # fixture galaxies are below the evaluation size band so n_eval == 0)
     assert set(pmc["fr_quality"]) >= {"n_eval", "adj_recall_mean",
-                                      "edge_len_cv_mean", "n_ml_applied"}, pmc
+                                      "edge_len_cv_mean", "radial_p50_mean",
+                                      "n_ml_applied"}, pmc
     assert pmc["fr_quality"]["n_eval"] == 0
+    assert pmc["anchor_mode"] == "sector" and pmc["fr_norm"] == "p98"
+    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_b3d")
+    run_script("run_local_parallel.py", "--jobs", "2", "--galaxy-tag", "res1_s",
+               "--run", "r_b3d", "--anchor-mode", "sum", "--fr-norm", "max",
+               "--fr-mode", "flat")
+    pmd = json.load(open(os.path.join(BASE, "layout", "r_b3d",
+                                      "parallel_meta.json"), encoding="utf-8"))
+    assert (pmd["anchor_mode"], pmd["fr_norm"], pmd["fr_mode"]) == \
+        ("sum", "max", "flat"), pmd
 
     # ---- checkpoint repair: after a parallel run + merge, a single-process
     #      `--galaxies all` must see everything done (2026-09-30 race fix)

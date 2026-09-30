@@ -51,6 +51,12 @@ def main():
                     help="forwarded to jobs (article count where multilevel kicks in)")
     ap.add_argument("--ml-niter", type=int, default=100,
                     help="forwarded to jobs (FR refine iterations on the seed)")
+    ap.add_argument("--anchor-mode", default="sector", choices=["sector", "sum"],
+                    help="forwarded to jobs (B1 sector vs legacy sum anchors)")
+    ap.add_argument("--fr-norm", default="p98", choices=["p98", "max"],
+                    help="forwarded to jobs (B2-a robust vs legacy max norm)")
+    ap.add_argument("--sector-ratio", type=float, default=0.5,
+                    help="forwarded to jobs (top-2 blend ratio)")
     a = ap.parse_args()
     dirs = Dirs(a.base)
     lay = str(dirs.layout_run(a.run))
@@ -128,6 +134,9 @@ def main():
                    "--fr-mode", a.fr_mode,
                    "--ml-threshold", str(a.ml_threshold),
                    "--ml-niter", str(a.ml_niter),
+                   "--anchor-mode", a.anchor_mode,
+                   "--fr-norm", a.fr_norm,
+                   "--sector-ratio", str(a.sector_ratio),
                    "--job-spec", p]
             lf = open(log_path, "w", encoding="utf-8")
             procs.append((p, nb, time.time(),
@@ -176,7 +185,7 @@ def main():
         all_times = []
         job_rows = []
         q_n = q_cv_n = q_ml = 0
-        q_rec_sum = q_cv_sum = 0.0
+        q_rec_sum = q_cv_sum = q_rad_sum = 0.0
         for (p, nb, _), wall in zip(specs, walls):
             stem = p[:-len(".gids.txt")] if p.endswith(".gids.txt") else p
             jm = read_json(stem + ".meta.json", {}) or {}
@@ -186,6 +195,7 @@ def main():
             q_cv_n += fq.get("n_cv", 0)
             q_rec_sum += fq.get("adj_recall_sum", 0.0)
             q_cv_sum += fq.get("edge_len_cv_sum", 0.0)
+            q_rad_sum += fq.get("radial_sum", 0.0)
             q_ml += fq.get("n_ml_applied", 0)
             job_rows.append({"job": os.path.basename(p), "galaxies": nb,
                              "wall_secs": wall,
@@ -193,6 +203,7 @@ def main():
         fr_quality = {"n_eval": q_n,
                       "adj_recall_mean": round(q_rec_sum / q_n, 4) if q_n else None,
                       "edge_len_cv_mean": round(q_cv_sum / q_cv_n, 4) if q_cv_n else None,
+                      "radial_p50_mean": round(q_rad_sum / q_n, 4) if q_n else None,
                       "n_ml_applied": q_ml}
         agg = {}
         if all_times:
@@ -207,7 +218,8 @@ def main():
                    {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "jobs": len(procs), "prep_secs": prep_secs,
                     "fr_mode": a.fr_mode, "ml_threshold": a.ml_threshold,
-                    "ml_niter": a.ml_niter,
+                    "ml_niter": a.ml_niter, "anchor_mode": a.anchor_mode,
+                    "fr_norm": a.fr_norm, "sector_ratio": a.sector_ratio,
                     "cost_model": f"n^{COST_EXP}", "lpt": True,
                     "bin_galaxies": [nb for _, nb, _ in specs],
                     "bin_cost_share": [round(l / tot, 4) for _, _, l in specs],
