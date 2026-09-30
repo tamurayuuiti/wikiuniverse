@@ -55,7 +55,7 @@ from pathlib import Path
 
 # The published (canonical) layout run. Updating this one constant switches
 # every layout script and the tile export to a different data/layout/<run>/.
-ACTIVE_LAYOUT_RUN = "20260926_baseline"
+ACTIVE_LAYOUT_RUN = "20261002_v16"
 
 
 @dataclass
