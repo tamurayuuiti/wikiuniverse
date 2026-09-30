@@ -843,6 +843,23 @@ def main():
     assert nn > 0 and os.path.getsize(t0f) == 12 + nn * 12 + ne * 8 + nx * 12
     assert os.path.exists(os.path.join(sp, "tiles", "gal_000000.json"))
     assert os.path.exists(os.path.join(sp, "tiles_meta.json"))
+    # tiles_meta totals must equal the per-bin header sums (shadowing
+    # regression: a loop-local cnt_x rebind used to make cross_links report
+    # only the last chunk's one-side count instead of the total)
+    tmeta = json.load(open(os.path.join(sp, "tiles_meta.json"),
+                           encoding="utf-8"))
+    sum_ne = sum_nx = 0
+    for g_t in range(G):
+        bf_t = os.path.join(sp, "tiles", f"gal_{g_t:06d}.bin")
+        if not os.path.exists(bf_t):
+            continue
+        with open(bf_t, "rb") as fh_t:
+            _nn, ne_t, nx_t = struct.unpack("<III", fh_t.read(12))
+        sum_ne += ne_t
+        sum_nx += nx_t
+    assert tmeta["internal_edges"] == sum_ne, (tmeta, sum_ne)
+    assert tmeta["cross_links"] == sum_nx, (tmeta, sum_nx)
+    assert sum_nx > 0, "fixture must exercise cross links for this regression"
 
     # ---- macro label overrides: export must prefer hand-curated labels
     #      (empty labels are ignored; removing the file restores defaults)

@@ -156,15 +156,19 @@ def main():
                     continue
                 ocx = np.argsort(src_g, kind="stable")
                 gs = src_g[ocx]
-                uniq_x, first_x, cnt_x = np.unique(gs, return_index=True,
-                                                   return_counts=True)
+                # cnt_ux (NOT cnt_x): rebinding the outer per-galaxy count
+                # array here used to leak out of the loop and tiles_meta then
+                # reported the LAST chunk's side count as the total (838 vs
+                # 18.6M on real data; bins themselves were always correct)
+                uniq_x, first_x, cnt_ux = np.unique(gs, return_index=True,
+                                                    return_counts=True)
                 ui_x = np.searchsorted(uniq_x, gs)
                 rank_x = np.arange(len(gs)) - first_x[ui_x]
                 posx = x_fill[uniq_x][ui_x] + rank_x
                 x_buf[posx, 0] = local_idx(rank, src_p[ocx], gs, starts_arr)
                 x_buf[posx, 1] = dst_g[ocx].astype(np.uint32)
                 x_buf[posx, 2] = local_idx(rank, dst_p[ocx], dst_g[ocx], starts_arr)
-                x_fill[uniq_x] += cnt_x
+                x_fill[uniq_x] += cnt_ux
         if (i // CH) % 5 == 0:
             print(f"  tiles pass2 {i + len(blk):,}/{len(E):,} ({time.time()-t0:.0f}s)", flush=True)
     assert np.array_equal(e_fill, e_off[1:]) and np.array_equal(x_fill, x_off[1:])
