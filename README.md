@@ -294,7 +294,9 @@ run 依存のアンカー方向だけ実行毎に数秒で再構築(bincount 蓄
 ```bash
 python scripts/run_local_parallel.py --base data --run <RUN>   # 推奨: 全銀河を並列
 #   前提: 同名 run の galaxy_positions.parquet が存在すること(先の layout_global で
-#   生成。無い場合は両スクリプトが再実行コマンドを示して即終了 = fail-fast)
+#   生成。無い場合は両スクリプトが再実行コマンドを示して即終了 = fail-fast)。
+#   **新しい run 名を使う際は必ず layout_global を先に実行する**
+#   腕フラグ(--fr-mode flat / --ml-threshold / --ml-niter)は全ジョブへパススルーされる
 #   --jobs 既定 = CPU 数。prep を1回実行してから LPT(コスト ~ n^1.93、02 §O 実測)で
 #   銀河をジョブへビンパッキング(ストラグラ解消)、終了後 --merge-only で走査なしマージ。
 #   ジョブ割当は <run>/parallel_jobs/job_*.gids.txt(キャッシュ)、実測テレメトリは
@@ -315,6 +317,17 @@ python scripts/layout_local.py --base data --run <RUN> --galaxies all   # 逐次
 (FR 形状の保持)+ ボール内クランプ。銀河中心・半径は対象 run(--run、既定は正典 run)の
 galaxy_positions 由来。「銀河 = アンカー制約付きレイアウト単位」(results/SUMMARY.md §9 の
 確定条件)の実装そのもの。
+
+内部 FR は **マルチレベル初期化**(2026-09-30): n ≥ `--ml-threshold`(既定 2000)の銀河は
+Louvain 縮約 → クラスタ図の重み付き FR → 成員座標へ展開+決定的 jitter を **FR の初期座標**
+(`seed`)として `--ml-niter`(既定 100)で refine する。FR コストは n^1.93 × niter に比例する
+(02 §O)ため、良初期座標に反復を費やす方が平坦アニールより速く・局所構造も保たれる
+(サンドボックス実測 n=2,500: **4.7× 高速かつ隣接再現率も向上**)。閾値未満の銀河は
+旧来の flat パスに完全一致(`--fr-mode flat` で全体も再現 = 比較腕)。
+品質は run 毎に `fr_quality` へ自動記録(単一プロセス= `layout_local_meta.json`、
+並列= ジョブ別集計を `parallel_meta.json` 経由で畳み込み): `adj_recall_mean`
+(サンプル記事のグラフ近傍が空間近傍に再現される率)/ `edge_len_cv`(バネ長の分散)/
+`n_ml_applied`(マルチレベル適用銀河数)/ `n_eval`(評価銀河数)。
 
 ## データ出版とビューア
 

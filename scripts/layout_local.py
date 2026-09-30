@@ -72,17 +72,55 @@ PREP_SCHEMA = 1
 CH = 4_000_000  # edge-scan chunk size
 
 
-def _fr_unit(n: int, edges_local: np.ndarray, dim: int, seed: int) -> np.ndarray:
-    """FR layout normalized to unit ball (deterministic via random.seed)."""
+def _fr_unit(n: int, edges_local: np.ndarray, dim: int, seed: int,
+             fr_mode: str = "ml", ml_threshold: int = 2000,
+             ml_niter: int = 100, stats: dict | None = None) -> np.ndarray:
+    """FR layout normalized to unit ball (deterministic via random.seed).
+
+    B3: for n >= ml_threshold the flat force-directed anneal is replaced by a
+    MULTILEVEL seed: Louvain contraction -> weighted FR on the cluster graph ->
+    member expansion with deterministic jitter -> FR refine from those initial
+    coordinates (igraph `seed` param) with ml_niter iterations. igraph FR cost
+    grows ~n^1.93 and linearly in niter (02 §O), so spending iterations on a
+    good initial state is both faster and better-conditioned than flat
+    annealing. Galaxies below the threshold keep the exact legacy flat path
+    (blast radius limited; median galaxy is 279 articles = 0.18 s).
+    """
     import igraph as ig
     random.seed(seed)
     g = ig.Graph(n=n)
     if len(edges_local):
         g.add_edges([(int(u), int(v)) for u, v in edges_local])
+    coords = None
+    if fr_mode == "ml" and n >= ml_threshold and len(edges_local):
+        cl = g.community_multilevel()
+        memb = np.asarray(cl.membership, np.int64)
+        k = int(memb.max()) + 1
+        if 8 <= k < n:
+            eu = np.asarray(edges_local, np.int64).reshape(-1, 2)
+            cu, cv = memb[eu[:, 0]], memb[eu[:, 1]]
+            msk = cu != cv
+            keys = cu[msk] * np.int64(k) + cv[msk]
+            uniq, cnt = np.unique(keys, return_counts=True)
+            ce = [(int(u // k), int(u % k)) for u in uniq]
+            random.seed(seed + 1)
+            gc = ig.Graph(n=k)
+            gc.add_edges(ce)
+            gc.es["weight"] = cnt.astype(float).tolist()
+            coarse = np.asarray(gc.layout_fruchterman_reingold(
+                weights="weight", dim=dim).coords)
+            rng = np.random.default_rng(seed + 7)
+            init = coarse[memb] + rng.normal(scale=0.02, size=(n, dim))
+            random.seed(seed)
+            lay = g.layout_fruchterman_reingold(dim=dim, seed=init.tolist(),
+                                                niter=ml_niter)
+            coords = np.asarray(lay.coords, np.float64)
+            if stats is not None:
+                stats["ml"] = stats.get("ml", 0) + 1
+    if coords is None:
         lay = g.layout_fruchterman_reingold(dim=dim)
-    else:
-        lay = g.layout_fruchterman_reingold(dim=dim)
-    c = np.asarray(lay.coords, np.float64)
+        coords = np.asarray(lay.coords, np.float64)
+    c = coords
     r = np.linalg.norm(c, axis=1)
     m = r.max()
     if m > 1e-9:
@@ -92,6 +130,41 @@ def _fr_unit(n: int, edges_local: np.ndarray, dim: int, seed: int) -> np.ndarray
         c = rng.normal(size=(n, dim))
         c /= max(np.linalg.norm(c, axis=1).max(), 1e-9)
     return c
+
+
+def galaxy_layout_quality(pos: np.ndarray, edges_local: np.ndarray,
+                          k: int = 8, n_samples: int = 24, seed: int = 0):
+    """Intra-galaxy layout quality: graph-vs-space neighbour recall and edge
+    length dispersion. recall = mean over sampled articles of
+    |spatial top-k ∩ graph neighbours| / min(k, deg); edge_len_cv = std/mean of
+    embedded edge lengths (lower = more uniform springs). Returns None when
+    the graph is too small to measure. Sampled-article masks keep the cost at
+    O(n_samples * E) instead of an O(n^2) distance matrix.
+    """
+    n = len(pos)
+    if n < 2 * k + 2 or len(edges_local) == 0:
+        return None
+    eu = np.asarray(edges_local, np.int64).reshape(-1, 2)
+    deg = np.bincount(eu.reshape(-1), minlength=n)
+    cand = np.flatnonzero(deg >= 2)
+    if len(cand) < 4:
+        return None
+    rng = np.random.default_rng(seed)
+    samp = rng.choice(cand, size=min(n_samples, len(cand)), replace=False)
+    rec = []
+    for s in samp:
+        s = int(s)
+        msk = (eu[:, 0] == s) | (eu[:, 1] == s)
+        eu_s = eu[msk]
+        nb = set(np.where(eu_s[:, 0] == s, eu_s[:, 1], eu_s[:, 0]).tolist())
+        d = np.linalg.norm(pos - pos[s], axis=1)
+        d[s] = np.inf
+        top = set(np.argsort(d)[:k].tolist())
+        rec.append(len(top & nb) / min(k, len(nb)))
+    el = np.linalg.norm(pos[eu[:, 0]] - pos[eu[:, 1]], axis=1)
+    mean = float(el.mean())
+    return {"adj_recall": round(float(np.mean(rec)), 4),
+            "edge_len_cv": round(float(el.std() / mean), 4) if mean > 1e-12 else None}
 
 
 def _prep_paths(dirs: Dirs, tag: str) -> dict:
@@ -280,8 +353,32 @@ def _now():
 
 
 def cmd_merge(dirs: Dirs, lay_dir: str, memb: np.ndarray, n: int, G: int):
-    """Merge per-galaxy shards into article_positions.parquet (scan-free)."""
+    """Merge per-galaxy shards into article_positions.parquet (scan-free).
+
+    Also REPAIRS the done-checkpoint: parallel jobs never share it (they race
+    on overwrites), so the union of {main checkpoint, job metas' done lists,
+    galaxies whose shard file exists} is the ground truth. Shard existence is
+    authoritative: a shard is written only after its galaxy completed.
+    """
     shard_dir = os.path.join(lay_dir, "article_shards")
+    ck_path = os.path.join(lay_dir, "layout_local_checkpoint.json")
+    ck = read_json(ck_path, {}) or {"done": {}}
+    done = set(int(x) for x in ck.get("done", []))
+    pj = os.path.join(lay_dir, "parallel_jobs")
+    if os.path.isdir(pj):
+        for fn in os.listdir(pj):
+            if fn.endswith(".meta.json"):
+                jm = read_json(os.path.join(pj, fn), {}) or {}
+                done.update(int(x) for x in jm.get("done", []))
+    if os.path.isdir(shard_dir):
+        for fn in os.listdir(shard_dir):
+            if fn.startswith("gal_") and fn.endswith(".npy"):
+                done.add(int(fn[4:10]))
+    done = sorted(x for x in done if 0 <= x < G)
+    if len(done) != len(ck.get("done", [])):
+        write_json(ck_path, {"done": done})
+        print(f"[local] checkpoint repaired: {len(ck.get('done', []))} -> "
+              f"{len(done)} done")
     order = np.argsort(memb, kind="stable")
     starts = np.searchsorted(memb[order], np.arange(G), side="left")
     ends = np.searchsorted(memb[order], np.arange(G), side="right")
@@ -322,6 +419,16 @@ def main():
     ap.add_argument("--merge-only", action="store_true",
                     help="merge existing shards into article_positions.parquet "
                          "and exit (no edge scans, no anchor computation)")
+    ap.add_argument("--fr-mode", default="ml", choices=["ml", "flat"],
+                    help="ml = multilevel-seeded FR for galaxies with n >= "
+                         "--ml-threshold (default); flat = legacy single-level "
+                         "FR (comparison arm)")
+    ap.add_argument("--ml-threshold", type=int, default=2000,
+                    help="article count where the multilevel FR kicks in "
+                         "(smaller galaxies keep the exact legacy flat path)")
+    ap.add_argument("--ml-niter", type=int, default=100,
+                    help="FR refine iterations on top of the multilevel seed "
+                         "(the flat path keeps igraph's default 500)")
     ap.add_argument("--iters", type=int, default=40)
     ap.add_argument("--kappa", type=float, default=0.05, help="anchor pull gain")
     ap.add_argument("--lam", type=float, default=0.06, help="elastic prior gain")
@@ -373,17 +480,8 @@ def main():
     centers = np.stack([gpos["x"], gpos["y"], gpos["z"]], axis=1).astype(np.float64)
     radii = np.asarray(gpos["radius"], np.float64)
 
-    # ---- run-dependent anchors from the shared grouped cross pairs
-    ta = time.time()
-    print(f"[local] building anchors from {len(prep['cu']):,} grouped "
-          f"cross rows ...", flush=True)
-    anchor = build_anchors(prep, memb, centers, n)
-    ext_deg = np.asarray(prep["ext"])
     offs = np.asarray(prep["offs"])
     buf = prep["buf"]
-    anchor_secs = round(time.time() - ta, 1)
-    print(f"[local] anchors from prep ({len(prep['cu']):,} grouped rows) "
-          f"in {anchor_secs}s", flush=True)
 
     # ---- galaxy list for this job
     if a.job_spec:
@@ -402,6 +500,22 @@ def main():
     ck = read_json(ck_path, {}) or {"done": {}}
     done = set(int(k) for k in ck["done"])
 
+    # ---- run-dependent anchors, lazily: a no-op invocation (everything done,
+    #      e.g. preview-only) must not pay the multi-second anchor rebuild
+    to_do = sum(1 for x in range(glo, ghi + 1)
+                if x not in done and (selected is None or x in selected))
+    anchor = ext_deg = None
+    anchor_secs = 0.0
+    if to_do:
+        ta = time.time()
+        print(f"[local] building anchors from {len(prep['cu']):,} grouped "
+              f"cross rows ...", flush=True)
+        anchor = build_anchors(prep, memb, centers, n)
+        ext_deg = np.asarray(prep["ext"])
+        anchor_secs = round(time.time() - ta, 1)
+        print(f"[local] anchors from prep ({len(prep['cu']):,} grouped rows) "
+              f"in {anchor_secs}s", flush=True)
+
     # parallel jobs report progress/telemetry through side files (their stdout
     # belongs to a log file; the launcher polls the .progress line)
     prog_path = job_meta_path = None
@@ -418,6 +532,8 @@ def main():
     ends = np.searchsorted(memb[order], np.arange(G), side="right")
     times = []
     n_done = 0
+    fr_stats = {"ml": 0}
+    q_rec, q_cv, q_n = [], [], 0
     skipped = sum(1 for x in range(glo, ghi + 1)
                   if x in done and (selected is None or x in selected))
     print(f"[local] range {glo}-{ghi}: {skipped} already done (resume), "
@@ -439,7 +555,9 @@ def main():
             loc = np.stack([np.searchsorted(members, le[:, 0].astype(np.int64)),
                             np.searchsorted(members, le[:, 1].astype(np.int64))],
                            axis=1).astype(np.int32)
-            fr = _fr_unit(ng, loc, 3, a.seed + g)
+            fr = _fr_unit(ng, loc, 3, a.seed + g, fr_mode=a.fr_mode,
+                          ml_threshold=a.ml_threshold, ml_niter=a.ml_niter,
+                          stats=fr_stats)
             pos_g = fr * (R * 0.92)
             av = anchor[members]
             avn = np.linalg.norm(av, axis=1)
@@ -458,6 +576,13 @@ def main():
                 over = rg > R
                 if over.any():
                     pos_g[over] *= (R / rg[over])[:, None]
+        if 200 <= ng <= 20000 and q_n < 60:
+            q = galaxy_layout_quality(pos_g, loc)
+            if q:
+                q_rec.append(q["adj_recall"])
+                if q["edge_len_cv"] is not None:
+                    q_cv.append(q["edge_len_cv"])
+                q_n += 1
         np.save(os.path.join(shard_dir, f"gal_{g:06d}.npy"),
                 (centers[g] + pos_g).astype(np.float32))
         done.add(g)
@@ -473,7 +598,13 @@ def main():
                 fh.write(f"{n_done} {job_total} {el:.1f} "
                          f"{mean * (job_total - n_done):.1f}\n")
         if n_done % 50 == 0:
-            write_json(ck_path, {"done": sorted(done)})
+            if a.job_spec is None:
+                write_json(ck_path, {"done": sorted(done)})
+            else:
+                write_json(job_meta_path, {
+                    "n_done": n_done, "wall_secs": round(time.time() - t0, 1),
+                    "per_galaxy_secs": sorted(round(t, 4) for t in times),
+                    "done": sorted(done)})
             el = time.time() - t0
             mean = float(np.mean(times))
             rem = sum(1 for x in range(g + 1, ghi + 1)
@@ -481,7 +612,8 @@ def main():
             print(f"[local] {len(done):,}/{G:,} done ({n_done} this run), "
                   f"elapsed {el / 60:.1f}m, eta {mean * rem / 60:.1f}m "
                   f"(mean {mean:.2f}s/galaxy)", flush=True)
-    write_json(ck_path, {"done": sorted(done)})
+    if a.job_spec is None:
+        write_json(ck_path, {"done": sorted(done)})
 
     # ---- optional single-galaxy preview
     if a.preview_galaxy is not None:
@@ -539,7 +671,14 @@ def main():
             "n_done_this_run": n_done, "n_done_total": len(done),
             "n_galaxies": G,
             "params": {"iters": a.iters, "kappa": a.kappa, "lam": a.lam,
-                       "seed": a.seed},
+                       "seed": a.seed, "fr_mode": a.fr_mode,
+                       "ml_threshold": a.ml_threshold,
+                       "ml_niter": a.ml_niter},
+            "fr_quality": {
+                "n_eval": q_n,
+                "adj_recall_mean": round(float(np.mean(q_rec)), 4) if q_rec else None,
+                "edge_len_cv_mean": round(float(np.mean(q_cv)), 4) if q_cv else None,
+                "n_ml_applied": fr_stats["ml"]},
             "prep": {"dir": str(pp["dir"]), "anchor_secs": anchor_secs},
             "secs": round(time.time() - t0, 1)}
     if times:
@@ -549,16 +688,34 @@ def main():
                                    "max": round(float(tt.max()), 4)}
     if merged:
         meta["merged"] = merged
+    if n_done == 0:
+        # preview-only / no-op invocations must not erase the parallel telemetry
+        par = os.path.join(lay_dir, "parallel_meta.json")
+        if os.path.exists(par):
+            meta["parallel"] = read_json(par, {})
     if job_meta_path and times:
         write_json(job_meta_path, {
             "n_done": n_done, "wall_secs": round(time.time() - t0, 1),
-            "per_galaxy_secs": sorted(round(t, 4) for t in times)})
+            "per_galaxy_secs": sorted(round(t, 4) for t in times),
+            # job-level quality sums; the launcher averages them into
+            # parallel_meta.fr_quality (single-process runs write fr_quality
+            # directly, parallel jobs used to lose it entirely)
+            "done": sorted(done),
+            "fr_quality": {"n_eval": q_n,
+                           "adj_recall_sum": round(float(sum(q_rec)), 4),
+                           "edge_len_cv_sum": round(float(sum(q_cv)), 4),
+                           "n_cv": len(q_cv),
+                           "n_ml_applied": fr_stats["ml"]}})
     # parallel jobs skip the run meta write (the launcher's --merge-only owns it)
     if a.job_spec is None:
         write_json(os.path.join(lay_dir, "layout_local_meta.json"), meta)
     el = time.time() - t0
     rem_all = G - len(done)
     eta = (float(np.mean(times)) * rem_all / 60) if times and rem_all else 0.0
+    if q_rec:
+        cv = f"{np.mean(q_cv):.3f}" if q_cv else "n/a"
+        print(f"[local] fr_quality: mode={a.fr_mode} ml_applied={fr_stats['ml']} "
+              f"adj_recall={np.mean(q_rec):.3f} edge_cv={cv} (n_eval={q_n})")
     print(f"[local] done: {n_done} galaxies this run, {len(done):,}/{G:,} total "
           f"({meta['secs']}s"
           + (f", per-galaxy p50={meta['per_galaxy_secs']['p50']}s"

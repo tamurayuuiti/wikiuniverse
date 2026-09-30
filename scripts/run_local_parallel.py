@@ -44,6 +44,13 @@ def main():
     ap.add_argument("--galaxy-tag", default="res1_sub")
     ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
                     help="layout run name (default: wu.paths.ACTIVE_LAYOUT_RUN)")
+    ap.add_argument("--fr-mode", default="ml", choices=["ml", "flat"],
+                    help="B3 arm selection, forwarded to every layout_local job "
+                         "(ml = multilevel-seeded FR, flat = legacy arm)")
+    ap.add_argument("--ml-threshold", type=int, default=2000,
+                    help="forwarded to jobs (article count where multilevel kicks in)")
+    ap.add_argument("--ml-niter", type=int, default=100,
+                    help="forwarded to jobs (FR refine iterations on the seed)")
     a = ap.parse_args()
     dirs = Dirs(a.base)
     lay = str(dirs.layout_run(a.run))
@@ -118,6 +125,9 @@ def main():
             prog_files.append(stem + ".progress")
             cmd = [sys.executable, script, "--base", a.base,
                    "--galaxy-tag", a.galaxy_tag, "--run", a.run,
+                   "--fr-mode", a.fr_mode,
+                   "--ml-threshold", str(a.ml_threshold),
+                   "--ml-niter", str(a.ml_niter),
                    "--job-spec", p]
             lf = open(log_path, "w", encoding="utf-8")
             procs.append((p, nb, time.time(),
@@ -165,13 +175,25 @@ def main():
         # ---- 3b. aggregate per-galaxy telemetry from the job metas
         all_times = []
         job_rows = []
+        q_n = q_cv_n = q_ml = 0
+        q_rec_sum = q_cv_sum = 0.0
         for (p, nb, _), wall in zip(specs, walls):
             stem = p[:-len(".gids.txt")] if p.endswith(".gids.txt") else p
             jm = read_json(stem + ".meta.json", {}) or {}
             all_times.extend(jm.get("per_galaxy_secs", []))
+            fq = jm.get("fr_quality", {})
+            q_n += fq.get("n_eval", 0)
+            q_cv_n += fq.get("n_cv", 0)
+            q_rec_sum += fq.get("adj_recall_sum", 0.0)
+            q_cv_sum += fq.get("edge_len_cv_sum", 0.0)
+            q_ml += fq.get("n_ml_applied", 0)
             job_rows.append({"job": os.path.basename(p), "galaxies": nb,
                              "wall_secs": wall,
                              "n_done": jm.get("n_done")})
+        fr_quality = {"n_eval": q_n,
+                      "adj_recall_mean": round(q_rec_sum / q_n, 4) if q_n else None,
+                      "edge_len_cv_mean": round(q_cv_sum / q_cv_n, 4) if q_cv_n else None,
+                      "n_ml_applied": q_ml}
         agg = {}
         if all_times:
             tt = sorted(all_times)
@@ -184,12 +206,15 @@ def main():
         write_json(os.path.join(lay, "parallel_meta.json"),
                    {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "jobs": len(procs), "prep_secs": prep_secs,
+                    "fr_mode": a.fr_mode, "ml_threshold": a.ml_threshold,
+                    "ml_niter": a.ml_niter,
                     "cost_model": f"n^{COST_EXP}", "lpt": True,
                     "bin_galaxies": [nb for _, nb, _ in specs],
                     "bin_cost_share": [round(l / tot, 4) for _, _, l in specs],
                     "walls_secs": walls, "total_secs": total,
                     "failures": fails,
-                    "per_galaxy_secs": agg, "jobs_detail": job_rows})
+                    "per_galaxy_secs": agg, "fr_quality": fr_quality,
+                    "jobs_detail": job_rows})
         if agg:
             print(f"[parallel] per-galaxy secs: p50={agg['p50']} "
                   f"p95={agg['p95']} max={agg['max']} (n={agg['n']})")

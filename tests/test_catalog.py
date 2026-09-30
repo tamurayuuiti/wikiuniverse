@@ -394,6 +394,71 @@ def main():
         assert r_nf.returncode != 0, f"{scr} should fail on a run without globals"
         assert "layout_global.py" in (r_nf.stdout + r_nf.stderr), r_nf.stderr[-500:]
 
+    # ---- B3 multilevel FR: determinism / validity / quality metrics / gating
+    import igraph as _ig
+    g1200 = _ig.Graph.Barabasi(1200, m=15, directed=False)
+    e1200 = [e.tuple for e in g1200.es]
+    c_ml1 = ll._fr_unit(1200, e1200, 3, 7, fr_mode="ml", ml_threshold=300)
+    c_ml2 = ll._fr_unit(1200, e1200, 3, 7, fr_mode="ml", ml_threshold=300)
+    c_fl = ll._fr_unit(1200, e1200, 3, 7, fr_mode="flat")
+    assert _np.array_equal(c_ml1, c_ml2), "multilevel FR not deterministic"
+    for c in (c_ml1, c_fl):
+        assert _np.isfinite(c).all()
+        assert abs(_np.linalg.norm(c, axis=1).max() - 1.0) < 1e-9
+    q_ml = ll.galaxy_layout_quality(c_ml1, e1200)
+    q_fl = ll.galaxy_layout_quality(c_fl, e1200)
+    assert q_ml and q_fl
+    assert 0.0 < q_ml["adj_recall"] <= 1.0, q_ml
+    assert 0.0 < q_fl["adj_recall"] <= 1.0, q_fl
+    # chain graph: spatial nearest neighbours must recover graph neighbours
+    chain = [(i, i + 1) for i in range(59)]
+    c_ch = ll._fr_unit(60, chain, 3, 1, fr_mode="flat")
+    q_ch = ll.galaxy_layout_quality(c_ch, chain)
+    assert q_ch and q_ch["adj_recall"] > 0.9, q_ch
+    # gating: below --ml-threshold the default (ml) and flat arms must agree
+    # EXACTLY (legacy path untouched = small galaxies never move)
+    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_b3a")
+    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_b3b")
+    run_script("layout_local.py", "--galaxies", "0-5", "--galaxy-tag", "res1_s",
+               "--run", "r_b3a")
+    run_script("layout_local.py", "--galaxies", "0-5", "--galaxy-tag", "res1_s",
+               "--run", "r_b3b", "--fr-mode", "flat")
+    for g in range(6):
+        sa = os.path.join(BASE, "layout", "r_b3a", "article_shards", f"gal_{g:06d}.npy")
+        sb = os.path.join(BASE, "layout", "r_b3b", "article_shards", f"gal_{g:06d}.npy")
+        assert _np.array_equal(_np.load(sa), _np.load(sb)), \
+            f"ml/flat differ below threshold (g={g})"
+    lm_b3 = json.load(open(os.path.join(BASE, "layout", "r_b3a",
+                                        "layout_local_meta.json"), encoding="utf-8"))
+    assert lm_b3["params"]["fr_mode"] == "ml"
+    assert lm_b3["params"]["ml_threshold"] == 2000
+    assert set(lm_b3["fr_quality"]) >= {"n_eval", "adj_recall_mean",
+                                        "edge_len_cv_mean", "n_ml_applied"}
+
+    # ---- B3 launcher pass-through: --fr-mode must reach every job and the meta
+    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_b3c")
+    run_script("run_local_parallel.py", "--jobs", "2", "--galaxy-tag", "res1_s",
+               "--run", "r_b3c", "--fr-mode", "flat")
+    pmc = json.load(open(os.path.join(BASE, "layout", "r_b3c",
+                                      "parallel_meta.json"), encoding="utf-8"))
+    assert pmc["fr_mode"] == "flat" and pmc["failures"] == 0, pmc
+    # fr_quality must survive parallel mode (aggregated from job metas; the
+    # fixture galaxies are below the evaluation size band so n_eval == 0)
+    assert set(pmc["fr_quality"]) >= {"n_eval", "adj_recall_mean",
+                                      "edge_len_cv_mean", "n_ml_applied"}, pmc
+    assert pmc["fr_quality"]["n_eval"] == 0
+
+    # ---- checkpoint repair: after a parallel run + merge, a single-process
+    #      `--galaxies all` must see everything done (2026-09-30 race fix)
+    out_b3c = run_script("layout_local.py", "--galaxies", "all",
+                         "--galaxy-tag", "res1_s", "--run", "r_b3c")
+    assert "done: 0 galaxies this run" in out_b3c, out_b3c[-500:]
+
+    # ---- no-op invocation (run complete) must not rebuild anchors and must
+    #      still serve preview + merge (2026-09-30 lazy-anchor fix)
+    run_script("layout_local.py", "--galaxies", "all", "--galaxy-tag", "res1_s",
+               "--run", "r_par", "--preview-galaxy", "0")
+
     # ---- viewer tiles export
     run_script("export_viewer_tiles.py", "--galaxy-tag", "res1_s", "--run", "r_main")
     sp = os.path.join(BASE, "spatial")
