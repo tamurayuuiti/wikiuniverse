@@ -37,7 +37,7 @@ wikiuniverse/
 │   ├── pipeline.py        # 1 サブセットのエンドツーエンド解析(resolution スイープ→一次選択→レポート)
 │   ├── report.py          # プロット(matplotlib)+ Markdown レポート
 │   └── cli.py             # サブコマンド群(python -m wu.cli …)
-├── scripts/               # フルグラフ系スクリプト 11 本
+├── scripts/               # フルグラフ系スクリプト 12 本
 │   ├── run_full_leiden.py         # dedup/detect/subdivide/metrics/cluster/export/prune
 │   ├── layout_global.py           # ① マクロ+銀河の座標(3D パッキング/FR)
 │   ├── layout_local.py            # ② 銀河内記事座標(アンカーバネ、銀河単位バッチ)
@@ -48,7 +48,8 @@ wikiuniverse/
 │   ├── community_purity.py        # カテゴリ純度(purity v2、tf-idf 命名)
 │   ├── compare_body_vs_pagelinks.py  # 本文次数 vs pagelinks 次数の対比較
 │   ├── audit_tiles.py             # [検査] data/spatial/ のタイル+サイドカー整合(読み取り専用)
-│   └── audit_names.py             # [検査] 命名内訳 + 銀河団ラベルのテンプレ出力(読み取り専用)
+│   ├── audit_names.py             # [検査] 命名内訳 + 銀河団ラベルのテンプレ出力(読み取り専用)
+│   └── audit_layout.py            # [検査] 座標 run の spill 文脈 + マクロ毎の平坦度・重心配置率の相関(読み取り専用)
 ├── tests/                 # 合成データ自己テスト 6 本(スクリプト式・ネットワーク不要。
 │                          #   test_synthetic / test_paths / test_bodylinks / test_catlinks /
 │                          #   test_subdivide / test_catalog。synth_data/ は実行時再生成)
@@ -273,6 +274,7 @@ z-compress スライダー(1.0=純 3D ↔ 0.05=ほぼ地図)が視聴時に z �
 `macro_native_overlap_frac`(配置次元でのマクロ重なり)、`macro_proj_overlap`
 (top/side/ランダム視点射影の重なり率 = 「地図らしさ」の視点依存性)、
 `galaxy_spill_frac`/`galaxy_spill_count`(3D 包含: 銀河球がマクロ球に収まっているか)、
+`galaxy_spill_ids`(spill した銀河 gid の上位 20・超過順 = 監査を待たずに毎 run「誰が」見える)、
 `galaxy_overlap_frac`(マクロ内の銀河球の重なり = 緩和品質、体積重み)、
 `galaxy_flat_mean`/`galaxy_flat_p90`(マクロ毎の銀河点群の PCA 異方性: ≈1=円盤状 /
 ≈2/3=等方的。円盤化の客観指標)、`macro_adj_recall_top5`・`macro_adj_spearman`
@@ -280,6 +282,11 @@ z-compress スライダー(1.0=純 3D ↔ 0.05=ほぼ地図)が視聴時に z �
 重みと空間距離の順位相関、負=強いリンクほど近い)。比較実行は `--run <name>` で
 別ディレクトリへ。preview.png(4 パネル: xy/xz/yz/深度カラー)+ **preview_macro*.html**
 (three.js・OrbitControls・z-compress スライダー、データ埋め込み)。1,971 銀河 + 63 マクロなら ~2 秒。
+spill の文脈と平坦度の要因の監査は `scripts/audit_layout.py`(読み取り専用・再計算なし):
+超過順の spill 一覧(r/Rm・マクロ規模・銀河名などの文脈列付き)、マクロ毎の平坦度 +
+重心配置率(medium + 孤立銀河の成員比)、両者の相関(「円盤化は重心配置銀河が
+リンク先方向の境界付近に集中するため」という仮説の定量検証)。`layout_meta.json` の
+数値と突合し、不一致は警告する。
 
 ## 銀河内部ローカルレイアウト(記事座標)
 

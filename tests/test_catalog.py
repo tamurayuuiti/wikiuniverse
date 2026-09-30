@@ -191,6 +191,124 @@ def main():
         assert 0.0 <= q["galaxy_flat_mean"] <= 1.0, q
         assert 0.0 <= q["galaxy_flat_p90"] <= 1.0, q
 
+    # ---- A6: galaxy_spill_ids recording + read-only layout audit
+    #      (scripts/audit_layout.py). The fixture run is spill-free, so the
+    #      meta/audit cross-check must be silent and the ids list empty.
+    assert "galaxy_spill_ids" in q, q.keys()
+    assert q["galaxy_spill_ids"] == [] and q["galaxy_spill_count"] == 0, q
+    spec_al = importlib.util.spec_from_file_location(
+        "audit_layout_mod", os.path.join(ROOT, "scripts", "audit_layout.py"))
+    al = importlib.util.module_from_spec(spec_al)
+    spec_al.loader.exec_module(al)
+
+    # (a) fixture e2e: the audit must reproduce the meta numbers (same galaxy
+    #     set, same flatness formula) and emit no cross-check WARN when clean
+    res_main = al.audit(Dirs(BASE), "r_main")
+    assert res_main["summary"]["n_spill"] == q["galaxy_spill_count"] == 0
+    assert res_main["spill"] == []
+    if q["galaxy_flat_mean"] is not None:
+        assert abs(res_main["summary"]["flat_mean"]
+                   - q["galaxy_flat_mean"]) < 1e-4, res_main["summary"]
+        assert abs(res_main["summary"]["flat_p90"]
+                   - q["galaxy_flat_p90"]) < 1e-4, res_main["summary"]
+    assert not [w for w in res_main["warnings"] if "WARN" in w], \
+        res_main["warnings"]
+
+    # (b) planted spill on a synthetic run (hand-built parquets under BASE):
+    #     detection / dust + R=0-macro exclusion / excess matches hand math /
+    #     per-macro flatness + bary_frac / catalog WITHOUT name column and
+    #     WITHOUT macros.parquet (the hardening path: degrade, never KeyError)
+    tmpb = os.path.join(BASE, "audit_tmp")
+    os.makedirs(os.path.join(tmpb, "final"), exist_ok=True)
+    sp_run = os.path.join(tmpb, "layout", "r_spill")
+    os.makedirs(sp_run, exist_ok=True)
+    pq.write_table(_pa.table({
+        "macro_id": _pa.array([0, 1, 2], type=_pa.int32()),
+        "x": [0.0, 500.0, 0.0], "y": [0.0, 0.0, 900.0], "z": [0.0, 0.0, 0.0],
+        "radius": [50.0, 40.0, 0.0],
+        "n_articles": _pa.array([100, 200, 5], type=_pa.int32()),
+        "n_galaxies": _pa.array([2, 4, 1], type=_pa.int32()),
+        "is_dust": [False, False, True],
+    }), os.path.join(sp_run, "macro_positions.parquet"))
+    pq.write_table(_pa.table({
+        "galaxy_id": _pa.array(np.arange(8), type=_pa.int32()),
+        "macro_id": _pa.array([0, 0, 0, 2, 1, 1, 1, 1], type=_pa.int32()),
+        # gid0: d3=50.7, r=5 -> (d3+r)/Rm = 1.114, excess = 5.7 (planted)
+        "x": [50.7, 10.0, 9000.0, 0.0, 490.0, 510.0, 500.0, 500.0],
+        "y": [0.0] * 8,
+        "z": [0.0] * 8,
+        "radius": [5.0, 5.0, 3.0, 4.0, 4.0, 4.0, 4.0, 4.0],
+        "display_class": ["galaxy", "galaxy", "dust", "galaxy",
+                          "galaxy", "medium", "galaxy", "galaxy"],
+        "n_articles": _pa.array([20, 15, 1, 3, 30, 25, 30, 30],
+                                type=_pa.int32()),
+    }), os.path.join(sp_run, "galaxy_positions.parquet"))
+    with open(os.path.join(sp_run, "layout_meta.json"), "w",
+              encoding="utf-8") as f:
+        json.dump({"generated_at": "test", "pack": 0.6, "r_spacing": 1.5,
+                   "seed": 42, "macro_w_power": 1.0,
+                   "mode": {"canonical": True},
+                   "quality": {"galaxy_spill_count": 1,
+                               "galaxy_spill_frac": 0.16667,
+                               "galaxy_spill_ids": [0],
+                               "galaxy_flat_mean": 1.0,
+                               "galaxy_flat_p90": 1.0}}, f)
+    # minimal catalog: NO name / rep_titles / display_class columns at all
+    pq.write_table(_pa.table({
+        "galaxy_id": _pa.array(np.arange(8), type=_pa.int32()),
+        "n_articles": _pa.array([20, 15, 1, 3, 30, 25, 30, 30],
+                                type=_pa.int32()),
+    }), os.path.join(tmpb, "final", "galaxies.parquet"))
+    # intra pairs: 0-1 (macro0, both linked); 4-6 (macro1); 1-5 is cross-macro
+    pq.write_table(_pa.table({
+        "a": _pa.array([0, 4, 1], type=_pa.int64()),
+        "b": _pa.array([1, 6, 5], type=_pa.int64()),
+        "w": [3.0, 2.0, 1.0],
+    }), os.path.join(tmpb, "final", "galaxy_pairs_topK.parquet"))
+
+    res_sp = al.audit(Dirs(tmpb), "r_spill")
+    sp = res_sp["spill"]
+    assert [r["gid"] for r in sp] == [0], sp          # dust/R=0 excluded
+    assert abs(sp[0]["ratio"] - 1.114) < 1e-9, sp     # (d3+r)/Rm
+    assert abs(sp[0]["excess"] - 5.7) < 1e-9, sp      # hand-computed excess
+    assert abs(sp[0]["r_over_Rm"] - 0.1) < 1e-9, sp
+    assert sp[0]["name"] == "", sp                    # missing name -> ""
+    rows_m = {r["macro_id"]: r for r in res_sp["macros"]}
+    assert 2 not in rows_m, rows_m                    # dust macro has no row
+    assert rows_m[1]["flat"] > 0.95, rows_m[1]        # coplanar cloud ~ 1.0
+    assert abs(rows_m[1]["bary_frac"] - 0.5) < 1e-12, rows_m[1]
+    assert rows_m[1]["n_medium"] == 1 and rows_m[1]["n_unlinked"] == 1
+    assert rows_m[0]["flat"] is None and rows_m[0]["bary_frac"] == 0.0
+    assert res_sp["corr"] is None and res_sp["summary"]["corr_n"] == 1
+    assert not [w for w in res_sp["warnings"] if "WARN" in w], \
+        res_sp["warnings"]
+
+    # CLI: report renders (exit 0); a missing run fails fast with the
+    # regeneration command in the message (exit 2)
+    r_cli = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "audit_layout.py"),
+         "--base", tmpb, "--run", "r_spill"], capture_output=True, text=True)
+    assert r_cli.returncode == 0 and "spill 一覧" in r_cli.stdout, \
+        r_cli.stdout + r_cli.stderr
+    r_miss = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "audit_layout.py"),
+         "--base", tmpb, "--run", "r_nosuch"], capture_output=True, text=True)
+    assert r_miss.returncode == 2 and "layout_global.py" in r_miss.stdout, \
+        r_miss.stdout + r_miss.stderr
+
+    # cross-check WARN path: wrong meta numbers must surface, never silent
+    mpath = os.path.join(sp_run, "layout_meta.json")
+    mm = json.load(open(mpath, encoding="utf-8"))
+    mm["quality"]["galaxy_spill_count"] = 3
+    mm["quality"]["galaxy_spill_ids"] = [0, 99]
+    with open(mpath, "w", encoding="utf-8") as f:
+        json.dump(mm, f)
+    res_w = al.audit(Dirs(tmpb), "r_spill")
+    assert any("spill 件数の不一致" in w for w in res_w["warnings"]), \
+        res_w["warnings"]
+    assert any("galaxy_spill_ids" in w for w in res_w["warnings"]), \
+        res_w["warnings"]
+
     # ---- v1.5 helper unit tests (flatness / adjacency / medium_local / fib slots)
     spec_lg = importlib.util.spec_from_file_location(
         "layout_global_mod", os.path.join(ROOT, "scripts", "layout_global.py"))

@@ -24,7 +24,9 @@ deterministic fibonacci-ball slots when they have no usable pairs at all.
   5. Dust galaxies (n=1) get positions on a far shell (cosmic dust ring).
 
 Quality metrics (layout_meta.json "quality"): macro_native_overlap_frac,
-macro_proj_overlap, galaxy_spill_frac/count (3D containment), galaxy_overlap_frac
+macro_proj_overlap, galaxy_spill_frac/count (3D containment), galaxy_spill_ids
+(the spilling galaxy ids, top 20 by excess, so every run shows WHO without
+waiting for scripts/audit_layout.py), galaxy_overlap_frac
 (sphere overlap inside macros), galaxy_flat_mean/p90 (PCA anisotropy of each
 macro's galaxy cloud; ~1 = pancake, ~2/3 = isotropic), macro_adj_recall_top5 and
 macro_adj_spearman (semantic adjacency preservation of the macro layout).
@@ -712,8 +714,15 @@ def main():
         # spill = 3D containment: galaxy sphere must fit inside its macro sphere
         dist_m = np.linalg.norm(g_centers[in_macro] - m_centers[mrow], axis=1)
         spill = dist_m + g_radius[in_macro] > R_m[mrow] * 1.02
+        # WHO spilled, visible in every run without waiting for an audit
+        # (top-20 by excess; galaxy_id == row index in this script's arrays)
+        exc_m = dist_m + g_radius[in_macro] - R_m[mrow]
+        sp_idx = np.flatnonzero(spill)
+        sp_idx = sp_idx[np.argsort(-exc_m[sp_idx], kind="stable")]
+        spill_ids = [int(in_macro[k]) for k in sp_idx[:20]]
     else:
         spill = np.zeros(0, bool)
+        spill_ids = []
     spill_frac = float(spill.mean()) if len(spill) else 0.0
     # per-macro galaxy-cloud anisotropy (~1 = pancake, ~2/3 = isotropic)
     flats = [flatness(P) for P, _ in macro_clouds if len(P) >= 4]
@@ -775,6 +784,7 @@ def main():
                         "macro_proj_overlap": proj,
                         "galaxy_spill_frac": round(spill_frac, 5),
                         "galaxy_spill_count": int(spill.sum()),
+                        "galaxy_spill_ids": spill_ids,
                         "galaxy_overlap_frac": galaxy_overlap,
                         "galaxy_flat_mean": flat_mean,
                         "galaxy_flat_p90": flat_p90,
