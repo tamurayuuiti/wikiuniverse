@@ -283,19 +283,35 @@ z-compress スライダー(1.0=純 3D ↔ 0.05=ほぼ地図)が視聴時に z �
 
 ## 銀河内部ローカルレイアウト(記事座標)
 
-銀河ごとに**完全に独立したジョブ**(境界を跨ぐ依存がないためバッチ分割・並列・resume が可能):
+銀河ごとに**完全に独立したジョブ**(境界を跨ぐ依存がないためバッチ分割・並列・resume が可能)。
+B0 基盤(2026-09-30): **run 非依存の重計算を tag 毎に1回だけ事前計算**して全 run・全ジョブで
+mmap 共有する(`data/graph/local_prep/<tag>/`: 内部エッジのバケット、(記事, 隣接銀河)の
+**グループ済みクロスペアと多重度**、記事毎の外部次数 = 中間生成物・削除自由・`--prep` で再構築)。
+run 依存のアンカー方向だけ実行毎に数秒で再構築(bincount 蓄積 = 旧 add.at と数学的に同一)。
+**座標はジョブ割当・並列度に依存しない**(銀河毎の数式と seed は不変。回帰テストで
+逐次分割と LPT 並列のビット一致を保証)。
 
 ```bash
-python scripts/run_local_parallel.py --base data --jobs 8   # 全銀河(フルラン ~63分)→ 自動マージ
-python scripts/layout_local.py --base data --run <RUN> --galaxies all
+python scripts/run_local_parallel.py --base data --run <RUN>   # 推奨: 全銀河を並列
+#   前提: 同名 run の galaxy_positions.parquet が存在すること(先の layout_global で
+#   生成。無い場合は両スクリプトが再実行コマンドを示して即終了 = fail-fast)
+#   --jobs 既定 = CPU 数。prep を1回実行してから LPT(コスト ~ n^1.93、02 §O 実測)で
+#   銀河をジョブへビンパッキング(ストラグラ解消)、終了後 --merge-only で走査なしマージ。
+#   ジョブ割当は <run>/parallel_jobs/job_*.gids.txt(キャッシュ)、実測テレメトリは
+#   <run>/parallel_meta.json → layout_local_meta.json の parallel に畳み込み
+#   進捗: 並列実行中は 10 秒毎に集約行([parallel] progress done/total %・elapsed・eta)
+#   を表示。ジョブ毎の stdout は <run>/parallel_jobs/job_*.log、銀河毎の所要時間は
+#   job_*.meta.json から parallel_meta.json の per_galaxy_secs へ集約される
+python scripts/layout_local.py --base data --run <RUN> --galaxies all   # 逐次(単一プロセス)
 # バッチ分割例: --galaxies 0-499 / --galaxies 500-1499 (resume 対応、checkpoint 記録)
+#   --prep = 事前計算のみ / --merge-only = シャードからマージのみ(走査なし)
 #   → data/layout/<run>/article_shards/gal_XXXXXX.npy (銀河毎・マージ後は削除可)
 #   → 全銀河完了時に自動マージ: article_positions.parquet (page_id, galaxy_id, x,y,z)
 #   → layout_local_meta.json (銀河毎所要時間 p50/p95 = バッチ外挿の根拠)
 ```
 
 力モデル: 内部エッジ = igraph FR(3D)の形状 + **アンカーバネ**(銀河間リンクが多い記事ほど、
-リンク先銀河方向のボール境界面へ。方向ベクトル集約なのでペア保存不要)+ 弾性 prior
+リンク先銀河方向のボール境界面へ。グループ済みクロスペアから bincount で集約)+ 弾性 prior
 (FR 形状の保持)+ ボール内クランプ。銀河中心・半径は対象 run(--run、既定は正典 run)の
 galaxy_positions 由来。「銀河 = アンカー制約付きレイアウト単位」(results/SUMMARY.md §9 の
 確定条件)の実装そのもの。
@@ -401,6 +417,9 @@ out_ratio・conductance・サイズの分布、コミュニティ間エッジ to
 - 変更内容は**主要な変更・成果を一文で要約**し、細かな実装変更は列挙しない。
 - 関連する変更はまとめ、**「何を」「どのように変更したか」**が分かる程度に具体的にする。
 - 必要に応じてコンポーネント名・関数名・技術用語を使用する。
+- **開発過程由来の符丁(内部のバッチ名・方針番号・事象番号など、リポジトリ単体で
+  読めない語)はコミットコメントに入れない**。変更内容そのものを読み手だけで
+  理解できる語で書く(2026-09-30 ユーザー方針)。
 - 簡潔・客観的な日本語とし、既存のコミット履歴と同程度の粒度・文体を維持する。
 
 ## 既知の注意点

@@ -220,7 +220,10 @@ python scripts/audit_names.py --base data --dump-macro-labels   # テンプレ�
 
 # 4) 座標 run の生成(① マクロ+銀河 → ② 銀河内記事 → マージ)
 python scripts/layout_global.py      --base data --run <RUN> --macro-dim 3
-python scripts/run_local_parallel.py --base data --run <RUN> --jobs 8   # フルラン ~63分
+python scripts/run_local_parallel.py --base data --run <RUN>   # jobs 既定=CPU 数
+#   初回のみ共有事前計算(data/graph/local_prep/<tag>/、数分・全 run で共用)が走り、
+#   その後 LPT 分割の並列ジョブ → 走査なしマージ。フルランの目安は B0 基盤導入前で
+#   ~63分(jobs 8・2026-09-26 実測)、導入後の実測は knowledge/02 §O を更新予定
 
 # 5) 出版(spatial/ へ。ビューアは常にここを読む)
 python scripts/export_viewer_tiles.py --base data --run <RUN>

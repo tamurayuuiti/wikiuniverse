@@ -279,6 +279,65 @@ def main():
     d = _np.linalg.norm(P - C3[gid], axis=1)
     assert (d <= _np.maximum(R3[gid] * 1.25, 1e-6)).all(), "article outside galaxy ball"
 
+    # ---- B0 prep artifacts: existence + brute-force equality of the grouped
+    #      cross pairs and ext_deg (the foundation must not lose/duplicate edges)
+    prep_dir = os.path.join(BASE, "graph", "local_prep", "res1_s")
+    for f in ("internal_offs.npy", "internal_buf.npy", "cross_u.npy",
+              "cross_g.npy", "cross_w.npy", "ext_deg.npy", "prep_meta.json"):
+        assert os.path.exists(os.path.join(prep_dir, f)), f
+    cu = _np.load(os.path.join(prep_dir, "cross_u.npy"))
+    cg = _np.load(os.path.join(prep_dir, "cross_g.npy"))
+    cw = _np.load(os.path.join(prep_dir, "cross_w.npy"))
+    ext = _np.load(os.path.join(prep_dir, "ext_deg.npy"))
+    memb_s = _np.load(os.path.join(BASE, "community", "full", "membership_res1_s.npy"))
+    Eu = _np.fromfile(os.path.join(BASE, "graph", "edges_undirected_unique.bin"),
+                      dtype=_np.int32).reshape(-1, 2)
+    brute = {}
+    for u, v in Eu.tolist():
+        gu, gv = int(memb_s[u]), int(memb_s[v])
+        if gu != gv:
+            brute[(u, gv)] = brute.get((u, gv), 0) + 1
+            brute[(v, gu)] = brute.get((v, gu), 0) + 1
+    got = {(int(a), int(b)): int(w) for a, b, w in zip(cu, cg, cw)}
+    assert got == brute, f"cross pair grouping mismatch: {len(got)} vs {len(brute)}"
+    ext_brute = _np.zeros(len(memb_s), _np.int64)
+    for (u, gv), w in brute.items():
+        ext_brute[u] += w
+    assert _np.array_equal(ext, ext_brute), "ext_deg mismatch"
+    # internal buckets: per-galaxy edge SET equals brute internal edges
+    offs = _np.load(os.path.join(prep_dir, "internal_offs.npy"))
+    buf = _np.load(os.path.join(prep_dir, "internal_buf.npy"))
+    for g in (0, 1):
+        le = buf[offs[g]:offs[g + 1]]
+        members_g = _np.flatnonzero(memb_s == g)
+        pos_of = {int(m): i for i, m in enumerate(members_g)}
+        got_e = sorted(tuple(sorted((pos_of[int(x)], pos_of[int(y)])))
+                       for x, y in le.tolist())
+        exp_e = sorted(tuple(sorted((pos_of[u], pos_of[v])))
+                       for u, v in Eu.tolist()
+                       if memb_s[u] == g and memb_s[v] == g)
+        assert got_e == exp_e, f"internal bucket mismatch g={g}"
+
+    # ---- B0 anchor equivalence: grouped+bincount == legacy per-edge add.at
+    spec_ll = importlib.util.spec_from_file_location(
+        "layout_local_mod", os.path.join(ROOT, "scripts", "layout_local.py"))
+    ll = importlib.util.module_from_spec(spec_ll)
+    spec_ll.loader.exec_module(ll)
+    pp = ll._prep_paths(Dirs(BASE), "res1_s")
+    prep = ll.load_prep(pp)
+    anc_new = ll.build_anchors(prep, memb_s, C3.astype(_np.float64), len(memb_s))
+    anc_old = _np.zeros((len(memb_s), 3))
+    for u, v in Eu.tolist():
+        gu, gv = int(memb_s[u]), int(memb_s[v])
+        if gu == gv:
+            continue
+        dd = C3[gv] - C3[gu]
+        dd = dd / max(_np.linalg.norm(dd), 1e-9)
+        anc_old[u] += dd
+        anc_old[v] -= dd
+    assert _np.allclose(anc_new, anc_old, atol=1e-9), \
+        f"anchor drift: {_np.abs(anc_new - anc_old).max()}"
+
     # ---- recompose: new global params -> article positions without re-run
     # NOTE: z_squash has no effect on tiny synthetic graphs (igraph FR init is
     # planar for n<=~6), so we vary --pack to force a radius/scale change.
@@ -296,6 +355,44 @@ def main():
     # ---- parallel launcher: all-done branch -> merge only
     run_script("run_local_parallel.py", "--jobs", "2", "--galaxy-tag", "res1_s",
                "--run", "r_main")
+
+    # ---- B0 invariance: an LPT-split 3-job parallel run must reproduce the
+    #      sequential range-split article positions EXACTLY (coordinates are
+    #      job-assignment independent by design)
+    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_par")
+    run_script("run_local_parallel.py", "--jobs", "3", "--galaxy-tag", "res1_s",
+               "--run", "r_par")
+    p_par = pq.read_table(os.path.join(BASE, "layout", "r_par",
+                                       "article_positions.parquet")).to_pydict()
+    assert _np.array_equal(p_par["x"], apt["x"]) and \
+        _np.array_equal(p_par["y"], apt["y"]) and \
+        _np.array_equal(p_par["z"], apt["z"]), \
+        "parallel LPT split changed coordinates"
+    pmeta = json.load(open(os.path.join(BASE, "layout", "r_par",
+                                        "parallel_meta.json"), encoding="utf-8"))
+    assert pmeta["lpt"] is True and pmeta["failures"] == 0, pmeta
+    # B0 telemetry: per-galaxy timings must survive parallel mode (job metas ->
+    # aggregated by the launcher) and progress/log side files must exist
+    assert pmeta["per_galaxy_secs"].get("n", 0) > 0, pmeta
+    pjobs = os.path.join(BASE, "layout", "r_par", "parallel_jobs")
+    assert os.path.exists(os.path.join(pjobs, "job_00.meta.json")), os.listdir(pjobs)
+    assert os.path.exists(os.path.join(pjobs, "job_00.progress")), os.listdir(pjobs)
+    assert os.path.exists(os.path.join(pjobs, "job_00.log")), os.listdir(pjobs)
+    lmeta = json.load(open(os.path.join(BASE, "layout", "r_par",
+                                        "layout_local_meta.json"), encoding="utf-8"))
+    assert lmeta["mode"] == "merge-only" and "parallel" in lmeta, lmeta
+    assert lmeta["parallel"]["per_galaxy_secs"].get("n", 0) > 0, lmeta
+
+    # ---- B0 fail-fast: a run without galaxy_positions must exit at once with
+    #      an actionable message, not spawn jobs that crash (2026-09-30 incident)
+    for scr, extra in (("layout_local.py", []),
+                       ("run_local_parallel.py", ["--jobs", "2"])):
+        r_nf = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", scr),
+                               "--base", BASE, "--galaxy-tag", "res1_s",
+                               "--run", "r_noglobal", *extra],
+                              capture_output=True, text=True)
+        assert r_nf.returncode != 0, f"{scr} should fail on a run without globals"
+        assert "layout_global.py" in (r_nf.stdout + r_nf.stderr), r_nf.stderr[-500:]
 
     # ---- viewer tiles export
     run_script("export_viewer_tiles.py", "--galaxy-tag", "res1_s", "--run", "r_main")
