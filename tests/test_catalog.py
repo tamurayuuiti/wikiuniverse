@@ -309,6 +309,42 @@ def main():
     assert any("galaxy_spill_ids" in w for w in res_w["warnings"]), \
         res_w["warnings"]
 
+    # ---- cp932 console regression (Windows): subprocess stdio is a PIPE and
+    #      Python then uses the ANSI codepage (cp932), which cannot encode
+    #      chars like ≈ / ≥ / — (UnicodeEncodeError, user-local failure).
+    #      Force cp932 on ANY platform and verify every printed path encodes.
+    import contextlib
+    import io as _io
+    env932 = {k: v for k, v in os.environ.items() if k != "PYTHONUTF8"}
+    env932["PYTHONIOENCODING"] = "cp932"
+    r_932 = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "audit_layout.py"),
+         "--base", tmpb, "--run", "r_spill"], capture_output=True, env=env932)
+    err932 = r_932.stderr.decode("cp932", "replace")
+    assert r_932.returncode == 0, err932[-1500:]
+    assert "UnicodeEncodeError" not in err932, err932[-1500:]
+    out932 = r_932.stdout.decode("cp932")
+    assert "spill 一覧" in out932 and "WARN" in out932, out932[:400]
+    assert "?" not in out932, "encoding guard fired: non-encodable char left"
+    # print_report paths: WARN lines, both corr verdicts, corr=None, flat=None
+    for txt_res in (res_sp, res_w,
+                    {**res_sp, "corr": 0.7,
+                     "summary": {**res_sp["summary"], "corr_n": 5}},
+                    {**res_sp, "corr": -0.2,
+                     "summary": {**res_sp["summary"], "corr_n": 5}}):
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            al.print_report(txt_res)
+        buf.getvalue().encode("cp932")             # must not raise
+    # fail-fast message and optional-catalog warnings are printed text too
+    try:
+        al.load_run(Dirs(tmpb), "r_nosuch")
+        raise AssertionError("missing run must raise RunMissing")
+    except al.RunMissing as e_miss:
+        str(e_miss).encode("cp932")
+    for w_cat in al.load_catalog(Dirs(os.path.join(tmpb, "nope")))["warnings"]:
+        w_cat.encode("cp932")
+
     # ---- v1.6 containment regression (unconditional clamp): a macro with a
     #      SINGLE regular, pairless galaxy used to skip the clamp entirely and
     #      its fibonacci slot pushed the galaxy outside the macro sphere —
