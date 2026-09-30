@@ -157,8 +157,10 @@ def main():
                                   "galaxy_spill_count", "macro_proj_overlap",
                                   "galaxy_overlap_frac", "galaxy_flat_mean",
                                   "galaxy_flat_p90", "galaxy_flat_n_macros",
+                                  "galaxy_flat_domain_min",
                                   "macro_adj_recall_top5",
                                   "macro_adj_spearman"}, lm
+    assert lm["quality"]["galaxy_flat_domain_min"] == 8, lm["quality"]
     assert set(lm["quality"]["macro_proj_overlap"]) >= {"top_z", "side_x", "random_mean"}
     # v1.5 canonical: the old placement knobs are gone from the schema entirely
     for gone in ("dim", "z_squash", "galaxy_relax", "medium_place"):
@@ -402,6 +404,62 @@ def main():
     assert res_fx["summary"]["n_spill"] == 0 and res_fx["spill"] == []
     assert not [w for w in res_fx["warnings"] if "WARN" in w], \
         res_fx["warnings"]
+
+    # ---- flatness domain revision: quality flat stats cover macros with
+    #      FLAT_MIN_MEMBERS (8)+ members only (small-n eigenvalue bias: an
+    #      ISOTROPIC cloud measures ~0.96 at n=4), and audit_layout judges the
+    #      small ones against per-n isotropic nulls (* = real pancake)
+    fxd = os.path.join(BASE, "flat_fixture")
+    fxdf = os.path.join(fxd, "final")
+    os.makedirs(fxdf, exist_ok=True)
+    N0 = 9
+    pq.write_table(_pa.table({
+        "galaxy_id": _pa.array(np.arange(N0 + 2), type=_pa.int32()),
+        "macro_id": _pa.array([0] * N0 + [1, 1], type=_pa.int32()),
+        "n_articles": _pa.array([100] * N0 + [50, 50], type=_pa.int32()),
+        "is_dust": [False] * (N0 + 2),
+        "display_class": ["galaxy"] * (N0 + 2),
+    }), os.path.join(fxdf, "galaxies.parquet"))
+    pq.write_table(_pa.table({
+        "macro_id": _pa.array([0, 1], type=_pa.int32()),
+        "n_articles": _pa.array([900, 100], type=_pa.int32()),
+        "n_galaxies": _pa.array([9, 2], type=_pa.int32()),
+        "is_dust": [False, False],
+    }), os.path.join(fxdf, "macros.parquet"))
+    pq.write_table(_pa.table({          # chain inside macro0, single pair in 1
+        "a": _pa.array(list(range(N0 - 1)) + [N0], type=_pa.int64()),
+        "b": _pa.array(list(range(1, N0)) + [N0 + 1], type=_pa.int64()),
+        "w": [1.0] * N0,
+    }), os.path.join(fxdf, "galaxy_pairs_topK.parquet"))
+    pq.write_table(_pa.table({
+        "macro_a": _pa.array([0], type=_pa.int64()),
+        "macro_b": _pa.array([1], type=_pa.int64()),
+        "w": [5.0],
+    }), os.path.join(fxdf, "macro_pairs.parquet"))
+    r_fd = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "layout_global.py"),
+         "--base", fxd, "--run", "r_dom"], capture_output=True, text=True)
+    assert r_fd.returncode == 0, r_fd.stdout[-2000:] + r_fd.stderr[-2000:]
+    lm_fd = json.load(open(os.path.join(fxd, "layout", "r_dom",
+                                        "layout_meta.json"), encoding="utf-8"))
+    # only the 9-member macro is in the flat domain (the 2-member one is not)
+    assert lm_fd["quality"]["galaxy_flat_domain_min"] == 8
+    assert lm_fd["quality"]["galaxy_flat_n_macros"] == 1, lm_fd["quality"]
+    assert lm_fd["quality"]["galaxy_flat_mean"] is not None
+    res_fd = al.audit(Dirs(fxd), "r_dom")
+    assert res_fd["summary"]["n_flat_macros"] == 1
+    assert abs(res_fd["summary"]["flat_mean"]
+               - lm_fd["quality"]["galaxy_flat_mean"]) < 1e-4, res_fd["summary"]
+    assert res_fd["summary"]["flat_domain_min"] == 8
+    assert res_fd["summary"]["n_flat_macros_wide"] == 1   # macro1(2成員)は両ドメイン外
+    rows_fd = {r["macro_id"]: r for r in res_fd["macros"]}
+    r0 = rows_fd[0]
+    assert r0["null_p90"] is not None and 0.0 < r0["null_p90"] < 1.0
+    assert r0["true_disk"] == (r0["flat"] > r0["null_p90"])
+    assert rows_fd[1]["flat"] is None and rows_fd[1]["null_p90"] is None
+    # the null baseline itself: isotropic clouds must measure high at small n
+    # (the bias this revision works around) and lower at large n
+    assert al._null_flat(4)[0] > 0.9 > al._null_flat(40)[0]
 
     # ---- v1.5 helper unit tests (flatness / adjacency / medium_local / fib slots)
     spec_lg = importlib.util.spec_from_file_location(

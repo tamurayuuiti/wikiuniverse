@@ -13,14 +13,21 @@ quality NUMBERS in layout_meta.json but not their context; this script answers
                    quality.galaxy_flat_*, imported from layout_global so the
                    numbers are identical) + bary_frac = the share of members
                    placed by the centroid rule (medium galaxies + regular
-                   galaxies with zero intra-macro pairs).
+                   galaxies with zero intra-macro pairs). Each row carries a
+                   per-n ISOTROPIC NULL baseline (fixed seed): the eigenvalue
+                   ratio is heavily small-n biased (isotropic clouds measure
+                   ~0.96 at n=4), so macros with flat > null p90 are flagged
+                   (*) as real pancake candidates.
   3. corr(flat, bary_frac)   Pearson r over macros with >= 4 members:
                    quantifies whether disk-like macro clouds are explained by
                    centroid-placed members piling up near the boundary in the
                    direction of their link targets.
   4. run summary   layout_meta params/quality cross-checked against the
-                   recomputation. Any mismatch prints a WARN (never silent —
-                   same principle as the viewer's local# fallback warning).
+                   recomputation (the flatness cross-check follows the run's
+                   galaxy_flat_domain_min; legacy runs without the key are
+                   compared on the old n>=4 domain). Any mismatch prints a
+                   WARN (never silent — same principle as the viewer's
+                   local# fallback warning).
 
 Reads: layout/<run>/{galaxy_positions,macro_positions}.parquet + layout_meta.json
 (required); final/galaxies.parquet (names), final/macros.parquet (labels) and
@@ -50,6 +57,25 @@ from wu.paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 
 SPILL_TOL = 1.02  # containment tolerance of the layout quality metric
 TOP_IDS = 20      # galaxy_spill_ids cap recorded in layout_meta.json
+
+_NULL_CACHE: dict = {}
+
+
+def _null_flat(n: int, samples: int = 200):
+    """(mean, p90) of flatness for a PERFECTLY ISOTROPIC n-point cloud.
+
+    The PCA eigenvalue ratio is heavily small-n biased (n=4 -> mean ~0.96):
+    this null is the baseline for deciding whether a macro's cloud is a real
+    pancake or just small. Fixed seed + numpy's RNG stability policy =>
+    identical numbers on any machine/run.
+    """
+    if n not in _NULL_CACHE:
+        rng = np.random.default_rng(12345)
+        fl = np.array([flatness(rng.normal(size=(n, 3)))
+                       for _ in range(samples)])
+        _NULL_CACHE[n] = (round(float(fl.mean()), 5),
+                          round(float(np.percentile(fl, 90)), 5))
+    return _NULL_CACHE[n]
 
 
 class RunMissing(FileNotFoundError):
@@ -199,13 +225,19 @@ def audit(dirs: Dirs, run: str | None = None) -> dict:
         mem = np.flatnonzero(sel & (gmid == int(mid[i_m])))
         if len(mem) == 0:
             continue
-        # 平坦度は layout_meta と同一ドメイン(4 成員以上)・同一式(Import)
+        # 平坦度は layout_meta と同一ドメイン(FLAT_MIN_MEMBERS 以上)で cross-check
+        # するが、監査表自体は 4 成員以上すべてに表示する(null 対比で解釈可能)
         flat = flatness(gxyz[mem] - mxyz[i_m]) if len(mem) >= 4 else None
+        null = _null_flat(len(mem)) if len(mem) >= 3 else None
         n_med = int(is_med[mem].sum())
         n_unl = int((is_reg[mem] & (intra_deg[mem] == 0)).sum())
         macro_rows.append({
             "macro_id": int(mid[i_m]), "n_members": len(mem),
             "n_articles": int(mn[i_m]), "flat": flat,
+            "null_mean": null[0] if null else None,
+            "null_p90": null[1] if null else None,
+            "true_disk": bool(flat is not None and null is not None
+                              and flat > null[1]),
             "n_medium": n_med, "n_unlinked": n_unl,
             "bary_frac": (n_med + n_unl) / len(mem),
             "label": cat["macro_labels"].get(int(mid[i_m]), ""),
@@ -225,9 +257,20 @@ def audit(dirs: Dirs, run: str | None = None) -> dict:
 
     # ---- cross-check against layout_meta (WARN, never silent) ----
     q = meta.get("quality", {}) or {}
-    flats = [r["flat"] for r in macro_rows if r["flat"] is not None]
-    flat_mean = round(float(np.mean(flats)), 5) if flats else None
-    flat_p90 = round(float(np.percentile(flats, 90)), 5) if flats else None
+    # meta と同一ドメインで cross-check する: 新 run は quality に
+    # galaxy_flat_domain_min を記録(現行 8)、旧 run はキーが無い = 旧ドメイン 4
+    dom = int(q.get("galaxy_flat_domain_min", 4))
+    flats_wide = [r["flat"] for r in macro_rows if r["flat"] is not None]
+    flats_dom = [r["flat"] for r in macro_rows
+                 if r["flat"] is not None and r["n_members"] >= dom]
+
+    def _fstats(v):
+        return ((round(float(np.mean(v)), 5),
+                 round(float(np.percentile(v, 90)), 5)) if v else (None, None))
+
+    wide_mean, wide_p90 = _fstats(flats_wide)
+    flat_mean, flat_p90 = _fstats(flats_dom)
+    n_true_disk = sum(1 for r in macro_rows if r["true_disk"])
     n_spill = int(spill.sum())
     if q.get("galaxy_spill_count") is not None \
             and int(q["galaxy_spill_count"]) != n_spill:
@@ -260,8 +303,12 @@ def audit(dirs: Dirs, run: str | None = None) -> dict:
         "n_galaxies": G, "n_macros_effective": int((mr > 0).sum()),
         "n_audited": int(sel.sum()), "n_spill": n_spill,
         "spill_frac": round(n_spill / max(1, int(sel.sum())), 5),
+        "flat_domain_min": dom,
         "flat_mean": flat_mean, "flat_p90": flat_p90,
-        "n_flat_macros": len(flats),
+        "n_flat_macros": len(flats_dom),
+        "flat_mean_wide": wide_mean, "flat_p90_wide": wide_p90,
+        "n_flat_macros_wide": len(flats_wide),
+        "n_true_disk": n_true_disk,
         "n_medium_total": int((is_med & sel).sum()),
         "n_unlinked_total": int((is_reg & sel & (intra_deg == 0)).sum()),
         "bary_frac_mean": (round(float(np.mean(
@@ -301,13 +348,19 @@ def print_report(res: dict) -> None:
     print("\n== ② マクロ毎の平坦度 + 重心配置率(平坦度降順)==")
     # 出力文字は cp932 コンソール(Windows のパイプ既定)でもエンコード可能な
     # 範囲に保つこと(≈/≥/— は不可。テストで検証済み)
-    print("  flat = 1 − λ3/λ1(~1 円盤 / ~2/3 等方、成員4以上のみ)  "
+    print("  flat = 1 − λ3/λ1(~1 円盤、成員4以上のみ)  "
           "bary = (medium + 孤立銀河) / 成員")
-    print("  macro  n_mem  n_art    flat  n_med  n_unl  bary_frac  label")
+    print("  null90 = 同成員数の完全等方点群の平坦度 90%点(固定seed)。"
+          "* 印 = flat > null90 の「真の円盤候補」")
+    print("  (小マクロは等方でも flat が高く測られる = 固有値比の小nバイアス。"
+          "layout_meta の flat 統計は成員8以上のドメイン)")
+    print("  macro  n_mem  n_art    flat  null90 *  n_med  n_unl  bary_frac  label")
     for r in res["macros"]:
         fl = f"{r['flat']:.3f}" if r["flat"] is not None else "-"
+        nu = f"{r['null_p90']:.3f}" if r.get("null_p90") is not None else "-"
+        mark = "*" if r.get("true_disk") else " "
         print(f"  {r['macro_id']:>5} {r['n_members']:>6} {r['n_articles']:>7}"
-              f" {fl:>7} {r['n_medium']:>6} {r['n_unlinked']:>6}"
+              f" {fl:>7} {nu:>7} {mark} {r['n_medium']:>6} {r['n_unlinked']:>6}"
               f" {r['bary_frac']:>10.3f}  {r['label']}")
 
     print("\n== ③ corr(flat, bary_frac) ==")
@@ -327,7 +380,12 @@ def print_report(res: dict) -> None:
           f" / 監査対象 {s['n_audited']}"
           f" / spill {s['n_spill']}")
     print(f"  flat_mean={s['flat_mean']} flat_p90={s['flat_p90']}"
-          f" (n={s['n_flat_macros']})  bary_frac_mean={s['bary_frac_mean']}"
+          f" (n={s['n_flat_macros']}, ドメイン=成員{s['flat_domain_min']}以上"
+          f" = layout_meta と同一)"
+          f"  [参考: 成員4以上全域 mean={s['flat_mean_wide']}"
+          f" p90={s['flat_p90_wide']} n={s['n_flat_macros_wide']}]")
+    print(f"  真の円盤候補(flat > null90): {s['n_true_disk']} マクロ"
+          f"  bary_frac_mean={s['bary_frac_mean']}"
           f"  medium={s['n_medium_total']} 孤立={s['n_unlinked_total']}")
     if s.get("galaxy_spill_ids"):
         print(f"  layout_meta の galaxy_spill_ids: {s['galaxy_spill_ids']}")

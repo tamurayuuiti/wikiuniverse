@@ -43,7 +43,10 @@ macro_proj_overlap, galaxy_spill_frac/count (3D containment), galaxy_spill_ids
 (the spilling galaxy ids, top 20 by excess, so every run shows WHO without
 waiting for scripts/audit_layout.py), galaxy_overlap_frac
 (sphere overlap inside macros), galaxy_flat_mean/p90 (PCA anisotropy of each
-macro's galaxy cloud; ~1 = pancake, ~2/3 = isotropic), macro_adj_recall_top5 and
+macro's galaxy cloud; ~1 = pancake; domain = macros with FLAT_MIN_MEMBERS (8)+
+members — smaller clouds measure near 1 even when isotropic (small-n eigenvalue
+bias), audit_layout.py judges those against per-n isotropic nulls),
+macro_adj_recall_top5 and
 macro_adj_spearman (semantic adjacency preservation of the macro layout).
 
 Outputs (data/layout/<run>/ - run name via --run, default wu.paths.ACTIVE_LAYOUT_RUN):
@@ -76,6 +79,12 @@ from wu.dumpio import write_json  # noqa: E402
 from wu.paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 
 R_TOTAL = 1000.0  # canvas scale: disk areas sum to pi*R_TOTAL^2
+# Domain of the galaxy_flat_* quality metrics: macros with at least this many
+# members. The PCA eigenvalue ratio behind `flatness` is heavily small-n biased
+# (measured isotropic null: n=4 mean 0.955 / n=6 0.879 / n=8 0.806), so smaller
+# macros would dominate the percentile with measurement artifacts; they are
+# judged against per-n isotropic nulls in scripts/audit_layout.py instead.
+FLAT_MIN_MEMBERS = 8
 
 
 def _now():
@@ -793,8 +802,9 @@ def main():
         spill = np.zeros(0, bool)
         spill_ids = []
     spill_frac = float(spill.mean()) if len(spill) else 0.0
-    # per-macro galaxy-cloud anisotropy (~1 = pancake, ~2/3 = isotropic)
-    flats = [flatness(P) for P, _ in macro_clouds if len(P) >= 4]
+    # per-macro galaxy-cloud anisotropy (~1 = pancake); domain = macros with
+    # FLAT_MIN_MEMBERS+ members (small-n eigenvalue bias; see the constant)
+    flats = [flatness(P) for P, _ in macro_clouds if len(P) >= FLAT_MIN_MEMBERS]
     flat_mean = round(float(np.mean(flats)), 5) if flats else None
     flat_p90 = round(float(np.percentile(flats, 90)), 5) if flats else None
     # sphere overlap INSIDE macros (volume-weighted; relaxation quality)
@@ -860,6 +870,7 @@ def main():
                         "galaxy_flat_mean": flat_mean,
                         "galaxy_flat_p90": flat_p90,
                         "galaxy_flat_n_macros": len(flats),
+                        "galaxy_flat_domain_min": FLAT_MIN_MEMBERS,
                         "macro_adj_recall_top5": adj_recall,
                         "macro_adj_spearman": adj_spear},
             "secs": round(time.time() - t0, 1)}
