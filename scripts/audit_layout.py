@@ -79,7 +79,7 @@ def load_run(dirs: Dirs, run: str | None) -> dict:
     if missing:
         raise RunMissing(
             f"run '{lay.name}' に必須ファイルがありません: {', '.join(missing)}"
-            f" — 先に生成してください: python scripts/layout_global.py"
+            f". 先に生成してください: python scripts/layout_global.py"
             f" --base {dirs.base} --run {lay.name}")
     import pyarrow.parquet as pq
     gpos = pq.read_table(os.path.join(str(lay),
@@ -299,11 +299,13 @@ def print_report(res: dict) -> None:
         print("  spill なし(全銀河球がマクロ球内に収まっている)")
 
     print("\n== ② マクロ毎の平坦度 + 重心配置率(平坦度降順)==")
-    print("  flat = 1 − λ3/λ1(≈1 円盤 / ≈2/3 等方、成員 ≥ 4 のみ)  "
+    # 出力文字は cp932 コンソール(Windows のパイプ既定)でもエンコード可能な
+    # 範囲に保つこと(≈/≥/— は不可。テストで検証済み)
+    print("  flat = 1 − λ3/λ1(~1 円盤 / ~2/3 等方、成員4以上のみ)  "
           "bary = (medium + 孤立銀河) / 成員")
     print("  macro  n_mem  n_art    flat  n_med  n_unl  bary_frac  label")
     for r in res["macros"]:
-        fl = f"{r['flat']:.3f}" if r["flat"] is not None else "  — "
+        fl = f"{r['flat']:.3f}" if r["flat"] is not None else "-"
         print(f"  {r['macro_id']:>5} {r['n_members']:>6} {r['n_articles']:>7}"
               f" {fl:>7} {r['n_medium']:>6} {r['n_unlinked']:>6}"
               f" {r['bary_frac']:>10.3f}  {r['label']}")
@@ -337,6 +339,14 @@ def print_report(res: dict) -> None:
 
 
 def main() -> int:
+    # Console-encoding guard for Windows: when stdout/stderr is a pipe (the
+    # test-suite subprocesses) Python uses the ANSI codepage (cp932), which
+    # cannot encode every Unicode char and raises UnicodeEncodeError mid-report.
+    # All printed text is verified cp932-encodable by the tests, so this only
+    # degrades hypothetical future edits to '?' instead of crashing.
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            _s.reconfigure(errors="replace")
     ap = argparse.ArgumentParser(
         description="read-only layout-run audit (spill context, flatness, "
                     "centroid-placement share, correlation)")
