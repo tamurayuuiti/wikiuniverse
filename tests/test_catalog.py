@@ -120,8 +120,9 @@ def main():
     for _src in ["数学", "スタブ", "すべてのスタブ記事の一覧", "Xのスタブ"]:
         assert bgc._stem_name(_src) == "", _src  # 非該当/語幹短すぎ/ブラックリスト
 
-    # ---- global layout smoke (dim=2 for speed)
-    out2 = run_script("layout_global.py", "--dim", "2", "--galaxy-tag", "res1_s",
+    # ---- global layout smoke (v1.5 canonical: full 3D, sphere relax,
+    #      bary placement for mediums AND unlinked galaxies, no baked lens)
+    out2 = run_script("layout_global.py", "--galaxy-tag", "res1_s",
                       "--run", "r_main")
 
     # ---- version-skew regression: pre-v2 catalog (macros without is_dust,
@@ -133,7 +134,7 @@ def main():
     _gpath = os.path.join(final, "galaxies.parquet")
     _gt = pq.read_table(_gpath)
     pq.write_table(_gt.drop(["display_class"]), _gpath)
-    out_skew = run_script("layout_global.py", "--dim", "2", "--galaxy-tag", "res1_s",
+    out_skew = run_script("layout_global.py", "--galaxy-tag", "res1_s",
                           "--run", "r_main")
     assert "pre-v2" in out_skew, "skew warning not emitted"
     # restore v2 catalog files (skew block degraded them in place)
@@ -153,34 +154,448 @@ def main():
     lm = json.load(open(os.path.join(lay, "layout_meta.json"), encoding="utf-8"))
     assert lm["n_galaxies"] == G
     assert set(lm["quality"]) >= {"macro_native_overlap_frac", "galaxy_spill_frac",
-                                  "galaxy_spill_count", "macro_proj_overlap"}, lm
+                                  "galaxy_spill_count", "macro_proj_overlap",
+                                  "galaxy_overlap_frac", "galaxy_flat_mean",
+                                  "galaxy_flat_p90", "galaxy_flat_n_macros",
+                                  "galaxy_flat_domain_min",
+                                  "macro_adj_recall_top5",
+                                  "macro_adj_spearman"}, lm
+    assert lm["quality"]["galaxy_flat_domain_min"] == 8, lm["quality"]
     assert set(lm["quality"]["macro_proj_overlap"]) >= {"top_z", "side_x", "random_mean"}
+    # v1.5 canonical: the old placement knobs are gone from the schema entirely
+    for gone in ("dim", "z_squash", "galaxy_relax", "medium_place"):
+        assert gone not in lm, f"{gone} should have been removed"
+        assert gone not in lm["mode"], f"mode.{gone} should have been removed"
+    assert lm["mode"]["canonical"] is True, lm["mode"]
+    assert lm["mode"]["macro_dim"] == 3
     assert os.path.exists(os.path.join(lay, "preview.png"))
-    assert any(f.startswith("preview_macro2d") and f.endswith(".html")
+    assert any(f.startswith("preview_macro3d") and f.endswith(".html")
                for f in os.listdir(lay)), os.listdir(lay)
 
-    # ---- full-3D arm (macro-dim 3) into its own subdir
-    run_script("layout_global.py", "--dim", "3", "--macro-dim", "3",
-               "--run", "r_3d", "--galaxy-tag", "res1_s")
-    lay3 = os.path.join(BASE, "layout", "r_3d")
-    lm3 = json.load(open(os.path.join(lay3, "layout_meta.json"), encoding="utf-8"))
-    assert lm3["mode"]["macro_dim"] == 3
-    # --- 3D containment regression: every placed non-dust galaxy center must lie
-    #     inside its macro sphere (catches z-composition bugs like the 2026-09-26 one)
-    gpos3 = pq.read_table(os.path.join(lay3, "galaxy_positions.parquet")).to_pydict()
-    mpos3 = pq.read_table(os.path.join(lay3, "macro_positions.parquet")).to_pydict()
-    mxyz = _np.stack([mpos3["x"], mpos3["y"], mpos3["z"]], axis=1)
-    mr = _np.asarray(mpos3["radius"])
-    gxyz = _np.stack([gpos3["x"], gpos3["y"], gpos3["z"]], axis=1)
-    gr = _np.asarray(gpos3["radius"])
+    # --- 3D containment regression on the canonical run: every placed non-dust
+    #     galaxy sphere must fit inside its macro sphere (|c| + r <= Rm). Catches
+    #     z-composition bugs (2026-09-26) and the pancake/lens regimes (v1.5).
+    mpos = pq.read_table(os.path.join(lay, "macro_positions.parquet")).to_pydict()
+    mxyz = _np.stack([mpos["x"], mpos["y"], mpos["z"]], axis=1)
+    mr = _np.asarray(mpos["radius"])
+    gxyz = _np.stack([gpos["x"], gpos["y"], gpos["z"]], axis=1)
+    gr = _np.asarray(gpos["radius"])
     placed_mask = gr > 0
-    mi = _np.asarray(gpos3["macro_id"])[placed_mask]
-    d3 = _np.linalg.norm(gxyz[placed_mask] - mxyz[mi], axis=1)
-    assert (d3 <= mr[mi] * 1.15).mean() > 0.98, \
-        f"galaxies outside macro spheres in 3D: {(d3 > mr[mi] * 1.15).sum()}"
-    assert os.path.exists(os.path.join(lay3, "preview.png"))
-    assert any(f.startswith("preview_macro3d") and f.endswith(".html")
-               for f in os.listdir(lay3)), os.listdir(lay3)
+    cls_g = [str(c) for c in gpos["display_class"]]
+    nondust = placed_mask & _np.asarray([c != "dust" for c in cls_g])
+    mi_nd = _np.asarray(gpos["macro_id"])[nondust]
+    d3_nd = _np.linalg.norm(gxyz[nondust] - mxyz[mi_nd], axis=1)
+    assert (d3_nd + gr[nondust] <= mr[mi_nd] * 1.02 + 1e-9).all(), \
+        f"non-dust galaxy bodies outside macro sphere: " \
+        f"{int((d3_nd + gr[nondust] > mr[mi_nd] * 1.02).sum())}"
+    q = lm["quality"]
+    if q["galaxy_flat_mean"] is not None:
+        assert 0.0 <= q["galaxy_flat_mean"] <= 1.0, q
+        assert 0.0 <= q["galaxy_flat_p90"] <= 1.0, q
+
+    # ---- A6: galaxy_spill_ids recording + read-only layout audit
+    #      (scripts/audit_layout.py). The fixture run is spill-free, so the
+    #      meta/audit cross-check must be silent and the ids list empty.
+    assert "galaxy_spill_ids" in q, q.keys()
+    assert q["galaxy_spill_ids"] == [] and q["galaxy_spill_count"] == 0, q
+    spec_al = importlib.util.spec_from_file_location(
+        "audit_layout_mod", os.path.join(ROOT, "scripts", "audit_layout.py"))
+    al = importlib.util.module_from_spec(spec_al)
+    spec_al.loader.exec_module(al)
+
+    # (a) fixture e2e: the audit must reproduce the meta numbers (same galaxy
+    #     set, same flatness formula) and emit no cross-check WARN when clean
+    res_main = al.audit(Dirs(BASE), "r_main")
+    assert res_main["summary"]["n_spill"] == q["galaxy_spill_count"] == 0
+    assert res_main["spill"] == []
+    if q["galaxy_flat_mean"] is not None:
+        assert abs(res_main["summary"]["flat_mean"]
+                   - q["galaxy_flat_mean"]) < 1e-4, res_main["summary"]
+        assert abs(res_main["summary"]["flat_p90"]
+                   - q["galaxy_flat_p90"]) < 1e-4, res_main["summary"]
+    assert not [w for w in res_main["warnings"] if "WARN" in w], \
+        res_main["warnings"]
+
+    # (b) planted spill on a synthetic run (hand-built parquets under BASE):
+    #     detection / dust + R=0-macro exclusion / excess matches hand math /
+    #     per-macro flatness + bary_frac / catalog WITHOUT name column and
+    #     WITHOUT macros.parquet (the hardening path: degrade, never KeyError)
+    tmpb = os.path.join(BASE, "audit_tmp")
+    os.makedirs(os.path.join(tmpb, "final"), exist_ok=True)
+    sp_run = os.path.join(tmpb, "layout", "r_spill")
+    os.makedirs(sp_run, exist_ok=True)
+    pq.write_table(_pa.table({
+        "macro_id": _pa.array([0, 1, 2], type=_pa.int32()),
+        "x": [0.0, 500.0, 0.0], "y": [0.0, 0.0, 900.0], "z": [0.0, 0.0, 0.0],
+        "radius": [50.0, 40.0, 0.0],
+        "n_articles": _pa.array([100, 200, 5], type=_pa.int32()),
+        "n_galaxies": _pa.array([2, 4, 1], type=_pa.int32()),
+        "is_dust": [False, False, True],
+    }), os.path.join(sp_run, "macro_positions.parquet"))
+    pq.write_table(_pa.table({
+        "galaxy_id": _pa.array(np.arange(8), type=_pa.int32()),
+        "macro_id": _pa.array([0, 0, 0, 2, 1, 1, 1, 1], type=_pa.int32()),
+        # gid0: d3=50.7, r=5 -> (d3+r)/Rm = 1.114, excess = 5.7 (planted)
+        "x": [50.7, 10.0, 9000.0, 0.0, 490.0, 510.0, 500.0, 500.0],
+        "y": [0.0] * 8,
+        "z": [0.0] * 8,
+        "radius": [5.0, 5.0, 3.0, 4.0, 4.0, 4.0, 4.0, 4.0],
+        "display_class": ["galaxy", "galaxy", "dust", "galaxy",
+                          "galaxy", "medium", "galaxy", "galaxy"],
+        "n_articles": _pa.array([20, 15, 1, 3, 30, 25, 30, 30],
+                                type=_pa.int32()),
+    }), os.path.join(sp_run, "galaxy_positions.parquet"))
+    with open(os.path.join(sp_run, "layout_meta.json"), "w",
+              encoding="utf-8") as f:
+        json.dump({"generated_at": "test", "pack": 0.6, "r_spacing": 1.5,
+                   "seed": 42, "macro_w_power": 1.0,
+                   "mode": {"canonical": True},
+                   "quality": {"galaxy_spill_count": 1,
+                               "galaxy_spill_frac": 0.16667,
+                               "galaxy_spill_ids": [0],
+                               "galaxy_flat_mean": 1.0,
+                               "galaxy_flat_p90": 1.0}}, f)
+    # minimal catalog: NO name / rep_titles / display_class columns at all
+    pq.write_table(_pa.table({
+        "galaxy_id": _pa.array(np.arange(8), type=_pa.int32()),
+        "n_articles": _pa.array([20, 15, 1, 3, 30, 25, 30, 30],
+                                type=_pa.int32()),
+    }), os.path.join(tmpb, "final", "galaxies.parquet"))
+    # intra pairs: 0-1 (macro0, both linked); 4-6 (macro1); 1-5 is cross-macro
+    pq.write_table(_pa.table({
+        "a": _pa.array([0, 4, 1], type=_pa.int64()),
+        "b": _pa.array([1, 6, 5], type=_pa.int64()),
+        "w": [3.0, 2.0, 1.0],
+    }), os.path.join(tmpb, "final", "galaxy_pairs_topK.parquet"))
+
+    res_sp = al.audit(Dirs(tmpb), "r_spill")
+    sp = res_sp["spill"]
+    assert [r["gid"] for r in sp] == [0], sp          # dust/R=0 excluded
+    assert abs(sp[0]["ratio"] - 1.114) < 1e-9, sp     # (d3+r)/Rm
+    assert abs(sp[0]["excess"] - 5.7) < 1e-9, sp      # hand-computed excess
+    assert abs(sp[0]["r_over_Rm"] - 0.1) < 1e-9, sp
+    assert sp[0]["name"] == "", sp                    # missing name -> ""
+    rows_m = {r["macro_id"]: r for r in res_sp["macros"]}
+    assert 2 not in rows_m, rows_m                    # dust macro has no row
+    assert rows_m[1]["flat"] > 0.95, rows_m[1]        # coplanar cloud ~ 1.0
+    assert abs(rows_m[1]["bary_frac"] - 0.5) < 1e-12, rows_m[1]
+    assert rows_m[1]["n_medium"] == 1 and rows_m[1]["n_unlinked"] == 1
+    assert rows_m[0]["flat"] is None and rows_m[0]["bary_frac"] == 0.0
+    assert res_sp["corr"] is None and res_sp["summary"]["corr_n"] == 1
+    assert not [w for w in res_sp["warnings"] if "WARN" in w], \
+        res_sp["warnings"]
+
+    # CLI: report renders (exit 0); a missing run fails fast with the
+    # regeneration command in the message (exit 2)
+    r_cli = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "audit_layout.py"),
+         "--base", tmpb, "--run", "r_spill"], capture_output=True, text=True)
+    assert r_cli.returncode == 0 and "spill 一覧" in r_cli.stdout, \
+        r_cli.stdout + r_cli.stderr
+    r_miss = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "audit_layout.py"),
+         "--base", tmpb, "--run", "r_nosuch"], capture_output=True, text=True)
+    assert r_miss.returncode == 2 and "layout_global.py" in r_miss.stdout, \
+        r_miss.stdout + r_miss.stderr
+
+    # cross-check WARN path: wrong meta numbers must surface, never silent
+    mpath = os.path.join(sp_run, "layout_meta.json")
+    mm = json.load(open(mpath, encoding="utf-8"))
+    mm["quality"]["galaxy_spill_count"] = 3
+    mm["quality"]["galaxy_spill_ids"] = [0, 99]
+    with open(mpath, "w", encoding="utf-8") as f:
+        json.dump(mm, f)
+    res_w = al.audit(Dirs(tmpb), "r_spill")
+    assert any("spill 件数の不一致" in w for w in res_w["warnings"]), \
+        res_w["warnings"]
+    assert any("galaxy_spill_ids" in w for w in res_w["warnings"]), \
+        res_w["warnings"]
+
+    # ---- cp932 console regression (Windows): subprocess stdio is a PIPE and
+    #      Python then uses the ANSI codepage (cp932), which cannot encode
+    #      chars like ≈ / ≥ / — (UnicodeEncodeError, user-local failure).
+    #      Force cp932 on ANY platform and verify every printed path encodes.
+    import contextlib
+    import io as _io
+    env932 = {k: v for k, v in os.environ.items() if k != "PYTHONUTF8"}
+    env932["PYTHONIOENCODING"] = "cp932"
+    r_932 = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "audit_layout.py"),
+         "--base", tmpb, "--run", "r_spill"], capture_output=True, env=env932)
+    err932 = r_932.stderr.decode("cp932", "replace")
+    assert r_932.returncode == 0, err932[-1500:]
+    assert "UnicodeEncodeError" not in err932, err932[-1500:]
+    out932 = r_932.stdout.decode("cp932")
+    assert "spill 一覧" in out932 and "WARN" in out932, out932[:400]
+    assert "?" not in out932, "encoding guard fired: non-encodable char left"
+    # print_report paths: WARN lines, both corr verdicts, corr=None, flat=None
+    for txt_res in (res_sp, res_w,
+                    {**res_sp, "corr": 0.7,
+                     "summary": {**res_sp["summary"], "corr_n": 5}},
+                    {**res_sp, "corr": -0.2,
+                     "summary": {**res_sp["summary"], "corr_n": 5}}):
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            al.print_report(txt_res)
+        buf.getvalue().encode("cp932")             # must not raise
+    # fail-fast message and optional-catalog warnings are printed text too
+    try:
+        al.load_run(Dirs(tmpb), "r_nosuch")
+        raise AssertionError("missing run must raise RunMissing")
+    except al.RunMissing as e_miss:
+        str(e_miss).encode("cp932")
+    for w_cat in al.load_catalog(Dirs(os.path.join(tmpb, "nope")))["warnings"]:
+        w_cat.encode("cp932")
+
+    # ---- v1.6 containment regression (unconditional clamp): a macro with a
+    #      SINGLE regular, pairless galaxy used to skip the clamp entirely and
+    #      its fibonacci slot pushed the galaxy outside the macro sphere —
+    #      (d3+r)/Rm = 1.114 measured with the pre-v1.6 code on this exact
+    #      fixture shape (single n=20 galaxy + 5x200k-article macro). With the
+    #      clamp unconditional the galaxy is projected exactly onto the
+    #      boundary (ratio 1.000), spill vanishes by construction, and
+    #      audit_layout must agree end-to-end.
+    fxb = os.path.join(BASE, "spill_fixture")
+    fx_final = os.path.join(fxb, "final")
+    os.makedirs(fx_final, exist_ok=True)
+    pq.write_table(_pa.table({
+        "galaxy_id": _pa.array(np.arange(6), type=_pa.int32()),
+        "macro_id": _pa.array([0, 1, 1, 1, 1, 1], type=_pa.int32()),
+        "n_articles": _pa.array([20] + [200000] * 5, type=_pa.int32()),
+        "is_dust": [False] * 6,
+        "display_class": ["galaxy"] * 6,
+    }), os.path.join(fx_final, "galaxies.parquet"))
+    pq.write_table(_pa.table({
+        "macro_id": _pa.array([0, 1], type=_pa.int32()),
+        "n_articles": _pa.array([20, 1000000], type=_pa.int32()),
+        "n_galaxies": _pa.array([1, 5], type=_pa.int32()),
+        "is_dust": [False, False],
+    }), os.path.join(fx_final, "macros.parquet"))
+    pq.write_table(_pa.table({          # gid0: NO pairs at all (pairless)
+        "a": _pa.array([1, 2, 3, 4], type=_pa.int64()),
+        "b": _pa.array([2, 3, 4, 5], type=_pa.int64()),
+        "w": [4.0, 3.0, 2.0, 1.0],
+    }), os.path.join(fx_final, "galaxy_pairs_topK.parquet"))
+    pq.write_table(_pa.table({
+        "macro_a": _pa.array([0], type=_pa.int64()),
+        "macro_b": _pa.array([1], type=_pa.int64()),
+        "w": [10.0],
+    }), os.path.join(fx_final, "macro_pairs.parquet"))
+    r_fx = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "layout_global.py"),
+         "--base", fxb, "--run", "r_fx"], capture_output=True, text=True)
+    assert r_fx.returncode == 0, r_fx.stdout[-2000:] + r_fx.stderr[-2000:]
+    lm_fx = json.load(open(os.path.join(fxb, "layout", "r_fx",
+                                        "layout_meta.json"), encoding="utf-8"))
+    assert lm_fx["quality"]["galaxy_spill_count"] == 0, lm_fx["quality"]
+    assert lm_fx["quality"]["galaxy_spill_ids"] == [], lm_fx["quality"]
+    gpx = pq.read_table(os.path.join(
+        fxb, "layout", "r_fx", "galaxy_positions.parquet")).to_pydict()
+    mpx = pq.read_table(os.path.join(
+        fxb, "layout", "r_fx", "macro_positions.parquet")).to_pydict()
+    c0 = _np.array([gpx["x"][0], gpx["y"][0], gpx["z"][0]])
+    mc0 = _np.array([mpx["x"][0], mpx["y"][0], mpx["z"][0]])
+    R0, r0 = float(mpx["radius"][0]), float(gpx["radius"][0])
+    d0 = float(_np.linalg.norm(c0 - mc0))
+    assert r0 <= 0.9 * R0 + 1e-9, (r0, R0)            # volume cap active
+    assert d0 + r0 <= R0 + 1e-9, (d0, r0, R0)         # containment (was 1.114)
+    assert d0 + r0 >= R0 - 1e-9, (d0, r0, R0)         # clamped ONTO the limit
+    res_fx = al.audit(Dirs(fxb), "r_fx")
+    assert res_fx["summary"]["n_spill"] == 0 and res_fx["spill"] == []
+    assert not [w for w in res_fx["warnings"] if "WARN" in w], \
+        res_fx["warnings"]
+
+    # ---- flatness domain revision: quality flat stats cover macros with
+    #      FLAT_MIN_MEMBERS (8)+ members only (small-n eigenvalue bias: an
+    #      ISOTROPIC cloud measures ~0.96 at n=4), and audit_layout judges the
+    #      small ones against per-n isotropic nulls (* = real pancake)
+    fxd = os.path.join(BASE, "flat_fixture")
+    fxdf = os.path.join(fxd, "final")
+    os.makedirs(fxdf, exist_ok=True)
+    N0 = 9
+    pq.write_table(_pa.table({
+        "galaxy_id": _pa.array(np.arange(N0 + 2), type=_pa.int32()),
+        "macro_id": _pa.array([0] * N0 + [1, 1], type=_pa.int32()),
+        "n_articles": _pa.array([100] * N0 + [50, 50], type=_pa.int32()),
+        "is_dust": [False] * (N0 + 2),
+        "display_class": ["galaxy"] * (N0 + 2),
+    }), os.path.join(fxdf, "galaxies.parquet"))
+    pq.write_table(_pa.table({
+        "macro_id": _pa.array([0, 1], type=_pa.int32()),
+        "n_articles": _pa.array([900, 100], type=_pa.int32()),
+        "n_galaxies": _pa.array([9, 2], type=_pa.int32()),
+        "is_dust": [False, False],
+    }), os.path.join(fxdf, "macros.parquet"))
+    pq.write_table(_pa.table({          # chain inside macro0, single pair in 1
+        "a": _pa.array(list(range(N0 - 1)) + [N0], type=_pa.int64()),
+        "b": _pa.array(list(range(1, N0)) + [N0 + 1], type=_pa.int64()),
+        "w": [1.0] * N0,
+    }), os.path.join(fxdf, "galaxy_pairs_topK.parquet"))
+    pq.write_table(_pa.table({
+        "macro_a": _pa.array([0], type=_pa.int64()),
+        "macro_b": _pa.array([1], type=_pa.int64()),
+        "w": [5.0],
+    }), os.path.join(fxdf, "macro_pairs.parquet"))
+    r_fd = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "layout_global.py"),
+         "--base", fxd, "--run", "r_dom"], capture_output=True, text=True)
+    assert r_fd.returncode == 0, r_fd.stdout[-2000:] + r_fd.stderr[-2000:]
+    lm_fd = json.load(open(os.path.join(fxd, "layout", "r_dom",
+                                        "layout_meta.json"), encoding="utf-8"))
+    # only the 9-member macro is in the flat domain (the 2-member one is not)
+    assert lm_fd["quality"]["galaxy_flat_domain_min"] == 8
+    assert lm_fd["quality"]["galaxy_flat_n_macros"] == 1, lm_fd["quality"]
+    assert lm_fd["quality"]["galaxy_flat_mean"] is not None
+    res_fd = al.audit(Dirs(fxd), "r_dom")
+    assert res_fd["summary"]["n_flat_macros"] == 1
+    assert abs(res_fd["summary"]["flat_mean"]
+               - lm_fd["quality"]["galaxy_flat_mean"]) < 1e-4, res_fd["summary"]
+    assert res_fd["summary"]["flat_domain_min"] == 8
+    assert res_fd["summary"]["n_flat_macros_wide"] == 1   # macro1(2成員)は両ドメイン外
+    rows_fd = {r["macro_id"]: r for r in res_fd["macros"]}
+    r0 = rows_fd[0]
+    assert r0["null_p90"] is not None and 0.0 < r0["null_p90"] < 1.0
+    assert r0["true_disk"] == (r0["flat"] > r0["null_p90"])
+    assert rows_fd[1]["flat"] is None and rows_fd[1]["null_p90"] is None
+    # the null baseline itself: isotropic clouds must measure high at small n
+    # (the bias this revision works around) and lower at large n
+    assert al._null_flat(4)[0] > 0.9 > al._null_flat(40)[0]
+
+    # ---- v1.5 helper unit tests (flatness / adjacency / medium_local / fib slots)
+    spec_lg = importlib.util.spec_from_file_location(
+        "layout_global_mod", os.path.join(ROOT, "scripts", "layout_global.py"))
+    lg = importlib.util.module_from_spec(spec_lg)
+    spec_lg.loader.exec_module(lg)
+
+    rng_t = _np.random.default_rng(7)
+    planar = _np.stack([rng_t.normal(size=200), rng_t.normal(size=200),
+                        _np.zeros(200)], axis=1)
+    f_pl = lg.flatness(planar)
+    f_sp = lg.flatness(rng_t.normal(size=(200, 3)))
+    assert f_pl > 0.95, f_pl                                   # pancake ~ 1
+    assert f_sp < f_pl - 0.1, (f_sp, f_pl)                     # isotropic < pancake
+    assert lg.flatness(_np.zeros((2, 3))) == 0.0               # degenerate
+
+    # chain graph on a line, weights decreasing with distance -> perfect recall
+    centers_t = _np.array([[0.0, 0, 0], [10, 0, 0], [25, 0, 0], [45, 0, 0]])
+    adjm = lg.macro_adjacency(centers_t, [(0, 1), (1, 2), (2, 3)],
+                              [3.0, 2.0, 1.0], k=3)
+    assert adjm["recall"] == 1.0, adjm
+    assert adjm["spearman"] is not None and adjm["spearman"] < -0.9, adjm
+    tiny = lg.macro_adjacency(_np.zeros((2, 3)), [(0, 1)], [1.0])
+    assert tiny["recall"] is None and tiny["spearman"] is None
+
+    # medium_local: intra-macro centroid / cross-macro boundary point / fallback
+    mcen = _np.array([[0.0, 0, 0], [200, 0, 0]])
+    mof = _np.array([0, 0, 0, 1])          # gid0 = medium, 1/2 regular, 3 other macro
+    midx_t = {0: 0, 1: 1}
+    reg_local = {1: _np.array([-10.0, 0, 0]), 2: _np.array([10.0, 0, 0])}
+    p_in = lg.medium_local(reg_local, [(1, 1.0), (2, 1.0)], mcen, mof,
+                           midx_t, 0, 50.0, 1.0, 42)
+    assert _np.allclose(p_in, [0, 0, 0], atol=1e-9), p_in
+    # v1.6 cone spread: a cross-macro contribution lands INSIDE a deterministic
+    # cone around the neighbour direction (was: one exact rim point at 0.85 that
+    # every galaxy sharing this neighbour collapsed onto -> flat cap)
+    rim_t = 50.0 - 1.0
+    p_cross = lg.medium_local(reg_local, [(3, 1.0)], mcen, mof, midx_t,
+                              0, 50.0, 1.0, 42)
+    assert p_cross[0] > 0, p_cross                        # faces the neighbour
+    ang_c = _np.arccos(_np.clip(p_cross[0] / _np.linalg.norm(p_cross), -1, 1))
+    assert ang_c <= lg._CONE_MAX + 1e-12, (ang_c, lg._CONE_MAX)
+    dep_c = _np.linalg.norm(p_cross) / rim_t
+    assert 0.35 - 1e-12 <= dep_c <= 0.95 + 1e-12, dep_c   # depth keeps containment
+    assert _np.array_equal(p_cross, lg.medium_local(      # deterministic
+        reg_local, [(3, 1.0)], mcen, mof, midx_t, 0, 50.0, 1.0, 42))
+    # 12 unlinked galaxies sharing ONE dominant neighbour macro: distinct
+    # positions (old impl: all identical -> min dist 0), off-plane cloud
+    # (old impl after relax: thin cap), inside the cone, inside the sphere
+    pts12 = _np.stack([lg.medium_local(reg_local, [(3, 1.0)], mcen, mof,
+                                       midx_t, 0, 50.0, 1.0, 42 + k)
+                       for k in range(12)])
+    dd12 = _np.linalg.norm(pts12[:, None] - pts12[None, :], axis=2)
+    iu12 = _np.triu_indices(12, 1)
+    assert dd12[iu12].min() > 1.0, dd12[iu12].min()       # measured 10.34
+    assert lg.flatness(pts12) < 0.9, lg.flatness(pts12)   # measured 0.8045
+    ang12 = _np.arccos(_np.clip(
+        pts12[:, 0] / _np.linalg.norm(pts12, axis=1), -1, 1))
+    assert ang12.max() <= lg._CONE_MAX + 1e-12, ang12.max()
+    dep12 = _np.linalg.norm(pts12, axis=1) / rim_t
+    assert (dep12 >= 0.35 - 1e-12).all() and (dep12 <= 0.95 + 1e-12).all()
+    assert (pts12[:, 0] > 0).all()
+    p_fb = lg.medium_local(reg_local, [], mcen, mof, midx_t, 0, 50.0, 1.0, 42)
+    assert 0 < _np.linalg.norm(p_fb) <= (50.0 - 1.0) * 0.6 * 1.2, p_fb
+    p_fb2 = lg.medium_local(reg_local, [], mcen, mof, midx_t, 0, 50.0, 1.0, 42,
+                            fallback=_np.array([1.0, 2.0, 3.0]))
+    assert _np.allclose(p_fb2, [1.0, 2.0, 3.0]), p_fb2
+
+    # _fib_ball_slots: volume-uniform BALL (not a plane), deterministic, bounded
+    S = lg._fib_ball_slots(60, 10.0, 42)
+    assert S.shape == (60, 3)
+    assert (_np.linalg.norm(S, axis=1) <= 10.0 + 1e-9).all()
+    assert lg.flatness(S) < 0.9, lg.flatness(S)
+    assert _np.allclose(S, lg._fib_ball_slots(60, 10.0, 42))
+    assert lg._fib_ball_slots(0, 10.0).shape == (0, 3)
+
+    # ---- B1 sector anchors: dominant neighbour, top-2 blend, confidence
+    spec_ll = importlib.util.spec_from_file_location(
+        "layout_local_mod", os.path.join(ROOT, "scripts", "layout_local.py"))
+    ll = importlib.util.module_from_spec(spec_ll)
+    spec_ll.loader.exec_module(ll)
+    prep_t = {"cu": _np.array([0, 0, 1, 1], _np.int32),
+              "cg": _np.array([1, 2, 1, 2], _np.int32),
+              "cw": _np.array([3, 1, 2, 2], _np.int32),
+              "ext": _np.array([4, 4], _np.int32)}
+    cen_t = _np.array([[0.0, 0, 0], [10.0, 0, 0], [0.0, 10.0, 0]])
+    dv, cf = ll.build_anchor_dirs(prep_t, _np.array([0, 0, 0]), cen_t, 2,
+                                  ratio=0.5)
+    d1 = _np.array([1.0, 0, 0]); d2 = _np.array([0.0, 1.0, 0])
+    assert _np.allclose(dv[0], d1, atol=1e-12), dv[0]     # 1 < 0.5*3: no blend
+    assert abs(cf[0] - 0.75) < 1e-12, cf[0]
+    exp1 = (2 * d1 + 2 * d2); exp1 = exp1 / _np.linalg.norm(exp1)
+    assert _np.allclose(dv[1], exp1, atol=1e-12), dv[1]   # 2 >= 0.5*2: blend
+    assert abs(cf[1] - 1.0) < 1e-12, cf[1]
+    dv0, cf0 = ll.build_anchor_dirs(
+        {"cu": _np.zeros(0, _np.int32), "cg": _np.zeros(0, _np.int32),
+         "cw": _np.zeros(0, _np.int32), "ext": _np.zeros(2, _np.int32)},
+        _np.array([0, 0]), cen_t, 2)
+    assert not dv0.any() and not cf0.any()
+
+    # ---- B2 rank quantile
+    q_t = ll._rank_quantile(_np.array([10.0, 0.0, 5.0]))
+    assert _np.allclose(q_t, [1.0, 0.0, 0.5]), q_t
+    assert ll._rank_quantile(_np.array([7.0])).tolist() == [0.0]
+
+    # ---- B2-a robust norm: recentred, outlier-clamped, body fills the ball
+    #      (star 196 + 4 isolated outliers = the real-galaxy situation: a few
+    #      weakly-linked articles must not set the scale for the whole cloud)
+    star = [(0, i) for i in range(1, 196)]
+    c_p = ll._fr_unit(200, star, 3, 5, fr_mode="flat", fr_norm="p98")
+    c_m = ll._fr_unit(200, star, 3, 5, fr_mode="flat", fr_norm="max")
+    rp = _np.linalg.norm(c_p, axis=1)
+    rm = _np.linalg.norm(c_m, axis=1)
+    assert rp.max() <= 1.0 + 1e-9, rp.max()
+    assert _np.linalg.norm(c_p.mean(axis=0)) < 0.2, c_p.mean(axis=0)
+    assert _np.median(rp) > _np.median(rm) * 1.5, (_np.median(rp), _np.median(rm))
+
+    # relax_disks: exactly-coincident bodies must separate (the zero-vector
+    # degeneracy that stacked unlinked galaxies onto one point, 2026-09-29)
+    stk = lg.relax_disks(_np.zeros((12, 3)), _np.ones(12) * 5.0, iters=120)
+    dd = _np.linalg.norm(stk[:, None, :] - stk[None, :, :], axis=2)
+    ii_t, jj_t = _np.triu_indices(12, 1)
+    assert (dd[ii_t, jj_t] >= 10.2 * 0.99).all(), dd[ii_t, jj_t].min()
+
+    # fr_layout isolated nodes: 3D arm must fill a BALL (pancake regression
+    # guard, 2026-09-29); the dim=2 experimental arm keeps the planar spiral
+    edges_c = [(i, i + 1) for i in range(9)]              # chain over nodes 0..9
+    C3 = lg.fr_layout(40, edges_c, None, 3, 42)
+    iso3 = C3[10:]
+    assert len(iso3) == 30
+    assert lg.flatness(iso3) < 0.9, lg.flatness(iso3)      # NOT a disk
+    assert (_np.linalg.norm(C3, axis=1) <= 1.0 + 1e-6).all()
+    C2 = lg.fr_layout(40, edges_c, None, 2, 42)
+    assert C2.shape == (40, 2)
+    n2 = _np.linalg.norm(C2[10:], axis=1)
+    assert (n2 > 1e-6).all() and (n2 <= 1.0 + 1e-6).all()   # spiral, not origin
 
     # ---- local (intra-galaxy) article layout, batch range + merge
     run_script("layout_local.py", "--galaxies", "0-11", "--galaxy-tag", "res1_s",
@@ -200,10 +615,79 @@ def main():
     d = _np.linalg.norm(P - C3[gid], axis=1)
     assert (d <= _np.maximum(R3[gid] * 1.25, 1e-6)).all(), "article outside galaxy ball"
 
+    # ---- B0 prep artifacts: existence + brute-force equality of the grouped
+    #      cross pairs and ext_deg (the foundation must not lose/duplicate edges)
+    prep_dir = os.path.join(BASE, "graph", "local_prep", "res1_s")
+    for f in ("internal_offs.npy", "internal_buf.npy", "cross_u.npy",
+              "cross_g.npy", "cross_w.npy", "ext_deg.npy", "prep_meta.json"):
+        assert os.path.exists(os.path.join(prep_dir, f)), f
+    cu = _np.load(os.path.join(prep_dir, "cross_u.npy"))
+    cg = _np.load(os.path.join(prep_dir, "cross_g.npy"))
+    cw = _np.load(os.path.join(prep_dir, "cross_w.npy"))
+    ext = _np.load(os.path.join(prep_dir, "ext_deg.npy"))
+    memb_s = _np.load(os.path.join(BASE, "community", "full", "membership_res1_s.npy"))
+    Eu = _np.fromfile(os.path.join(BASE, "graph", "edges_undirected_unique.bin"),
+                      dtype=_np.int32).reshape(-1, 2)
+    brute = {}
+    for u, v in Eu.tolist():
+        gu, gv = int(memb_s[u]), int(memb_s[v])
+        if gu != gv:
+            brute[(u, gv)] = brute.get((u, gv), 0) + 1
+            brute[(v, gu)] = brute.get((v, gu), 0) + 1
+    got = {(int(a), int(b)): int(w) for a, b, w in zip(cu, cg, cw)}
+    assert got == brute, f"cross pair grouping mismatch: {len(got)} vs {len(brute)}"
+    ext_brute = _np.zeros(len(memb_s), _np.int64)
+    for (u, gv), w in brute.items():
+        ext_brute[u] += w
+    assert _np.array_equal(ext, ext_brute), "ext_deg mismatch"
+    intd = _np.load(os.path.join(prep_dir, "int_deg.npy"))
+    int_brute = _np.zeros(len(memb_s), _np.int64)
+    for u, v in Eu.tolist():
+        if memb_s[u] == memb_s[v]:
+            int_brute[u] += 1
+            int_brute[v] += 1
+    assert _np.array_equal(intd, int_brute), "int_deg mismatch"
+    pmeta_s = json.load(open(os.path.join(prep_dir, "prep_meta.json"),
+                             encoding="utf-8"))
+    assert pmeta_s["schema"] == 2, pmeta_s
+    # internal buckets: per-galaxy edge SET equals brute internal edges
+    offs = _np.load(os.path.join(prep_dir, "internal_offs.npy"))
+    buf = _np.load(os.path.join(prep_dir, "internal_buf.npy"))
+    for g in (0, 1):
+        le = buf[offs[g]:offs[g + 1]]
+        members_g = _np.flatnonzero(memb_s == g)
+        pos_of = {int(m): i for i, m in enumerate(members_g)}
+        got_e = sorted(tuple(sorted((pos_of[int(x)], pos_of[int(y)])))
+                       for x, y in le.tolist())
+        exp_e = sorted(tuple(sorted((pos_of[u], pos_of[v])))
+                       for u, v in Eu.tolist()
+                       if memb_s[u] == g and memb_s[v] == g)
+        assert got_e == exp_e, f"internal bucket mismatch g={g}"
+
+    # ---- B0 anchor equivalence: grouped+bincount == legacy per-edge add.at
+    spec_ll = importlib.util.spec_from_file_location(
+        "layout_local_mod", os.path.join(ROOT, "scripts", "layout_local.py"))
+    ll = importlib.util.module_from_spec(spec_ll)
+    spec_ll.loader.exec_module(ll)
+    pp = ll._prep_paths(Dirs(BASE), "res1_s")
+    prep = ll.load_prep(pp)
+    anc_new = ll.build_anchors(prep, memb_s, C3.astype(_np.float64), len(memb_s))
+    anc_old = _np.zeros((len(memb_s), 3))
+    for u, v in Eu.tolist():
+        gu, gv = int(memb_s[u]), int(memb_s[v])
+        if gu == gv:
+            continue
+        dd = C3[gv] - C3[gu]
+        dd = dd / max(_np.linalg.norm(dd), 1e-9)
+        anc_old[u] += dd
+        anc_old[v] -= dd
+    assert _np.allclose(anc_new, anc_old, atol=1e-9), \
+        f"anchor drift: {_np.abs(anc_new - anc_old).max()}"
+
     # ---- recompose: new global params -> article positions without re-run
     # NOTE: z_squash has no effect on tiny synthetic graphs (igraph FR init is
     # planar for n<=~6), so we vary --pack to force a radius/scale change.
-    run_script("layout_global.py", "--dim", "2", "--pack", "0.3",
+    run_script("layout_global.py", "--pack", "0.3",
                "--run", "r_c2", "--galaxy-tag", "res1_s")
     run_script("recompose_articles.py", "--from-run", "r_main", "--to-run", "r_c2")
     p_old = pq.read_table(os.path.join(lay, "article_positions.parquet")).to_pydict()
@@ -217,6 +701,133 @@ def main():
     # ---- parallel launcher: all-done branch -> merge only
     run_script("run_local_parallel.py", "--jobs", "2", "--galaxy-tag", "res1_s",
                "--run", "r_main")
+
+    # ---- B0 invariance: an LPT-split 3-job parallel run must reproduce the
+    #      sequential range-split article positions EXACTLY (coordinates are
+    #      job-assignment independent by design)
+    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_par")
+    run_script("run_local_parallel.py", "--jobs", "3", "--galaxy-tag", "res1_s",
+               "--run", "r_par")
+    p_par = pq.read_table(os.path.join(BASE, "layout", "r_par",
+                                       "article_positions.parquet")).to_pydict()
+    assert _np.array_equal(p_par["x"], apt["x"]) and \
+        _np.array_equal(p_par["y"], apt["y"]) and \
+        _np.array_equal(p_par["z"], apt["z"]), \
+        "parallel LPT split changed coordinates"
+    pmeta = json.load(open(os.path.join(BASE, "layout", "r_par",
+                                        "parallel_meta.json"), encoding="utf-8"))
+    assert pmeta["lpt"] is True and pmeta["failures"] == 0, pmeta
+    # B0 telemetry: per-galaxy timings must survive parallel mode (job metas ->
+    # aggregated by the launcher) and progress/log side files must exist
+    assert pmeta["per_galaxy_secs"].get("n", 0) > 0, pmeta
+    pjobs = os.path.join(BASE, "layout", "r_par", "parallel_jobs")
+    assert os.path.exists(os.path.join(pjobs, "job_00.meta.json")), os.listdir(pjobs)
+    assert os.path.exists(os.path.join(pjobs, "job_00.progress")), os.listdir(pjobs)
+    assert os.path.exists(os.path.join(pjobs, "job_00.log")), os.listdir(pjobs)
+    lmeta = json.load(open(os.path.join(BASE, "layout", "r_par",
+                                        "layout_local_meta.json"), encoding="utf-8"))
+    assert lmeta["mode"] == "merge-only" and "parallel" in lmeta, lmeta
+    assert lmeta["parallel"]["per_galaxy_secs"].get("n", 0) > 0, lmeta
+
+    # ---- B0 fail-fast: a run without galaxy_positions must exit at once with
+    #      an actionable message, not spawn jobs that crash (2026-09-30 incident)
+    for scr, extra in (("layout_local.py", []),
+                       ("run_local_parallel.py", ["--jobs", "2"])):
+        r_nf = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", scr),
+                               "--base", BASE, "--galaxy-tag", "res1_s",
+                               "--run", "r_noglobal", *extra],
+                              capture_output=True, text=True)
+        assert r_nf.returncode != 0, f"{scr} should fail on a run without globals"
+        assert "layout_global.py" in (r_nf.stdout + r_nf.stderr), r_nf.stderr[-500:]
+
+    # ---- B3 multilevel FR: determinism / validity / quality metrics / gating
+    import igraph as _ig
+    g1200 = _ig.Graph.Barabasi(1200, m=15, directed=False)
+    e1200 = [e.tuple for e in g1200.es]
+    c_ml1 = ll._fr_unit(1200, e1200, 3, 7, fr_mode="ml", ml_threshold=300)
+    c_ml2 = ll._fr_unit(1200, e1200, 3, 7, fr_mode="ml", ml_threshold=300)
+    c_fl = ll._fr_unit(1200, e1200, 3, 7, fr_mode="flat")
+    assert _np.array_equal(c_ml1, c_ml2), "multilevel FR not deterministic"
+    for c in (c_ml1, c_fl):
+        assert _np.isfinite(c).all()
+        assert abs(_np.linalg.norm(c, axis=1).max() - 1.0) < 1e-9
+    q_ml = ll.galaxy_layout_quality(c_ml1, e1200)
+    q_fl = ll.galaxy_layout_quality(c_fl, e1200)
+    assert q_ml and q_fl
+    assert 0.0 < q_ml["adj_recall"] <= 1.0, q_ml
+    assert 0.0 < q_fl["adj_recall"] <= 1.0, q_fl
+    # chain graph: spatial nearest neighbours must recover graph neighbours
+    chain = [(i, i + 1) for i in range(59)]
+    c_ch = ll._fr_unit(60, chain, 3, 1, fr_mode="flat")
+    q_ch = ll.galaxy_layout_quality(c_ch, chain)
+    assert q_ch and q_ch["adj_recall"] > 0.9, q_ch
+    # gating: below --ml-threshold the default (ml) and flat arms must agree
+    # EXACTLY (legacy path untouched = small galaxies never move)
+    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_b3a")
+    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_b3b")
+    run_script("layout_local.py", "--galaxies", "0-5", "--galaxy-tag", "res1_s",
+               "--run", "r_b3a")
+    run_script("layout_local.py", "--galaxies", "0-5", "--galaxy-tag", "res1_s",
+               "--run", "r_b3b", "--fr-mode", "flat")
+    for g in range(6):
+        sa = os.path.join(BASE, "layout", "r_b3a", "article_shards", f"gal_{g:06d}.npy")
+        sb = os.path.join(BASE, "layout", "r_b3b", "article_shards", f"gal_{g:06d}.npy")
+        assert _np.array_equal(_np.load(sa), _np.load(sb)), \
+            f"ml/flat differ below threshold (g={g})"
+    lm_b3 = json.load(open(os.path.join(BASE, "layout", "r_b3a",
+                                        "layout_local_meta.json"), encoding="utf-8"))
+    assert lm_b3["params"]["fr_mode"] == "ml"
+    assert lm_b3["params"]["ml_threshold"] == 2000
+    assert set(lm_b3["fr_quality"]) >= {"n_eval", "adj_recall_mean",
+                                        "edge_len_cv_mean", "n_ml_applied"}
+
+    # ---- B1/B2 arms: default (sector+p98) must differ from the legacy arm
+    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_leg")
+    run_script("layout_local.py", "--galaxies", "0-11", "--galaxy-tag", "res1_s",
+               "--run", "r_leg", "--anchor-mode", "sum", "--fr-norm", "max")
+    sh_new = _np.load(os.path.join(lay, "article_shards", "gal_000000.npy"))
+    sh_leg = _np.load(os.path.join(BASE, "layout", "r_leg", "article_shards",
+                                   "gal_000000.npy"))
+    assert not _np.array_equal(sh_new, sh_leg), "B1/B2 arms must differ"
+    lm_def = json.load(open(os.path.join(BASE, "layout", "r_b3a",
+                                         "layout_local_meta.json"),
+                            encoding="utf-8"))
+    assert lm_def["params"]["anchor_mode"] == "sector"
+    assert lm_def["params"]["fr_norm"] == "p98"
+
+    # ---- B3 launcher pass-through: --fr-mode must reach every job and the meta
+    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_b3c")
+    run_script("run_local_parallel.py", "--jobs", "2", "--galaxy-tag", "res1_s",
+               "--run", "r_b3c", "--fr-mode", "flat")
+    pmc = json.load(open(os.path.join(BASE, "layout", "r_b3c",
+                                      "parallel_meta.json"), encoding="utf-8"))
+    assert pmc["fr_mode"] == "flat" and pmc["failures"] == 0, pmc
+    # fr_quality must survive parallel mode (aggregated from job metas; the
+    # fixture galaxies are below the evaluation size band so n_eval == 0)
+    assert set(pmc["fr_quality"]) >= {"n_eval", "adj_recall_mean",
+                                      "edge_len_cv_mean", "radial_p50_mean",
+                                      "n_ml_applied"}, pmc
+    assert pmc["fr_quality"]["n_eval"] == 0
+    assert pmc["anchor_mode"] == "sector" and pmc["fr_norm"] == "p98"
+    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_b3d")
+    run_script("run_local_parallel.py", "--jobs", "2", "--galaxy-tag", "res1_s",
+               "--run", "r_b3d", "--anchor-mode", "sum", "--fr-norm", "max",
+               "--fr-mode", "flat")
+    pmd = json.load(open(os.path.join(BASE, "layout", "r_b3d",
+                                      "parallel_meta.json"), encoding="utf-8"))
+    assert (pmd["anchor_mode"], pmd["fr_norm"], pmd["fr_mode"]) == \
+        ("sum", "max", "flat"), pmd
+
+    # ---- checkpoint repair: after a parallel run + merge, a single-process
+    #      `--galaxies all` must see everything done (2026-09-30 race fix)
+    out_b3c = run_script("layout_local.py", "--galaxies", "all",
+                         "--galaxy-tag", "res1_s", "--run", "r_b3c")
+    assert "done: 0 galaxies this run" in out_b3c, out_b3c[-500:]
+
+    # ---- no-op invocation (run complete) must not rebuild anchors and must
+    #      still serve preview + merge (2026-09-30 lazy-anchor fix)
+    run_script("layout_local.py", "--galaxies", "all", "--galaxy-tag", "res1_s",
+               "--run", "r_par", "--preview-galaxy", "0")
 
     # ---- viewer tiles export
     run_script("export_viewer_tiles.py", "--galaxy-tag", "res1_s", "--run", "r_main")
@@ -232,6 +843,23 @@ def main():
     assert nn > 0 and os.path.getsize(t0f) == 12 + nn * 12 + ne * 8 + nx * 12
     assert os.path.exists(os.path.join(sp, "tiles", "gal_000000.json"))
     assert os.path.exists(os.path.join(sp, "tiles_meta.json"))
+    # tiles_meta totals must equal the per-bin header sums (shadowing
+    # regression: a loop-local cnt_x rebind used to make cross_links report
+    # only the last chunk's one-side count instead of the total)
+    tmeta = json.load(open(os.path.join(sp, "tiles_meta.json"),
+                           encoding="utf-8"))
+    sum_ne = sum_nx = 0
+    for g_t in range(G):
+        bf_t = os.path.join(sp, "tiles", f"gal_{g_t:06d}.bin")
+        if not os.path.exists(bf_t):
+            continue
+        with open(bf_t, "rb") as fh_t:
+            _nn, ne_t, nx_t = struct.unpack("<III", fh_t.read(12))
+        sum_ne += ne_t
+        sum_nx += nx_t
+    assert tmeta["internal_edges"] == sum_ne, (tmeta, sum_ne)
+    assert tmeta["cross_links"] == sum_nx, (tmeta, sum_nx)
+    assert sum_nx > 0, "fixture must exercise cross links for this regression"
 
     # ---- macro label overrides: export must prefer hand-curated labels
     #      (empty labels are ignored; removing the file restores defaults)

@@ -330,11 +330,11 @@ display_class=medium で表示は格下げ済み)、識別子系ハブ銀河(「
 
 **銀河カタログ(`data/final/`、build_galaxy_catalog.py)**: galaxies=**1,971**(dust 436 / named 1,769)、macros=499(実効 **63** + dust)、galaxy_pairs=**408,734** 組(topK 30,000)、macro_pairs=**1,118**。**containment_violations=0**(銀河→マクロの厳密包含ツリー確認)。**macro_pairs 重み合計 29,855,565 が res1 マクロの cross エッジ実測と完全一致** = 集約パイプラインの自己整合 OK。display_class(galaxy/medium/dust)で媒介銀河(§7)を特別描画対象に分類。合成 E2E テスト(tests/test_catalog.py)で包含 0 違反・ペア集約の整合・タイル往復を検証済み。
 
-**グローバルレイアウト(layout_global.py、正準方針 = 完全 3D)**: ①マクロ配置 = 3D 球パッキング(macro_pairs 重み付き FR + 球分離緩和)→ ②マクロ内銀河 3D FR 配置(z はレンズ圧縮)→ ③dust 遠方シェル。計算 **1.1 秒**(1,971 銀河 + 63 マクロ)。地図風ビューはレイアウトではなく**視点側 z 圧縮**(プレビュー HTML のスライダー)で実現する。
+**グローバルレイアウト(layout_global.py、正準方針 = 完全 3D)**: ①マクロ配置 = 3D 球パッキング(macro_pairs 重み付き FR + 球分離緩和)→ ②マクロ内銀河の 3D 配置(連結銀河 = 重み付き FR、孤立・媒介銀河 = リンク先の重み付き重心 + 隣接マクロ方向の円錐内散布、球緩和 + 無条件の包含クランプ)→ ③dust 遠方シェル。計算 **~1 秒**(1,971 銀河 + 63 マクロ)。地図風ビューはレイアウトではなく**視点側 z 圧縮**(プレビュー HTML のスライダー)で実現する。
 
-**正典 run(`wu/paths.py` の `ACTIVE_LAYOUT_RUN` = `20260926_baseline`)の品質**(`layout_meta.json`): macro_native_overlap_frac **0.0** / galaxy_spill_frac **0.0** / macro_proj_overlap(射影重なり)= top_z 0.353 / side_x 0.497 / random_mean 0.347。射影重なりが高いことは「3D 配置を 2D に潰すと必ず重なる」= 3D 正準・視点側圧縮方針の根拠。
+**正典 run(`wu/paths.py` の `ACTIVE_LAYOUT_RUN` = `20261002_v16`)の品質**(`layout_meta.json`): macro_native_overlap_frac **0.0** / galaxy_spill_count **0**(包含クランプの無条件適用 + 体積キャップによる構造保証。はみ出し発生時は `galaxy_spill_ids` に gid が記録される)/ macro_proj_overlap(射影重なり)= top_z 0.359 / side_x 0.473 / random_mean 0.337。射影重なりが高いことは「3D 配置を 2D に潰すと必ず重なる」= 3D 正準・視点側圧縮方針の根拠。spill の文脈・マクロ毎の平坦度(同成員数の等方ベースライン対比付き)は `scripts/audit_layout.py`(読み取り専用)で計測する。
 
-**銀河内記事座標(layout_local.py / run_local_parallel.py)**: 銀河ごとに完全独立なジョブ(フルラン ~63 分、並列 8)。力モデル = igraph FR(3D)の形状 + アンカーバネ(銀河間リンクが多い記事ほどリンク先銀河方向の境界面へ)+ 弾性 prior + ボール内クランプ。§6.3 の「アンカー制約付きレイアウト単位」の実装そのもの。
+**銀河内記事座標(layout_local.py / run_local_parallel.py)**: 銀河ごとに完全独立なジョブ(並列フルラン **~5 分**: タグ共有の事前計算 + 最長ジョブ優先の分割 + 大銀河のマルチレベル FR 初期化。座標はジョブ割当に依存せずビット一致)。力モデル = igraph FR(3D)の形状 + セクタアンカーバネ(記事は優勢隣接銀河の方向へ。2 位隣接のブレンド付き、強さ = 確信度)+ rank 成層(外部次数の銀河内分位で半径目標、内部ハブはコアへ)+ 弾性 prior + ボール内クランプ、FR 正規化はロバスト(重心引き算 + p98 スケール)。§6.3 の「アンカー制約付きレイアウト単位」の実装そのもの。
 
 **出版(export_viewer_tiles.py → `data/spatial/`)**: bootstrap.json(宇宙+銀河ビューの一括 fetch)+ tiles/gal_XXXXXX.bin|.json(ズームした銀河のみ on-demand fetch)。URL 契約は run 名と無縁に固定で、出版元 run は bootstrap.json の `meta.layout_run` に記録される。
 

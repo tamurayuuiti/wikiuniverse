@@ -37,7 +37,7 @@ wikiuniverse/
 │   ├── pipeline.py        # 1 サブセットのエンドツーエンド解析(resolution スイープ→一次選択→レポート)
 │   ├── report.py          # プロット(matplotlib)+ Markdown レポート
 │   └── cli.py             # サブコマンド群(python -m wu.cli …)
-├── scripts/               # フルグラフ系スクリプト 11 本
+├── scripts/               # フルグラフ系スクリプト 12 本
 │   ├── run_full_leiden.py         # dedup/detect/subdivide/metrics/cluster/export/prune
 │   ├── layout_global.py           # ① マクロ+銀河の座標(3D パッキング/FR)
 │   ├── layout_local.py            # ② 銀河内記事座標(アンカーバネ、銀河単位バッチ)
@@ -48,7 +48,8 @@ wikiuniverse/
 │   ├── community_purity.py        # カテゴリ純度(purity v2、tf-idf 命名)
 │   ├── compare_body_vs_pagelinks.py  # 本文次数 vs pagelinks 次数の対比較
 │   ├── audit_tiles.py             # [検査] data/spatial/ のタイル+サイドカー整合(読み取り専用)
-│   └── audit_names.py             # [検査] 命名内訳 + 銀河団ラベルのテンプレ出力(読み取り専用)
+│   ├── audit_names.py             # [検査] 命名内訳 + 銀河団ラベルのテンプレ出力(読み取り専用)
+│   └── audit_layout.py            # [検査] 座標 run の spill 文脈 + マクロ毎の平坦度・重心配置率の相関(読み取り専用)
 ├── tests/                 # 合成データ自己テスト 6 本(スクリプト式・ネットワーク不要。
 │                          #   test_synthetic / test_paths / test_bodylinks / test_catlinks /
 │                          #   test_subdivide / test_catalog。synth_data/ は実行時再生成)
@@ -242,49 +243,117 @@ python scripts/build_galaxy_catalog.py --base data --galaxy-tag res1_sub --macro
 銀河カタログから階層レイアウトを生成する(上位コミュニティ配置 → 下位配置 → 座標合成):
 
 ```bash
-python scripts/layout_global.py --base data --run <RUN> --macro-dim 3 --pack 0.6 --seed 42
+python scripts/layout_global.py --base data --run <RUN> --pack 0.6 --seed 42
 #   <RUN> = data/layout/<run>/ の名前(規約 <YYYYMMDD>_<slug>。省略時は wu/paths.py の
 #   ACTIVE_LAYOUT_RUN)。run の採用手順は LOCAL_SETUP.md §6
-#   --z-squash 既定 0.85(銀河の z レンズ圧縮。正典 run は 0.35 で生成 — 各 run の実値は
-#   その run の layout_meta.json が正史)、--r-spacing 1.5(銀河半径フロア r>=1.5*n^(1/3)、
-#   小銀河の記事詰まり防止)
+#   正準 = 完全 3D(既定のまま): マクロ 3D 球パッキング + 銀河の 3D 球緩和/クランプ。
+#   焼き込みレンズは無い — 地図/hybrid ビューは視聴時の z 圧縮(ビューアのスライダー)で
+#   行う(D17)。実験腕: --macro-dim 2 / --macro-z-squash <1 / --macro-w-power >1
+#   --r-spacing 1.5(銀河半径フロア r>=1.5*n^(1/3)、小銀河の記事詰まり防止)
 #   → data/layout/<run>/galaxy_positions.parquet  (galaxy_id, macro_id, x,y,z, radius, display_class)
 #   → data/layout/<run>/macro_positions.parquet   (マクロの中心と半径)
 #   → data/layout/<run>/layout_meta.json / preview.png / preview_*.html
 ```
 
-アルゴリズム(階層レイアウト v1.3、**正準方針 = 完全 3D**):
-①マクロ配置(`--macro-dim 3` 正準)= 3D 球パッキング(macro_pairs 重み付き FR + 球分離緩和、
-重なり ≤2%)。**hybrid/地図ビューはレイアウトではなく視点パラメータ**: HTML プレビューの
+アルゴリズム(階層レイアウト v1.5、**正準方針 = 完全 3D**):
+①マクロ配置(既定 `--macro-dim 3`)= 3D 球パッキング(macro_pairs 重み付き FR + 球分離緩和、
+重なり ≤2%)。`--macro-w-power τ` は FR 引力の重み温度(w^τ。1.0=中立、>1 で強いリンクの
+近接を強調)。**hybrid/地図ビューはレイアウトではなく視点パラメータ**: プレビュー/ビューアの
 z-compress スライダー(1.0=純 3D ↔ 0.05=ほぼ地図)が視聴時に z を圧縮する(xy 不変なので
-俯瞰は同一、レイアウト焼き直し不要)。`--macro-dim 2` / `--macro-z-squash <1` は実験腕として
-維持(本番規模で再検討する際の比較基準)。
-②マクロ内で銀河を 3D FR 配置、xy で円盤緩和・クランプ、z は `--z-squash` 圧縮レンズ
-→ ③dust は遠方シェル。半径はマクロ R_M ∝ √記事数、銀河 r_g = pack·R_M·√(n_g/n_M)。
-品質は `layout_meta.json` の `quality`: `macro_native_overlap_frac`(配置次元での重なり)、
-`macro_proj_overlap`(top/side/ランダム視点射影の重なり率 = 「地図らしさ」の視点依存性)、
-`galaxy_spill_frac`。比較実行は `--run <name>` で別ディレクトリへ。
-preview.png(4 パネル: xy/xz/yz/深度カラー)+ **preview_macro*.html**(three.js・OrbitControls・
-z-compress スライダー、データ埋め込み)。1,971 銀河 + 63 マクロなら ~1 秒。
+俯瞰は同一、レイアウト焼き直し不要)。
+②マクロ内で銀河を配置: **マクロ内ペアを持つ(連結な)銀河**は重み付き FR(3D)、
+**マクロ内ペアを1本も持たない銀河**(top-K リンクが全てマクロ外 = 外向きの銀河)は
+リンク先の重み付き重心へ配置し(他マクロの隣接 = そのマクロ方向に向けた**決定的な
+円錐内の散布**: 半開角 ≤ 0.75 rad・径深 0.35–0.95·(R_M−r)。銀河ごと・隣接マクロごと
+にシードされ並列/resume でもビット再現する。同一の優勢隣接を共有する銀河が境界の
+単一点に重なって平坦なキャップに潰れるのを防ぐ)、ペア自体が無い場合はフィボナッチ球
+スロットへ。その後、3D 球緩和 + 3D 放射クランプ(|中心|+r ≤ R_M、**全マクロへ無条件
+適用** — 体積キャップ r ≤ 0.9·R_M と合わせて `galaxy_spill_count` = 0 を構造保証する)
+でマクロ球に収める(完全一致点は決定的方向で分離される)。半径はマクロ R_M ∝ √記事数、
+銀河 r_g = max(pack·R_M·√(n_g/n_M), r_spacing·n_g^(1/3))、体積キャップ (Σr³)^(1/3) ≤ 0.9·R_M。
+③**媒介銀河(display_class=medium)も同じ重心規則(円錐内散布を含む)**で配置し
+(「銀河間物質」が橋渡しの相手に面した位置に来る = D16 の特別描画の座標側裏付け)、
+通常銀河からの押し出し緩和で重なりを解く。
+④dust は遠方シェル(フィボナッチ球面)。品質は `layout_meta.json` の `quality`:
+`macro_native_overlap_frac`(配置次元でのマクロ重なり)、`macro_proj_overlap`
+(top/side/ランダム視点射影の重なり率 = 「地図らしさ」の視点依存性)、
+`galaxy_spill_frac`/`galaxy_spill_count`(3D 包含: 銀河球がマクロ球に収まっているか。
+クランプの無条件適用 + 体積キャップにより構造的に常に 0 — 非ゼロは実装バグ)、
+`galaxy_spill_ids`(spill した銀河 gid の上位 20・超過順 = 監査を待たずに毎 run「誰が」見える)、
+`galaxy_overlap_frac`(マクロ内の銀河球の重なり = 緩和品質、体積重み)、
+`galaxy_flat_mean`/`galaxy_flat_p90`(マクロ毎の銀河点群の PCA 異方性: ≈1=円盤状。
+円盤化の客観指標。**成員 8 個以上のマクロのみ**がドメイン — それ以下は等方的な配置でも
+高く測られる固有値比の小nバイアスがあるため(等方 null: n=4 で mean ≈0.96)。小マクロは
+`scripts/audit_layout.py` の同成員数等方ベースライン対比(`*` = 真の円盤候補)で判定する)、`macro_adj_recall_top5`・`macro_adj_spearman`
+(マクロ配置の意味的近接の保持度: リンク強さ上位の隣接が空間的にも近いか /
+重みと空間距離の順位相関、負=強いリンクほど近い)。比較実行は `--run <name>` で
+別ディレクトリへ。preview.png(4 パネル: xy/xz/yz/深度カラー)+ **preview_macro*.html**
+(three.js・OrbitControls・z-compress スライダー、データ埋め込み)。1,971 銀河 + 63 マクロなら ~2 秒。
+spill の文脈と平坦度の要因の監査は `scripts/audit_layout.py`(読み取り専用・再計算なし):
+超過順の spill 一覧(r/Rm・マクロ規模・銀河名などの文脈列付き)、マクロ毎の平坦度 +
+重心配置率(medium + 孤立銀河の成員比)+ **同成員数の等方ベースライン対比**
+(固定シード。flat > null p90 のマクロは「真の円盤候補」として `*` 表示)、
+平坦度と重心配置率の相関(「円盤化は重心配置銀河が
+リンク先方向の境界付近に集中するため」という仮説の定量検証)。`layout_meta.json` の
+数値と突合し、不一致は警告する(平坦度の突合ドメインは meta 記録値に追従、旧 run は旧ドメイン)。
 
 ## 銀河内部ローカルレイアウト(記事座標)
 
-銀河ごとに**完全に独立したジョブ**(境界を跨ぐ依存がないためバッチ分割・並列・resume が可能):
+銀河ごとに**完全に独立したジョブ**(境界を跨ぐ依存がないためバッチ分割・並列・resume が可能)。
+B0 基盤(2026-09-30): **run 非依存の重計算を tag 毎に1回だけ事前計算**して全 run・全ジョブで
+mmap 共有する(`data/graph/local_prep/<tag>/`: 内部エッジのバケット、(記事, 隣接銀河)の
+**グループ済みクロスペアと多重度**、記事毎の外部次数 = 中間生成物・削除自由・`--prep` で再構築)。
+run 依存のアンカー方向だけ実行毎に数秒で再構築(bincount 蓄積 = 旧 add.at と数学的に同一)。
+**座標はジョブ割当・並列度に依存しない**(銀河毎の数式と seed は不変。回帰テストで
+逐次分割と LPT 並列のビット一致を保証)。
 
 ```bash
-python scripts/run_local_parallel.py --base data --jobs 8   # 全銀河(フルラン ~63分)→ 自動マージ
-python scripts/layout_local.py --base data --run <RUN> --galaxies all
+python scripts/run_local_parallel.py --base data --run <RUN>   # 推奨: 全銀河を並列
+#   前提: 同名 run の galaxy_positions.parquet が存在すること(先の layout_global で
+#   生成。無い場合は両スクリプトが再実行コマンドを示して即終了 = fail-fast)。
+#   **新しい run 名を使う際は必ず layout_global を先に実行する**
+#   腕フラグ(--fr-mode flat / --ml-threshold / --ml-niter)は全ジョブへパススルーされる
+#   --jobs 既定 = CPU 数。prep を1回実行してから LPT(コスト ~ n^1.93、02 §O 実測)で
+#   銀河をジョブへビンパッキング(ストラグラ解消)、終了後 --merge-only で走査なしマージ。
+#   ジョブ割当は <run>/parallel_jobs/job_*.gids.txt(キャッシュ)、実測テレメトリは
+#   <run>/parallel_meta.json → layout_local_meta.json の parallel に畳み込み
+#   進捗: 並列実行中は 10 秒毎に集約行([parallel] progress done/total %・elapsed・eta)
+#   を表示。ジョブ毎の stdout は <run>/parallel_jobs/job_*.log、銀河毎の所要時間は
+#   job_*.meta.json から parallel_meta.json の per_galaxy_secs へ集約される
+python scripts/layout_local.py --base data --run <RUN> --galaxies all   # 逐次(単一プロセス)
 # バッチ分割例: --galaxies 0-499 / --galaxies 500-1499 (resume 対応、checkpoint 記録)
+#   --prep = 事前計算のみ / --merge-only = シャードからマージのみ(走査なし)
 #   → data/layout/<run>/article_shards/gal_XXXXXX.npy (銀河毎・マージ後は削除可)
 #   → 全銀河完了時に自動マージ: article_positions.parquet (page_id, galaxy_id, x,y,z)
 #   → layout_local_meta.json (銀河毎所要時間 p50/p95 = バッチ外挿の根拠)
 ```
 
 力モデル: 内部エッジ = igraph FR(3D)の形状 + **アンカーバネ**(銀河間リンクが多い記事ほど、
-リンク先銀河方向のボール境界面へ。方向ベクトル集約なのでペア保存不要)+ 弾性 prior
+リンク先銀河方向のボール境界面へ。グループ済みクロスペアから bincount で集約)+ 弾性 prior
 (FR 形状の保持)+ ボール内クランプ。銀河中心・半径は対象 run(--run、既定は正典 run)の
 galaxy_positions 由来。「銀河 = アンカー制約付きレイアウト単位」(results/SUMMARY.md §9 の
 確定条件)の実装そのもの。
+
+内部 FR は **マルチレベル初期化**(2026-09-30): n ≥ `--ml-threshold`(既定 2000)の銀河は
+Louvain 縮約 → クラスタ図の重み付き FR → 成員座標へ展開+決定的 jitter を **FR の初期座標**
+(`seed`)として `--ml-niter`(既定 100)で refine する。FR コストは n^1.93 × niter に比例する
+(02 §O)ため、良初期座標に反復を費やす方が平坦アニールより速く・局所構造も保たれる
+(サンドボックス実測 n=2,500: **4.7× 高速かつ隣接再現率も向上**)。閾値未満の銀河は
+旧来の flat パスに完全一致(`--fr-mode flat` で全体も再現 = 比較腕)。
+アンカーバネは **セクタアンカー(B1)**: 記事毎にクロスリンクが最も多い**優勢隣接銀河**
+を方向に採用(2位が1位の半重量以上なら2方向をブレンド)、バネの強さは**確信度**
+=blend した隣接への重量シェアに比例(リンクが分散した記事は内部に留まる)。
+旧「全クロスリンクの単位ベクトル総和」は逆向きリンクの相殺問題のため
+`--anchor-mode sum` の再現腕へ退避。半径方向は **rank 成層(B2)**: 外部次数の
+銀河内ランク分位 q_ext に対し target = R*(0.35+0.65*q_ext)(スケールフリー、
+旧 /20 固定飽和の代替)+ 内部次数 q_int>0.9 かつ低外部のハブは tgt_r×0.6 で**コア**へ。
+FR 正規化は **ロバスト(B2-a)**: 重心引き算 + scale=p98 + 外れ値の球面クランプ
+(旧 max-norm は孤立記事1点にスケールを支配されていた = 02 §O-6)。
+品質は run 毎に `fr_quality` へ自動記録(単一プロセス= `layout_local_meta.json`、
+並列= ジョブ別集計を `parallel_meta.json` 経由で畳み込み): `adj_recall_mean`
+(サンプル記事のグラフ近傍が空間近傍に再現される率)/ `edge_len_cv`(バネ長の分散)/
+`radial_p50_mean`(記事距離/R の中央値 = 正規化の充填度、p98 で ~0.6–0.9 期待)/
+`n_ml_applied`(マルチレベル適用銀河数)/ `n_eval`(評価銀河数)。
 
 ## データ出版とビューア
 
@@ -387,6 +456,9 @@ out_ratio・conductance・サイズの分布、コミュニティ間エッジ to
 - 変更内容は**主要な変更・成果を一文で要約**し、細かな実装変更は列挙しない。
 - 関連する変更はまとめ、**「何を」「どのように変更したか」**が分かる程度に具体的にする。
 - 必要に応じてコンポーネント名・関数名・技術用語を使用する。
+- **開発過程由来の符丁(内部のバッチ名・方針番号・事象番号など、リポジトリ単体で
+  読めない語)はコミットコメントに入れない**。変更内容そのものを読み手だけで
+  理解できる語で書く(2026-09-30 ユーザー方針)。
 - 簡潔・客観的な日本語とし、既存のコミット履歴と同程度の粒度・文体を維持する。
 
 ## 既知の注意点

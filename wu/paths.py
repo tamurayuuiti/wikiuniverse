@@ -9,6 +9,9 @@ separated instead of piled into one folder:
       parsed/       page/linktarget/redirect       intermediate (rebuilt by `parse`)
       graph/        edges + degree/stats artifacts intermediate (rebuilt by `edges`)
         subsets/    per-subset node/edge cuts      intermediate (Phase-1 PoC)
+        local_prep/ per-tag prep for layout_local  intermediate (rebuilt by
+          <tag>/      (bucketed internal edges,    `layout_local --prep`; shared
+                       grouped cross pairs, ext_deg) across layout runs, B0)
       community/    Leiden outputs                 result
         full/       full-graph runs: membership_<tag>.npy, pairs, metrics, purity
         <subset>/   Phase-1 per-subset analyze runs
@@ -25,9 +28,13 @@ to `spatial/` and is the default of every layout script.
 
 Artifact classes (used when deciding what may be deleted):
     raw          dump/                             re-downloadable input
-    intermediate parsed/, graph/, subsets/         mechanically rebuildable from upstream
+    intermediate parsed/, graph/, subsets/,        mechanically rebuildable from
+                 local_prep/                       upstream (local_prep is shared
+                                                    by all layout runs: rebuild with
+                                                    `layout_local --prep`)
     product      community/, final/, layout/<run>/*.parquet, spatial/
-    cache        *_checkpoint.json, layout/<run>/article_shards/   freely deletable
+    cache        *_checkpoint.json, layout/<run>/article_shards/,
+                 layout/<run>/parallel_jobs/       freely deletable
 
 community/full tag convention: `res<R>` = one-shot macro partition,
 `res<R>_sub` = two-stage (galaxy) partition, `*_body` = body-link graph variant,
@@ -48,7 +55,7 @@ from pathlib import Path
 
 # The published (canonical) layout run. Updating this one constant switches
 # every layout script and the tile export to a different data/layout/<run>/.
-ACTIVE_LAYOUT_RUN = "20260926_baseline"
+ACTIVE_LAYOUT_RUN = "20261002_v16"
 
 
 @dataclass
@@ -68,6 +75,7 @@ class Dirs:
         self.parsed = self.base / "parsed"
         self.graph = self.base / "graph"
         self.subsets = self.graph / "subsets"
+        self.local_prep = self.graph / "local_prep"
         self.community = self.base / "community"
         self.community_full = self.community / "full"
         self.final = self.base / "final"
@@ -111,6 +119,16 @@ class Dirs:
     def community_run(self, name: str) -> str:
         """Community-detection run directory under community/ (str)."""
         return str(self.community / name)
+
+    def local_prep_dir(self, tag: str) -> Path:
+        """Prep artifact directory for layout_local (B0 foundation), per galaxy tag.
+
+        Holds run-independent heavy work (bucketed internal edges, grouped
+        cross-galaxy pairs, ext_deg) shared by every layout run and every
+        parallel job. Intermediate class: freely deletable, rebuilt by
+        `layout_local --prep`.
+        """
+        return self.local_prep / tag
 
     def layout_run(self, run: str | None = None) -> Path:
         """Return data/layout/<run>, defaulting to ACTIVE_LAYOUT_RUN.

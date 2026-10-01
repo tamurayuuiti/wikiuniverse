@@ -1,20 +1,53 @@
-"""Global hierarchical layout (Phase 3, step 2): macro disks + galaxy disks.
+"""Global hierarchical layout (Phase 3, step 2): macros + galaxies in 3D.
 
-Design (matches D16 policy "銀河を空間的に分離して配置").
-Hierarchical 2.5D: the universe map (macro level) is packed in 2D so that the
-top-down view -- what users see at universe zoom -- has no overlapping macro
-disks. Depth (z) appears only INSIDE macros: galaxies sit in a squashed 3D
-lens (z *= --z-squash), relaxed in xy. Article positions (next phase) will be
-full 3D inside each galaxy ball.
+Design (matches D16 policy "銀河を空間的に分離して配置"; canonical = full 3D, D17).
+Version: v1.6 (2026-10-01; containment clamp unconditional + rim cone spread):
+  - the 3D radial clamp below now applies to EVERY macro. The old
+    `len(P) >= 2` gate skipped single-regular-galaxy macros, where a pairless
+    isolated galaxy on its fibonacci slot could stick out of the macro sphere
+    ((d3+r)/Rm up to 1.114, measured). With the clamp unconditional and the
+    volume cap (r <= 0.9 Rm), d3 + r <= Rm holds by construction:
+    galaxy_spill_count == 0 is now a structural guarantee (nonzero = bug).
+  - cross-macro centroid contributions no longer aim at a SINGLE rim point.
+    Galaxies sharing one dominant neighbour macro all landed on the identical
+    boundary point, which the clamp flattened into a thin cap (a driver of
+    galaxy_flat_p90 ~ 0.95). Each contribution is now spread inside a
+    deterministic cone around the neighbour direction (_cone_spread:
+    half-angle <= 0.75 rad, depth 0.35-0.95 of the rim, seeded per galaxy and
+    per neighbour macro = bit-reproducible, no RNG state). The depth cap 0.95
+    preserves containment. `boundary_frac` is gone (no callers).
+v1.5: canonical is fully three-dimensional with NO baked lens (the old
+--z-squash pancake lens and the pre-v1.4 xy disk regime are removed; map/hybrid
+views remain VIEW-TIME z-compression in the viewer/preview, per D17).
+Galaxies that have no intra-macro pair edge ("unlinked": their top-K links all
+leave the macro) are NOT dumped on a plane: they are pinned at the weighted
+centroid of their link targets (same rule as medium galaxies), or on
+deterministic fibonacci-ball slots when they have no usable pairs at all.
 
-  1. Macro level: weighted FR (dim=2 always) over effective macros using
-     macro_pairs -> centers; radius R_M proportional to sqrt(n_articles).
-  2. Macro-macro disk relaxation + expansion loop until xy overlap <= 2%.
-  3. Galaxy level: weighted FR (dim) over intra-macro galaxy pairs; xy used for
-     disk placement/relaxation/clamping, z squashed for depth.
-     Galaxy radius r_g = pack * R_M * sqrt(n_g / n_M).
-  4. Intra-macro xy disk relaxation + radial clamp inside macro disk.
+  1. Macro level: weighted FR (--macro-dim, default 3 = canonical) over
+     effective macros using macro_pairs -> centers; radius R_M ∝ sqrt(n_M).
+     --macro-w-power applies a weight temperature w^tau to the FR attraction
+     (tau=1 neutral; tau>1 sharpens semantic adjacency).
+  2. Macro-macro relaxation + expansion loop until native overlap <= 2%.
+  3. Galaxy level: weighted FR (dim 3) over the LINKED intra-macro galaxies;
+     radius r_g = max(pack * R_M * sqrt(n_g/n_M), r_spacing * n_g^(1/3));
+     volume cap (sum r^3)^(1/3) <= 0.9 * R_M; sphere relaxation + 3D radial
+     clamp (|center| + r <= R_M). Unlinked galaxies: bary centroid of link
+     targets (cross-macro links pull toward the macro rim) or fib-ball slots.
+  4. Medium galaxies (display_class=medium, the "intergalactic medium" of D16)
+     use the same bary rule, then a push pass keeps them out of regulars.
   5. Dust galaxies (n=1) get positions on a far shell (cosmic dust ring).
+
+Quality metrics (layout_meta.json "quality"): macro_native_overlap_frac,
+macro_proj_overlap, galaxy_spill_frac/count (3D containment), galaxy_spill_ids
+(the spilling galaxy ids, top 20 by excess, so every run shows WHO without
+waiting for scripts/audit_layout.py), galaxy_overlap_frac
+(sphere overlap inside macros), galaxy_flat_mean/p90 (PCA anisotropy of each
+macro's galaxy cloud; ~1 = pancake; domain = macros with FLAT_MIN_MEMBERS (8)+
+members — smaller clouds measure near 1 even when isotropic (small-n eigenvalue
+bias), audit_layout.py judges those against per-n isotropic nulls),
+macro_adj_recall_top5 and
+macro_adj_spearman (semantic adjacency preservation of the macro layout).
 
 Outputs (data/layout/<run>/ - run name via --run, default wu.paths.ACTIVE_LAYOUT_RUN):
   galaxy_positions.parquet  galaxy_id, macro_id, x, y, z, radius, display_class, n_articles
@@ -24,8 +57,9 @@ Outputs (data/layout/<run>/ - run name via --run, default wu.paths.ACTIVE_LAYOUT
   preview_<mode>.html       interactive three.js preview (z-compress slider)
 
 Usage:
-  python scripts/layout_global.py --base data --run 20260926_baseline
-      [--dim 3] [--pack 0.6] [--seed 42] [--pairs catalog|npz] [--galaxy-tag res1_sub]
+  python scripts/layout_global.py --base data --run 20260930_spherize
+      [--pack 0.6] [--seed 42] [--pairs catalog|npz] [--galaxy-tag res1_sub]
+      [--macro-dim 3] [--macro-z-squash 1.0] [--macro-w-power 1.0]
 """
 from __future__ import annotations
 
@@ -45,15 +79,82 @@ from wu.dumpio import write_json  # noqa: E402
 from wu.paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 
 R_TOTAL = 1000.0  # canvas scale: disk areas sum to pi*R_TOTAL^2
+# Domain of the galaxy_flat_* quality metrics: macros with at least this many
+# members. The PCA eigenvalue ratio behind `flatness` is heavily small-n biased
+# (measured isotropic null: n=4 mean 0.955 / n=6 0.879 / n=8 0.806), so smaller
+# macros would dominate the percentile with measurement artifacts; they are
+# judged against per-n isotropic nulls in scripts/audit_layout.py instead.
+FLAT_MIN_MEMBERS = 8
 
 
 def _now():
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
-def fr_layout(n_nodes: int, edges, weights, dim: int, seed: int):
+def _fib_ball_slots(count: int, radius: float, seed_off: int = 0) -> np.ndarray:
+    """Deterministic volume-uniform ball slots (fibonacci sphere directions,
+    cbrt-spaced radii). Replaces the old PLANAR golden spiral: isolated nodes
+    must fill a BALL in the 3D regime, otherwise macros dominated by unlinked
+    members collapse into visible pancakes (2026-09-29, user screenshot)."""
+    k = np.arange(count, dtype=np.float64)
+    n = max(1, count)
+    y = 1 - 2 * (k + 0.5) / n
+    rr = np.sqrt(np.maximum(0.0, 1 - y * y))
+    # seed offset rotates the golden-angle phase ONLY (must not shift k: the
+    # latitude/radius sequences are defined on 0..n-1)
+    phi = (k + (int(seed_off) % 97) * 0.6180339887498949) * 2.399963229728653
+    rad = radius * ((k + 0.5) / n) ** (1.0 / 3.0)
+    return np.stack([rad * rr * np.cos(phi), rad * rr * np.sin(phi), rad * y],
+                    axis=1)
+
+
+_CONE_MAX = 0.75  # rad (~43 deg): half-angle of the rim cone spread (v1.6)
+
+
+def _fib_dir(k: int) -> np.ndarray:
+    """Deterministic unit direction #k (fibonacci sphere over 997 slots).
+    Used only to build a stable perpendicular frame for _cone_spread."""
+    y = 1 - 2 * (k + 0.5) / 997.0
+    rr = np.sqrt(max(0.0, 1 - y * y))
+    phi = k * 2.399963229728653
+    return np.array([rr * np.cos(phi), rr * np.sin(phi), float(y)])
+
+
+def _cone_spread(d_unit: np.ndarray, seed_key: int):
+    """(unit vector, depth factor 0.35-0.95): deterministic sample inside the
+    cone around `d_unit` (v1.6, rim-point de-concentration).
+
+    Uniform-on-disk cone sampling (sqrt for the half-angle) x azimuth x
+    radial depth, all derived from `seed_key` by irrational multipliers —
+    NO RNG state, so parallel/resume runs stay bit-reproducible. The depth
+    cap 0.95 preserves containment: 0.95*(Rm-r)+r <= Rm.
+    """
+    u1 = (seed_key * 0.6180339887498949) % 1.0
+    u2 = (seed_key * 0.7548776662466927) % 1.0
+    u3 = (seed_key * 0.5432109876543210) % 1.0
+    alpha = _CONE_MAX * np.sqrt(u1)
+    theta = 2 * np.pi * u2
+    h = _fib_dir(int(seed_key) % 997)
+    t = h - d_unit * np.dot(h, d_unit)
+    tn = np.linalg.norm(t)
+    if tn < 1e-9:  # d_unit (anti)parallel to h: deterministic fallback frame
+        e0 = (np.array([1.0, 0, 0]) if abs(d_unit[0]) < 0.9
+              else np.array([0, 1.0, 0]))
+        t = e0 - d_unit * np.dot(e0, d_unit)
+        tn = np.linalg.norm(t)
+    t = t / tn
+    b = np.cross(d_unit, t)
+    e_perp = t * np.cos(theta) + b * np.sin(theta)
+    v = d_unit * np.cos(alpha) + e_perp * np.sin(alpha)
+    return v, 0.35 + 0.60 * u3
+
+
+def fr_layout(n_nodes: int, edges, weights, dim: int, seed: int,
+              w_power: float = 1.0):
     """Weighted Fruchterman-Reingold via igraph; returns (n,dim) float array
-    normalized to unit disk. Isolated nodes get deterministic spiral slots."""
+    normalized to unit disk. Isolated nodes get deterministic spiral slots.
+    w_power is a weight temperature: attraction uses (w/w_max)^w_power
+    (1.0 = neutral; >1 sharpens strong links, <1 flattens)."""
     import igraph as ig
     random.seed(seed)
     np.random.seed(seed)
@@ -62,24 +163,30 @@ def fr_layout(n_nodes: int, edges, weights, dim: int, seed: int):
         g.add_edges([(int(u), int(v)) for u, v in edges])
         if weights is not None:
             w = np.asarray(weights, np.float64)
-            g.es["weight"] = (w / max(w.max(), 1e-9)).tolist()
+            wn = w / max(w.max(), 1e-9)
+            if w_power != 1.0:
+                wn = wn ** w_power
+            g.es["weight"] = wn.tolist()
         # NOTE: igraph FR `seed` param means initial coordinate matrix, not RNG seed;
         # determinism comes from random.seed() above (igraph uses Python random).
-        lay = g.layout_fruchterman_reingold(weights="weight", dim=dim)
+        lay = g.layout_fruchterman_reingold(
+            weights=("weight" if weights is not None else None), dim=dim)
     else:
         lay = g.layout_fruchterman_reingold(dim=dim)
     coords = np.asarray(lay.coords, dtype=np.float64)
-    # isolated nodes (degree 0) may sit at origin -> deterministic spiral
+    # isolated nodes (degree 0) may sit at origin -> deterministic slots
+    # (3D: fibonacci ball; the planar spiral is kept only for the dim=2 arm)
     deg = np.asarray(g.degree(), dtype=np.int64)
     iso = np.flatnonzero(deg == 0)
     if len(iso):
-        k = np.arange(len(iso))
-        ang = k * 2.399963229728653  # golden angle
-        rad = 0.9 * np.sqrt((k + 0.5) / max(1, len(iso)))
-        coords[iso, 0] = rad * np.cos(ang)
-        coords[iso, 1] = rad * np.sin(ang)
         if dim == 3:
-            coords[iso, 2] = 0.0
+            coords[iso] = _fib_ball_slots(len(iso), 0.9, seed)
+        else:
+            k = np.arange(len(iso))
+            ang = k * 2.399963229728653  # golden angle
+            rad = 0.9 * np.sqrt((k + 0.5) / max(1, len(iso)))
+            coords[iso, 0] = rad * np.cos(ang)
+            coords[iso, 1] = rad * np.sin(ang)
     r = np.linalg.norm(coords, axis=1)
     m = r.max()
     if m > 0:
@@ -154,7 +261,11 @@ def projection_overlap_stats(centers: np.ndarray, radii: np.ndarray,
 
 
 def relax_disks(centers: np.ndarray, radii: np.ndarray, iters: int = 40) -> np.ndarray:
-    """Push overlapping disks apart (vectorized O(k^2), k small)."""
+    """Push overlapping bodies apart (vectorized O(k^2), k small; dimension
+    agnostic: works on 2D disks and 3D spheres). Exactly-coincident bodies get
+    a deterministic separation direction: a zero vector cannot be pushed, so
+    without this, stacks of identical positions never resolve (found via the
+    unlinked-galaxy boundary stacks, 2026-09-29)."""
     c = centers.astype(np.float64).copy()
     k = len(c)
     if k < 2:
@@ -168,11 +279,136 @@ def relax_disks(centers: np.ndarray, radii: np.ndarray, iters: int = 40) -> np.n
         bad = dist < min_d
         if not bad.any():
             break
+        zero = bad & (dist < 1e-9)
+        if zero.any():
+            kk = np.flatnonzero(zero)
+            ang = (idx_i[kk] * 7 + idx_j[kk] * 13 + 1) * 2.399963229728653
+            d[kk, 0] = np.cos(ang)
+            d[kk, 1] = np.sin(ang)
+            if d.shape[1] > 2:
+                el = ((idx_i[kk] * 3 + idx_j[kk] * 5) % 89 + 0.5) / 89.0 * np.pi
+                d[kk, 2] = np.cos(el)
+            dist[kk] = np.linalg.norm(d[kk], axis=1)
         push = (min_d[bad] - dist[bad])[:, None] * 0.5
         dirv = d[bad] / np.maximum(dist[bad], 1e-9)[:, None]
         c[idx_i[bad]] -= dirv * push
         c[idx_j[bad]] += dirv * push
     return c
+
+
+def flatness(P: np.ndarray) -> float:
+    """PCA anisotropy of a point cloud: 1 - lam3/lam1 in [0, 1].
+
+    ~1.0 = pancake (disk-like), ~2/3 = isotropic sphere. Used per macro to
+    quantify the "clusters look like disks" problem objectively. Needs >= 3
+    points; returns 0.0 for degenerate clouds.
+    """
+    P = np.asarray(P, np.float64)
+    if len(P) < 3:
+        return 0.0
+    C = np.cov((P - P.mean(axis=0)).T)
+    ev = np.linalg.eigvalsh(C)          # ascending
+    lam1, lam3 = float(ev[-1]), float(ev[0])
+    if lam1 <= 1e-12:
+        return 0.0
+    return float(1.0 - max(lam3, 0.0) / lam1)
+
+
+def macro_adjacency(centers: np.ndarray, edges, weights, k: int = 5) -> dict:
+    """Semantic-adjacency preservation of the macro layout.
+
+    recall  = mean over macros of |graph top-K neighbours ∩ spatial top-K| / K
+    spearman = rank correlation between pair weight and spatial distance over
+              linked pairs (negative = strongly linked macros sit close).
+    Returns {"recall": float|None, "spearman": float|None}; None when the
+    macro graph is too small to be meaningful (< 3 macros or no edges).
+    """
+    n = len(centers)
+    edges = [(int(u), int(v)) for u, v in edges]
+    if n < 3 or not edges:
+        return {"recall": None, "spearman": None}
+    w = np.asarray(weights, np.float64)
+    D = np.linalg.norm(centers[:, None, :] - centers[None, :, :], axis=2)
+    np.fill_diagonal(D, np.inf)
+    recalls, ws, ds = [], [], []
+    adj = {i: [] for i in range(n)}
+    for (u, v), wv in zip(edges, w):
+        adj[u].append((v, wv))
+        adj[v].append((u, wv))
+        ws.append(wv)
+        ds.append(D[u, v])
+    for i in range(n):
+        if not adj[i]:
+            continue
+        kk = min(k, len(adj[i]), n - 1)
+        gtop = {int(j) for j, _ in sorted(adj[i], key=lambda t: -t[1])[:kk]}
+        stop = set(np.argsort(D[i])[:kk].tolist())
+        recalls.append(len(gtop & stop) / kk)
+    spear = None
+    if len(ws) >= 3:
+        rw = np.argsort(np.argsort(np.asarray(ws), kind="stable"), kind="stable")
+        rd = np.argsort(np.argsort(np.asarray(ds), kind="stable"), kind="stable")
+        sw, sd = float(rw.std()), float(rd.std())
+        if sw > 0 and sd > 0:
+            spear = float(np.corrcoef(rw, rd)[0, 1])
+    return {"recall": float(np.mean(recalls)) if recalls else None,
+            "spearman": spear}
+
+
+def medium_local(reg_local: dict, pairs, macro_centers: np.ndarray,
+                 macro_of, midx: dict, m_own, Rm: float, r_med: float,
+                 fallback_seed: int, fallback=None) -> np.ndarray:
+    """Local position of one medium galaxy = weighted centroid of link targets.
+
+    reg_local: dict gid -> local 3D vec of PLACED regular galaxies (this macro).
+    pairs: iterable of (other_gid, weight) for the medium galaxy.
+    Intra-macro neighbours contribute their placed local positions; cross-macro
+    neighbours contribute a CONE-SPREAD point (v1.6) inside the macro sphere
+    around the direction of THEIR macro center (so mediums bridging other
+    clusters sit near the rim facing them): every galaxy sharing the same
+    dominant neighbour used to land on ONE identical rim point, which the
+    containment clamp then flattened into a thin cap (the pancake driver).
+    The cone sample is deterministic per (galaxy, neighbour macro) via
+    seed_key = fallback_seed + 7 * neighbour_macro_id — no RNG state, so
+    results are independent of job assignment / resume order. Neighbours
+    without a placed position (e.g. other mediums) are ignored; medium-medium
+    separation is resolved by a later push pass. With no usable pairs,
+    returns `fallback` when given (e.g. a fibonacci-ball slot for unlinked
+    regular galaxies), else a deterministic golden-angle slot.
+    """
+    num = np.zeros(3)
+    wsum = 0.0
+    own_i = midx[int(m_own)]
+    own_c = macro_centers[own_i]
+    rim = max(Rm - r_med, 0.05 * Rm)
+    for other, wv in pairs:
+        wv = float(wv)
+        if wv <= 0:
+            continue
+        other = int(other)
+        mo = int(macro_of[other])
+        if mo == int(m_own):
+            p = reg_local.get(other)
+            if p is None:
+                continue
+            num += wv * np.asarray(p, np.float64)
+            wsum += wv
+        elif mo in midx:
+            d = macro_centers[midx[mo]] - own_c
+            dn = float(np.linalg.norm(d))
+            if dn < 1e-9:
+                continue
+            v, depthf = _cone_spread(d / dn,
+                                     int(fallback_seed) + 7 * int(mo))
+            num += wv * (v * (rim * depthf))
+            wsum += wv
+    if wsum > 0:
+        return num / wsum
+    if fallback is not None:
+        return np.asarray(fallback, np.float64)
+    phi = (int(fallback_seed) % 1000) * 2.399963229728653
+    return np.array([rim * 0.6 * np.cos(phi), rim * 0.6 * np.sin(phi),
+                     rim * 0.6 * 0.35 * np.sin(2 * phi)])
 
 
 HTML_TEMPLATE = """<!doctype html>
@@ -275,21 +511,19 @@ def write_html_preview(path, g_centers, g_radius, gal_colors, dust_mask,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="data")
-    ap.add_argument("--dim", type=int, default=3, choices=[2, 3])
     ap.add_argument("--pack", type=float, default=0.6)
-    ap.add_argument("--z-squash", type=float, default=0.85,
-                    help="z compression of galaxy lens inside macro disks "
-                         "(0.35 = pancake clusters [old default], 0.85-1.0 = round "
-                         "clusters [canonical since 2026-09-27])")
     ap.add_argument("--r-spacing", type=float, default=1.5,
                     help="min article spacing for galaxy radius floor: "
                          "r_g >= r_spacing * n_g^(1/3)")
-    ap.add_argument("--macro-dim", type=int, default=2, choices=[2, 3],
-                    help="2 = 2.5D universe map (macros packed in plane), "
-                         "3 = full 3D sphere packing")
+    ap.add_argument("--macro-dim", type=int, default=3, choices=[2, 3],
+                    help="3 = full 3D sphere packing (canonical, default), "
+                         "2 = 2.5D universe map (experimental arm, D17)")
     ap.add_argument("--macro-z-squash", type=float, default=1.0,
                     help="with --macro-dim 3: squash macro sphere z (hybrid ellipsoid "
-                         "universe, e.g. 0.5)")
+                         "universe, e.g. 0.5; experimental arm, D17)")
+    ap.add_argument("--macro-w-power", type=float, default=1.0,
+                    help="weight temperature tau for the macro FR attraction "
+                         "(w^tau; 1.0 = neutral, >1 sharpens semantic adjacency)")
     ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
                     help="layout run name = output subdir under data/layout "
                          "(default: wu.paths.ACTIVE_LAYOUT_RUN)")
@@ -349,7 +583,8 @@ def main():
     m_edges = list(zip(me_a[ok].tolist(), me_b[ok].tolist()))
     del me_a, me_b
     m_w = np.asarray(mp["w"], np.float64)[ok]
-    m_coords = fr_layout(len(eff_m), m_edges, m_w, a.macro_dim, a.seed)
+    m_coords = fr_layout(len(eff_m), m_edges, m_w, a.macro_dim, a.seed,
+                         w_power=a.macro_w_power)
     if a.macro_dim == 3 and a.macro_z_squash != 1.0:
         m_coords[:, 2] *= a.macro_z_squash
     R_m = R_TOTAL * np.sqrt(n_art_m[eff_m] / max(1, n_art_m.sum()))
@@ -387,9 +622,26 @@ def main():
     del mac_b
 
     # ---------- 3. per-macro galaxy layout ----------
-    g_centers = np.zeros((G, 3), np.float64)  # always 3D (z squashed lens)
+    g_centers = np.zeros((G, 3), np.float64)
     g_radius = np.zeros(G, np.float64)
     placed = np.zeros(G, bool)
+    is_med = np.asarray([str(c) == "medium" for c in cls])
+    # pair index for bary placement (mediums + unlinked galaxies). topK parquet
+    # may list a pair from both sides; duplicates only double symmetric
+    # centroid weights = harmless.
+    ends = np.concatenate([gp_a, gp_b]).astype(np.int64)
+    others = np.concatenate([gp_b, gp_a]).astype(np.int64)
+    ws_all = np.concatenate([gp_w, gp_w])
+    po = np.argsort(ends, kind="stable")
+    ends_s, others_s, ws_s = ends[po], others[po], ws_all[po]
+
+    def pairs_of(g):
+        lo = int(np.searchsorted(ends_s, g, "left"))
+        hi = int(np.searchsorted(ends_s, g, "right"))
+        return list(zip(others_s[lo:hi].tolist(), ws_s[lo:hi].tolist()))
+
+    macro_clouds = []          # per-macro (local centers, radii) for metrics
+    n_bary = 0
     for m_i, m in enumerate(eff_m):
         members = np.flatnonzero((macro_of == m) & (~dust_g))
         if len(members) == 0:
@@ -399,34 +651,125 @@ def main():
         r_form = a.pack * Rm * np.sqrt(n_art_g[members] / max(1, n_m))
         r_floor = a.r_spacing * np.maximum(1, n_art_g[members]) ** (1.0 / 3.0)
         r_g = np.maximum(r_form, r_floor)
-        # keep summed disk areas inside the macro disk
+        # volume cap: summed galaxy spheres fit inside the macro sphere
         cap = 0.9 * Rm
-        tot = np.sqrt(np.sum(r_g ** 2))
+        tot = np.cbrt(np.sum(r_g ** 3))
         if tot > cap:
             r_g *= cap / tot
         g_radius[members] = r_g
-        local_idx = {int(g): i for i, g in enumerate(members)}
-        sel = same_macro & (mac_a == m)
-        e_local = [(local_idx[int(gp_a[i])], local_idx[int(gp_b[i])]) for i in np.flatnonzero(sel)]
-        w_local = gp_w[sel]
-        if len(members) == 1:
+        med_m = members[is_med[members]]
+        reg_m = members[~is_med[members]]
+        # intra-macro pair edges among regular galaxies
+        ridx = {int(g): i for i, g in enumerate(reg_m)}
+        e_pairs = []
+        for i in np.flatnonzero(same_macro & (mac_a == m)):
+            ga, gb = int(gp_a[i]), int(gp_b[i])
+            if ga in ridx and gb in ridx:
+                e_pairs.append((ga, gb, float(gp_w[i])))
+        deg = np.zeros(len(reg_m), np.int64)
+        for ga, gb, _ in e_pairs:
+            deg[ridx[ga]] += 1
+            deg[ridx[gb]] += 1
+        # LINKED galaxies: weighted FR; UNLINKED (no intra-macro pair = their
+        # top-K links all leave the macro): bary centroid of link targets, or
+        # fib-ball slots when no usable pairs -> no more planar pancakes
+        conn = reg_m[deg > 0]
+        unlinked = reg_m[deg == 0]
+        cidx = {int(g): i for i, g in enumerate(conn)}
+        e_local = [(cidx[ga], cidx[gb]) for ga, gb, _ in e_pairs]
+        w_local = np.asarray([wv for _, _, wv in e_pairs], np.float64)
+        if len(conn) == 0:
+            coords3 = np.zeros((0, 3))
+        elif len(conn) == 1:
             coords3 = np.zeros((1, 3))
         else:
-            coords3 = fr_layout(len(members), e_local, w_local, 3, a.seed + int(m))
-        xy = coords3[:, :2]
-        zz = coords3[:, 2] * a.z_squash
-        avail = max(Rm - g_radius[members].max(), Rm * 0.3)
-        centers_xy = relax_disks(xy * avail, g_radius[members], iters=40)
-        # radial clamp: keep every galaxy disk inside its macro disk (xy)
-        lim = np.maximum(Rm - g_radius[members], 0.05 * Rm)
-        d = np.linalg.norm(centers_xy, axis=1)
-        sc = np.where(d > lim, lim / np.maximum(d, 1e-9), 1.0)
-        centers_xy = centers_xy * sc[:, None]
-        g_centers[members, 0] = m_centers[m_i, 0] + centers_xy[:, 0]
-        g_centers[members, 1] = m_centers[m_i, 1] + centers_xy[:, 1]
-        g_centers[members, 2] = m_centers[m_i, 2] + zz * avail
-        placed[members] = True
-    print(f"[layout] galaxies placed: {int(placed.sum())} ({time.time()-t0:.1f}s)")
+            coords3 = fr_layout(len(conn), e_local, w_local, 3, a.seed + int(m))
+        avail = max(Rm - (g_radius[conn].max() if len(conn) else 0.0), Rm * 0.3)
+        loc = {int(g): coords3[i] * avail for i, g in enumerate(conn)}
+        rim_u = max(Rm - (g_radius[unlinked].max() if len(unlinked) else 0.0),
+                    Rm * 0.3)
+        fb = _fib_ball_slots(len(unlinked), rim_u * 0.9, a.seed + int(m))
+        for k, g in enumerate(unlinked):
+            loc[int(g)] = medium_local(loc, pairs_of(int(g)), m_centers,
+                                       macro_of, midx, int(m), Rm,
+                                       float(g_radius[g]), a.seed + int(g),
+                                       fallback=fb[k])
+        reg_all = np.concatenate([conn, unlinked]) if len(reg_m) else reg_m
+        P = np.stack([loc[int(g)] for g in reg_all]) if len(reg_all) \
+            else np.zeros((0, 3))
+        if len(P) >= 2:
+            P = relax_disks(P, g_radius[reg_all], iters=120)
+        # 3D radial clamp, applied UNCONDITIONALLY (v1.6): the old
+        # `len(P) >= 2` gate skipped single-regular-galaxy macros, where a
+        # pairless isolated galaxy on its fibonacci slot could stick out of
+        # the macro sphere (measured (d3+r)/Rm up to 1.114). With the volume
+        # cap (r <= 0.9 Rm) and lim = max(Rm-r, 0.05Rm), d3 + r <= Rm now
+        # holds by construction => galaxy_spill_count == 0 for every macro.
+        # Elementwise ops below are safe on the empty (len-0) P as well.
+        lim = np.maximum(Rm - g_radius[reg_all], 0.05 * Rm)
+        d3 = np.linalg.norm(P, axis=1)
+        sc = np.where(d3 > lim, lim / np.maximum(d3, 1e-9), 1.0)
+        P = P * sc[:, None]
+        if len(reg_all):
+            g_centers[reg_all] = m_centers[m_i] + P
+            placed[reg_all] = True
+        # ---- medium galaxies: same bary rule against the FINAL regular layout
+        if len(med_m):
+            reg_local = {int(g): P[i] for i, g in enumerate(reg_all)} \
+                if len(reg_all) else {}
+            M = np.zeros((len(med_m), 3))
+            for k, g in enumerate(med_m):
+                M[k] = medium_local(reg_local, pairs_of(int(g)), m_centers,
+                                    macro_of, midx, int(m), Rm,
+                                    float(g_radius[g]), a.seed + int(g))
+            rm = g_radius[med_m]
+            # push pass: mediums yield to placed regulars, then separate
+            # among themselves; re-clamp inside the macro sphere each round
+            reg_P = P if len(reg_all) else np.zeros((0, 3))
+            lim_m = np.maximum(Rm - rm, 0.05 * Rm)
+            for _ in range(30):
+                moved = False
+                if len(reg_P):
+                    dv = M[:, None, :] - reg_P[None, :, :]
+                    dist = np.linalg.norm(dv, axis=2)
+                    need = (rm[:, None] + g_radius[reg_all][None, :]) * 1.02
+                    bad = dist < need
+                    zero = bad & (dist < 1e-9)
+                    if zero.any():
+                        # exact coincidence: deterministic direction
+                        # (same rule as relax_disks; zero vectors can't push)
+                        ki, kj = np.nonzero(zero)
+                        ang = (ki * 7 + kj * 13 + 1) * 2.399963229728653
+                        dv[ki, kj, 0] = np.cos(ang)
+                        dv[ki, kj, 1] = np.sin(ang)
+                        el = ((ki * 3 + kj * 5) % 89 + 0.5) / 89.0 * np.pi
+                        dv[ki, kj, 2] = np.cos(el)
+                        dist[ki, kj] = np.linalg.norm(dv[ki, kj], axis=1)
+                    if bad.any():
+                        diru = dv / np.maximum(dist, 1e-9)[:, :, None]
+                        step = np.where(bad, need - dist, 0.0)[:, :, None] * diru
+                        M = M + step.sum(axis=1)
+                        moved = True
+                if len(M) >= 2:
+                    before = M.copy()
+                    M = relax_disks(M, rm, iters=4)
+                    moved |= not np.array_equal(before, M)
+                dm = np.linalg.norm(M, axis=1)
+                sc = np.where(dm > lim_m, lim_m / np.maximum(dm, 1e-9), 1.0)
+                M = M * sc[:, None]
+                if not moved:
+                    break
+            g_centers[med_m] = m_centers[m_i] + M
+            placed[med_m] = True
+            n_bary += len(med_m)
+            all_local = np.concatenate([P, M]) if len(P) else M
+            all_r = np.concatenate([g_radius[reg_all], rm]) if len(P) else rm
+        else:
+            all_local, all_r = P, g_radius[reg_all]
+        if len(all_local):
+            macro_clouds.append((all_local, all_r))
+    print(f"[layout] galaxies placed: {int(placed.sum())} "
+          f"(medium bary: {n_bary}) ({time.time()-t0:.1f}s)")
 
     # ---------- 4. dust shell ----------
     dust_idx = np.flatnonzero(dust_g | ~placed)
@@ -438,19 +781,44 @@ def main():
         phi = k * 2.399963229728653
         g_centers[dust_idx, 0] = shell * rr * np.cos(phi)
         g_centers[dust_idx, 1] = shell * rr * np.sin(phi)
-        if a.dim == 3:
-            g_centers[dust_idx, 2] = shell * yv
-        else:
-            g_centers[dust_idx, 2:] = 0.0
+        g_centers[dust_idx, 2] = shell * yv
         g_radius[dust_idx] = a.pack * R_TOTAL * np.sqrt(1 / max(1, n_art_m.sum()))
 
     # ---------- 4b. quality metrics ----------
     in_macro = np.flatnonzero(placed & ~dust_g)
-    dist_m = np.linalg.norm(g_centers[in_macro, :2] - m_centers[
-        [list(eff_m).index(int(macro_of[i])) for i in in_macro], :2], axis=1)
-    spill = dist_m + g_radius[in_macro] > R_m[
-        [list(eff_m).index(int(macro_of[i])) for i in in_macro]] * 1.02
+    mrow = np.asarray([midx[int(macro_of[i])] for i in in_macro], np.int64) \
+        if len(in_macro) else np.zeros(0, np.int64)
+    if len(in_macro):
+        # spill = 3D containment: galaxy sphere must fit inside its macro sphere
+        dist_m = np.linalg.norm(g_centers[in_macro] - m_centers[mrow], axis=1)
+        spill = dist_m + g_radius[in_macro] > R_m[mrow] * 1.02
+        # WHO spilled, visible in every run without waiting for an audit
+        # (top-20 by excess; galaxy_id == row index in this script's arrays)
+        exc_m = dist_m + g_radius[in_macro] - R_m[mrow]
+        sp_idx = np.flatnonzero(spill)
+        sp_idx = sp_idx[np.argsort(-exc_m[sp_idx], kind="stable")]
+        spill_ids = [int(in_macro[k]) for k in sp_idx[:20]]
+    else:
+        spill = np.zeros(0, bool)
+        spill_ids = []
     spill_frac = float(spill.mean()) if len(spill) else 0.0
+    # per-macro galaxy-cloud anisotropy (~1 = pancake); domain = macros with
+    # FLAT_MIN_MEMBERS+ members (small-n eigenvalue bias; see the constant)
+    flats = [flatness(P) for P, _ in macro_clouds if len(P) >= FLAT_MIN_MEMBERS]
+    flat_mean = round(float(np.mean(flats)), 5) if flats else None
+    flat_p90 = round(float(np.percentile(flats, 90)), 5) if flats else None
+    # sphere overlap INSIDE macros (volume-weighted; relaxation quality)
+    ov_num = ov_den = 0.0
+    for P, R in macro_clouds:
+        if len(P) >= 2 and float(np.sum(R)) > 0:
+            V = (4.0 / 3.0) * np.pi * float(np.sum(R ** 3))
+            ov_num += sphere_overlap_fraction(P, R) * V
+            ov_den += V
+    galaxy_overlap = round(ov_num / ov_den, 5) if ov_den > 0 else 0.0
+    # semantic adjacency preservation of the macro layout
+    adj = macro_adjacency(m_centers, m_edges, m_w, k=5)
+    adj_recall = round(adj["recall"], 5) if adj["recall"] is not None else None
+    adj_spear = round(adj["spearman"], 5) if adj["spearman"] is not None else None
 
     # ---------- 5. outputs ----------
     zcol = g_centers[:, 2]
@@ -476,32 +844,46 @@ def main():
         "is_dust": pa.array(dust_m),
     }), os.path.join(out_dir, "macro_positions.parquet"), compression="zstd")
 
-    meta = {"generated_at": _now(), "run": a.run, "dim": a.dim, "pack": a.pack,
-            "z_squash": a.z_squash, "seed": a.seed,
+    meta = {"generated_at": _now(), "run": a.run, "pack": a.pack,
+            "r_spacing": a.r_spacing, "seed": a.seed,
+            "macro_w_power": a.macro_w_power,
             "pairs_source": a.pairs, "galaxy_tag": a.galaxy_tag,
             "n_galaxies": G, "n_macros_effective": int(len(eff_m)),
             "n_dust_shell": int(len(dust_idx)), "R_TOTAL": R_TOTAL,
             "mode": {"macro_dim": a.macro_dim, "macro_z_squash": a.macro_z_squash,
-                     "z_squash": a.z_squash,
                      "canonical": a.macro_dim == 3 and a.macro_z_squash == 1.0,
-                     "note": ("canonical policy (2026-09-26): macro-dim 3 unsquashed is the "
-                              "canonical layout; hybrid/map views are VIEW-TIME z-compression "
-                              "(HTML slider), not separate layouts")
+                     "note": ("canonical policy (v1.6): full 3D, macro-dim 3 "
+                              "unsquashed, sphere-relaxed galaxies, NO baked lens "
+                              "(map/hybrid views are VIEW-TIME z-compression in "
+                              "the viewer, D17); unlinked galaxies are bary-placed "
+                              "(rim contributions cone-spread); containment clamp "
+                              "is unconditional => spill == 0 by construction")
                      if (a.macro_dim == 3 and a.macro_z_squash == 1.0) else
-                     "experimental arm; canonical = --macro-dim 3 --macro-z-squash 1.0"},
+                     "experimental arm; canonical = --macro-dim 3 "
+                     "--macro-z-squash 1.0"},
             "quality": {"macro_native_overlap_frac": round(macro_overlap, 5),
                         "macro_proj_overlap": proj,
                         "galaxy_spill_frac": round(spill_frac, 5),
-                        "galaxy_spill_count": int(spill.sum())},
+                        "galaxy_spill_count": int(spill.sum()),
+                        "galaxy_spill_ids": spill_ids,
+                        "galaxy_overlap_frac": galaxy_overlap,
+                        "galaxy_flat_mean": flat_mean,
+                        "galaxy_flat_p90": flat_p90,
+                        "galaxy_flat_n_macros": len(flats),
+                        "galaxy_flat_domain_min": FLAT_MIN_MEMBERS,
+                        "macro_adj_recall_top5": adj_recall,
+                        "macro_adj_spearman": adj_spear},
             "secs": round(time.time() - t0, 1)}
     print(f"[layout] quality: macro_overlap={macro_overlap:.4f} "
-          f"galaxy_spill={spill_frac:.4f} ({int(spill.sum())})")
+          f"galaxy_spill={spill_frac:.4f} ({int(spill.sum())}) "
+          f"gal_overlap={galaxy_overlap:.4f} "
+          f"flat_mean={flat_mean} adj_recall5={adj_recall} adj_spear={adj_spear}")
     write_json(os.path.join(out_dir, "layout_meta.json"), meta)
 
     # ---------- 6. preview: multi-view PNG + interactive HTML ----------
     mode_tag = (f"macro{a.macro_dim}d" +
                 (f"_mz{a.macro_z_squash:g}" if a.macro_dim == 3 and a.macro_z_squash != 1.0 else "") +
-                f"_z{a.z_squash:g}")
+                (f"_wp{a.macro_w_power:g}" if a.macro_w_power != 1.0 else ""))
     try:
         import matplotlib
         matplotlib.use("Agg")
