@@ -1,8 +1,16 @@
-"""E2E smoke test: synthetic fixture -> full chain -> galaxy catalog.
+"""E2E 統合スイート: 合成 fixture → フルチェーン → 各機能の統合・単体検証。
 
-Chain: fixtures -> parse -> edges -> dedup -> detect -> subdivide -> metrics ->
-cluster -> categories -> purity(v2) -> build_galaxy_catalog.
-Asserts catalog structure (containment, pair aggregation, dust flags).
+チェーン: fixtures -> parse -> edges -> dedup -> detect -> subdivide -> metrics ->
+cluster -> categories -> purity(v2) -> build_galaxy_catalog -> layout(global/local/
+並列/recompose) -> export(tiles) -> audit_layout。
+加えて、移設済みモジュールの単体検証(語幹正規化・flatness/adjacency/medium_local/
+cone 散布・セクタアンカー/rank 成層/ロバスト正規化・包含クランプ回帰 fixture・
+平坦度ドメイン・cp932 コンソール回帰・タイル往復)を同一 BASE 上で実施する。
+
+注意: ステージ単体の契約テストは tests/test_stages_*.py / test_pipeline_core.py が
+担当し、本ファイルは「複数ステージをまたぐ統合」と「歴史的な単体節」を担う
+(2026-10-02 のテスト再編による役割分担。分割のさらなる細分化は残課題として
+knowledge/work/pipeline-cleanup.md に記録)。
 """
 import json
 import os
@@ -16,7 +24,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
-from test_synthetic import BASE, build_fixtures  # noqa: E402
+from fixture import BASE, build_fixtures  # noqa: E402
 
 
 def run_script(name, *args):

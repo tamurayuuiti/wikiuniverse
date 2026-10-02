@@ -11,7 +11,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
-from test_synthetic import BASE, build_fixtures  # noqa: E402
+from fixture import BASE, build_fixtures  # noqa: E402
 
 
 def main():

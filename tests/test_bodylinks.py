@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
-from test_synthetic import BASE, build_fixtures  # noqa: E402
+from fixture import BASE, build_fixtures  # noqa: E402
 
 XML = """<mediawiki xmlns="http://www.mediawiki.org/xml/export-0.11/" version="0.11">
   <page>
