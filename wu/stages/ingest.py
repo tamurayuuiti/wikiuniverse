@@ -103,7 +103,7 @@ def run_edges(ctx) -> None:
 @stage(
     name="categories",
     title="categorylinks → 記事×カテゴリ対(銀河の命名・純度計算の材料)",
-    group="optional",
+    group="canonical",
     params=(),
     inputs=("dump.categorylinks", "dump.linktarget", "parsed.ns0_hashes"),
     outputs=("graph.categories", "graph.article_categories"),

@@ -47,8 +47,14 @@ class Ctx:
     force: bool = False
 
     def resolve(self, key: str):
-        """成果物キーを実パスへ解決する(shared + params で templating)。"""
-        return artifacts.resolve(key, self.dirs, {**self.shared, **self.params})
+        """成果物キーを実パスへ解決する(shared + params で templating)。
+
+        params の None 値は「共有パラメータへフォールバック」なので上書きしない
+        (runner.plan と同一のマージ規則)。
+        """
+        merged = {**self.shared,
+                  **{k: v for k, v in self.params.items() if v is not None}}
+        return artifacts.resolve(key, self.dirs, merged)
 
     def path(self, key: str) -> str:
         """resolve の str 版(既存実装が os.path 前提のため)。"""

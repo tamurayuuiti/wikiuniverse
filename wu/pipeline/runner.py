@@ -95,14 +95,19 @@ def plan(stages, dirs, cfg, shared: dict, force: bool = False) -> list[dict]:
     単発実行でも、ディスク上の実体とプラン内生成予定の和集合で判定する。
     """
     entries = []
-    satisfied: set[str] = set()  # このプラン内で生成される予定の成果物キー
+    satisfied: set[str] = set()  # このプラン内で生成予定の成果物「解決済みパス」
     for st in stages:
         params = stage_params(st, cfg)
-        p_all = {**shared, **params}
-        missing = [k for k in st.inputs
-                   if k not in satisfied
-                   and not artifacts.exists(k, dirs, p_all)]
+        # None のパラメータは「共有パラメータへフォールバック」を意味する
+        # (例: tag=None → shared["tag"])。成果物解決では None で上書きしない。
+        p_all = {**shared, **{k: v for k, v in params.items() if v is not None}}
         outs = {k: str(artifacts.resolve(k, dirs, p_all)) for k in st.outputs}
+        # 入力の充足 = ディスク上の実体 or プラン内先行ステージの生成予定。
+        # 判定は「解決済みパス」で行う(別キーのエイリアス — 例: subdivide の
+        # membership_out と後段の membership — が同一パスを指す場合があるため)。
+        missing = [k for k in st.inputs
+                   if str(artifacts.resolve(k, dirs, p_all)) not in satisfied
+                   and not artifacts.exists(k, dirs, p_all)]
         outputs_exist = bool(outs) and all(os.path.exists(v) for v in outs.values())
         if missing:
             status = "missing-input"
@@ -110,10 +115,9 @@ def plan(stages, dirs, cfg, shared: dict, force: bool = False) -> list[dict]:
             status = "skip"
         else:
             status = "run"
-        # skip 以外(= 実行される/された)ステージの outputs は後段の入力を満たす。
-        # missing-input のステージは実行されないので satisfied に足さない。
+        # missing-input 以外のステージは実行される(= 生成予定パスを充足集合へ)
         if status != "missing-input":
-            satisfied.update(st.outputs)
+            satisfied.update(outs.values())
         entries.append({"stage": st, "params": params, "shared_used": p_all,
                         "missing": missing, "outputs": outs, "status": status})
     return entries

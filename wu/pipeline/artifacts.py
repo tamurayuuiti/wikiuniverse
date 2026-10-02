@@ -131,8 +131,61 @@ define("graph.full_stats", "全グラフ次数統計・ハブ検出の結果 JSO
        "product", lambda d, p: d.full_stats)
 define("graph.local_prep", "銀河内レイアウトの run 非依存事前計算ディレクトリ",
        "cache", lambda d, p: d.local_prep_dir(p["tag"]))
+define("graph.edges_undirected", "無向一意エッジ(dedup の出力。コミュニティ検出の入力)",
+       "intermediate",
+       lambda d, p: d.graph / p.get("out_name", "edges_undirected_unique.bin"))
 define("community.membership", "ノード → コミュニティ ID(compact idx 順、tag 別)",
        "product", lambda d, p: d.community_full / f"membership_{p['tag']}.npy")
+define("community.membership_out", "subdivide の出力 membership(out_tag で解決)",
+       "product", lambda d, p: d.community_full / f"membership_{p['out_tag']}.npy")
+define("community.subdivide_meta", "マクロ別分割の診断 JSON(out_tag 別)",
+       "intermediate",
+       lambda d, p: d.community_full / f"subdivide_meta_{p['out_tag']}.json")
+define("community.membership_macro", "マクロ tag の membership(catalog の必須入力)",
+       "product",
+       lambda d, p: d.community_full / f"membership_{p['macro_tag']}.npy")
+define("community.metrics_json", "コミュニティ指標の全体 JSON(tag 別)",
+       "product", lambda d, p: d.community_full / f"metrics_{p['tag']}.json")
+define("community.per_community", "コミュニティ別指標 + 代表記事(tag 別)",
+       "product",
+       lambda d, p: d.community_full / f"per_community_{p['tag']}.parquet")
+define("community.per_community_macro", "マクロ tag の per_community(catalog の任意入力)",
+       "product",
+       lambda d, p: d.community_full / f"per_community_{p['macro_tag']}.parquet")
+define("community.top_pairs", "コミュニティ間エッジの top ペア JSON(tag 別)",
+       "intermediate",
+       lambda d, p: d.community_full / f"top_pairs_{p['tag']}.json")
+define("community.pairs", "コミュニティ間重み(pair)の npz(tag 別、L2 と台帳の入力)",
+       "intermediate", lambda d, p: d.community_full / f"pairs_{p['tag']}.npz")
+define("community.clusters_node", "L2 銀河団: ノード → クラスタ(tag 別)",
+       "product",
+       lambda d, p: d.community_full / f"clusters_node_{p['tag']}.npy")
+define("community.clusters_comm", "L2 銀河団: コミュニティ → クラスタ(tag 別)",
+       "product",
+       lambda d, p: d.community_full / f"clusters_comm_{p['tag']}.npy")
+define("community.clusters_meta", "L2 銀河団のメタ JSON(tag 別)",
+       "intermediate",
+       lambda d, p: d.community_full / f"clusters_meta_{p['tag']}.json")
+define("community.membership_parquet", "page_id+title+comm+cluster の結合表(tag 別)",
+       "product",
+       lambda d, p: d.community_full / f"membership_{p['tag']}.parquet")
+define("community.purity", "カテゴリ純度の parquet(name 列 = 銀河名の材料)",
+       "product", lambda d, p: d.community_full / f"purity_{p['tag']}.parquet")
+define("community.purity_json", "カテゴリ純度の集計 JSON",
+       "product", lambda d, p: d.community_full / f"purity_{p['tag']}.json")
+define("graph.edges_pruned", "次数予算剪定グラフ(実験腕。mode/budget で名前解決)",
+       "intermediate",
+       lambda d, p: d.graph / f"edges_pruned_{p.get('mode', 'smart')}{p.get('budget', 40)}.bin")
+define("final.galaxies", "銀河台帳(galaxy_id/macro_id/n_articles/name/display_class 他)",
+       "product", lambda d, p: d.final / "galaxies.parquet")
+define("final.macros", "マクロ台帳(銀河団。n_articles/n_galaxies/rep_titles 他)",
+       "product", lambda d, p: d.final / "macros.parquet")
+define("final.galaxy_pairs", "銀河間ペア top-K(中景バンドル・レイアウトの入力)",
+       "product", lambda d, p: d.final / "galaxy_pairs_topK.parquet")
+define("final.macro_pairs", "マクロ間集約重み(遠景の数本・マクロ配置の入力)",
+       "product", lambda d, p: d.final / "macro_pairs.parquet")
+define("final.catalog_meta", "カタログ来歴(件数・包含チェック)",
+       "product", lambda d, p: d.final / "catalog_meta.json")
 
 # ---- 原始データ(Wikipedia ダンプ。再取得可能 = raw 分類)----
 for _k, _fn in (("page", "jawiki-latest-page.sql.gz"),

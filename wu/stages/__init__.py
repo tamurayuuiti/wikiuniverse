@@ -15,3 +15,5 @@
 
 from . import ingest  # noqa: F401  (download/parse/edges/categories/body_edges)
 from . import stats  # noqa: F401  (stats)
+from . import community  # noqa: F401  (dedup/detect/subdivide/metrics/cluster/export/prune)
+from . import catalog  # noqa: F401  (purity/catalog)
