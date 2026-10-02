@@ -9,12 +9,12 @@
 # - test_catalog の recompose 節が挙動を担保する。正準実行は
 #   python -m wu run recompose --set recompose.from_run=… --set recompose.to_run=…
 
-"""Rigid+scale recomposition of article positions after a global-layout parameter
-change (e.g. --z-squash / --r-spacing). Avoids the ~1h layout_local re-run:
-each galaxy's article cloud is translated to the new center and scaled by the
-new/old radius ratio (internal shape preserved).
+"""グローバルレイアウトのパラメータ変更後、記事座標を剛体+スケールで再構成する
+(例: macro_z_squash / r_spacing の変更)。~1h の layout_local 再実行を回避する:
+各銀河の記事点群を新しい中心へ平行移動し、新旧の半径比でスケールする
+(内部形状は保存される)。
 
-Usage (run names follow the <YYYYMMDD>_<slug> convention; see wu/paths.py):
+Usage(run 名は <YYYYMMDD>_<slug> 規約。wu/paths.py 参照):
   python -m wu run layout_global --base data --run <NEW_RUN>
   python -m wu run recompose --base data \
       --set recompose.from_run=<OLD_RUN> --set recompose.to_run=<NEW_RUN>

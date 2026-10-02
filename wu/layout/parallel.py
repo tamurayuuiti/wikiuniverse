@@ -12,24 +12,24 @@
 # - 完了判定は共有 checkpoint 単独で信頼しない(ジョブ meta + シャード実在の
 #   和集合 = 並列レース対策の原則)。正準実行は python -m wu run layout_local。
 
-"""Run layout_local over all remaining galaxies with N parallel subprocesses
-(Windows-safe; each galaxy shard is independent = the batch model).
+"""残る全銀河へ layout_local を N 並列の subprocess で実行する
+(Windows 安全; 銀河毎のシャードは完全独立 = バッチモデル)。
 
-Shared run-independent prep:
-  1. the shared prep artifacts (grouped cross pairs + internal buckets) are
-     built ONCE here before any job spawns (jobs only memory-map them),
-  2. galaxies are assigned to jobs by greedy LPT bin-packing on the measured
-     FR cost model cost ~ n_articles^1.93 (measured) instead of equal id counts,
-     which removes the straggler that used to set the wall time,
-  3. --jobs defaults to the machine's cpu count,
-  4. per-job walls and bin costs are recorded in <run>/parallel_meta.json and
-     folded into layout_local_meta.json by the merge step.
-Coordinates are invariant under all of the above (per-galaxy math and seeds
-are untouched); the launcher only changes WHO computes WHAT.
+run 非依存の共有事前計算:
+  1. 共有 prep 成果物(グループ済みクロスペア + 内部バケット)はジョブ spawn 前に
+     ここで1回だけ構築する(ジョブはメモリマップするだけ)、
+  2. 銀河のジョブ割当は、実測 FR コストモデル cost ~ n_articles^1.93 に対する
+     貪欲 LPT ビンパッキング(id 数の等分割ではない)。全体所要時間を決めて
+     しまうストラグラを解消する、
+  3. jobs の既定 = マシンの CPU 数、
+  4. ジョブ毎の実測所要とビンコストは <run>/parallel_meta.json へ記録し、
+     マージ段が layout_local_meta.json へ畳み込む。
+座標は上記の全てに対して不変(銀河毎の数式と seed は無変更);
+ランチャが変えるのは「誰が何を計算するか」だけ。
 
 Usage:
   python -m wu run layout_local --base data [--run <RUN>] [--set layout_local.jobs=N]
-Finishes with a scan-free merge pass (layout_local --merge-only).
+終了時は走査なしのマージパス(layout_local --merge-only)で締めくくる。
 """
 from __future__ import annotations
 
