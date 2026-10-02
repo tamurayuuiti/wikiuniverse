@@ -25,7 +25,8 @@ from wu.pipeline import config as pcfg, runner  # noqa: E402
 from wu.pipeline.stage import get  # noqa: E402
 
 CHAIN = ("parse", "edges", "stats", "categories", "dedup", "detect",
-         "subdivide", "metrics", "cluster", "export", "purity", "catalog")
+         "subdivide", "metrics", "cluster", "export", "purity", "catalog",
+         "layout_global", "layout_local")
 
 
 def main():
@@ -39,7 +40,7 @@ def main():
     cfg = pcfg.apply_overrides(pcfg.EMPTY, [
         "subdivide.min_size=3", "subdivide.max_galaxy=6",
         "subdivide.out_tag=res1_s", "catalog.top_neighbors=4",
-        "catalog.top_pairs=100",
+        "catalog.top_pairs=100", "layout_local.jobs=2",
     ])
 
     stages = [get(n) for n in CHAIN]
@@ -66,6 +67,20 @@ def main():
     assert meta["containment_violations"] == 0, meta
     assert meta["n_articles"] == 60, meta
     assert meta["n_galaxies"] > 0
+
+    # ---- 座標 run(layout_global → layout_local 並列ランチャ → マージ)
+    lay = os.path.join(BASE, "layout", "r_chain")
+    for f in ("galaxy_positions.parquet", "macro_positions.parquet",
+              "layout_meta.json", "article_positions.parquet",
+              "layout_local_meta.json", "parallel_meta.json"):
+        assert os.path.exists(os.path.join(lay, f)), f
+    import pyarrow.parquet as pq
+    apt = pq.read_table(os.path.join(lay, "article_positions.parquet")).to_pydict()
+    assert len(apt["page_id"]) == 60, len(apt["page_id"])
+    lmeta = json.load(open(os.path.join(lay, "layout_meta.json"),
+                           encoding="utf-8"))
+    assert lmeta["quality"]["galaxy_spill_count"] == 0, lmeta["quality"]
+    assert lmeta["r_expo"] == 0.5, lmeta  # 既定腕 = 従来の √n
 
     # ---- manifest: 全 12 ステージが ok で記録されている
     mans = [f for f in os.listdir(str(dirs.manifests)) if f.endswith("_chain.json")]

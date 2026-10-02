@@ -187,6 +187,20 @@ define("final.macro_pairs", "マクロ間集約重み(遠景の数本・マク�
 define("final.catalog_meta", "カタログ来歴(件数・包含チェック)",
        "product", lambda d, p: d.final / "catalog_meta.json")
 
+# ---- 座標 run(layout/<run>/。run 名は共有パラメータで解決)----
+define("layout.galaxy_positions", "銀河の中心・半径・display_class(run 別)",
+       "product", lambda d, p: d.layout_run(p["run"]) / "galaxy_positions.parquet")
+define("layout.macro_positions", "マクロの中心・半径(run 別)",
+       "product", lambda d, p: d.layout_run(p["run"]) / "macro_positions.parquet")
+define("layout.meta", "レイアウト来歴 + 品質指標 quality(run 別)",
+       "product", lambda d, p: d.layout_run(p["run"]) / "layout_meta.json")
+define("layout.article_positions", "記事座標(page_id, galaxy_id, x,y,z。マージ済み)",
+       "product", lambda d, p: d.layout_run(p["run"]) / "article_positions.parquet")
+define("layout.local_meta", "銀河内レイアウトのメタ + fr_quality(run 別)",
+       "product", lambda d, p: d.layout_run(p["run"]) / "layout_local_meta.json")
+define("layout.parallel_meta", "並列ランチャの実測テレメトリ(run 別)",
+       "intermediate", lambda d, p: d.layout_run(p["run"]) / "parallel_meta.json")
+
 # ---- 原始データ(Wikipedia ダンプ。再取得可能 = raw 分類)----
 for _k, _fn in (("page", "jawiki-latest-page.sql.gz"),
                 ("redirect", "jawiki-latest-redirect.sql.gz"),
