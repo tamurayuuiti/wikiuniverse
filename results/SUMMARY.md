@@ -373,7 +373,7 @@ display_class=medium で表示は格下げ済み)、識別子系ハブ銀河(「
 
 ## 10. 再現手順と計算時間の目安
 
-コマンドは README.md(工程別セクション)と LOCAL_SETUP.md(環境構築・データ取得・フルパイプライン・出版)が正。ダンプは `PROVENANCE.json` の SHA-256 と照合して同一性を確認できる(latest が更新されていた場合は数%のずれを許容)。Leiden は乱択性があるため **membership の完全一致は保証されない**(seed=42 固定・同一バージョンなら通常一致。指標が ±数% 以内なら再現成功)。
+コマンドは README.md(工程別セクション)と LOCAL_SETUP.md(環境構築・データ取得・フルパイプライン・出版)が正。**正準エントリは `python -m wu run <stage>|all`**(ステージレジストリ + ランナー。実行台帳は `data/manifests/`)で、README/LOCAL_SETUP 記載の `scripts/*.py` 形式は同一実体への互換ラッパ。ダンプは `PROVENANCE.json` の SHA-256 と照合して同一性を確認できる(latest が更新されていた場合は数%のずれを許容)。Leiden は乱択性があるため **membership の完全一致は保証されない**(seed=42 固定・同一バージョンなら通常一致。指標が ±数% 以内なら再現成功)。
 
 計算時間実測:
 
@@ -387,8 +387,9 @@ display_class=medium で表示は格下げ済み)、識別子系ハブ銀河(「
 | subdivide(銀河 1,535) | 同上 | 135 秒 |
 | body-edges(XML 4.7GB) | 同上 | 826 秒 |
 | categories(176MB) | 同上 | 67 秒 |
-| build_galaxy_catalog / layout_global | 同上 | 秒級 / 1.1 秒 |
-| run_local_parallel(全 1,971 銀河の記事座標) | 同上 | ~63 分(jobs 8) |
+| build_galaxy_catalog / layout_global | 同上 | 秒級 / ~1 秒 |
+| 銀河内記事座標(全 1,971 銀河、並列ランチャ) | 同上 | **~5 分**(jobs=CPU 数。事前計算共有+LPT 分割+マルチレベル FR による 12.9× 高速化後) |
+| publish(spatial/ への出版、1,971 タイル) | 同上 | ~25–32 秒 |
 
 ---
 

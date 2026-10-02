@@ -28,21 +28,36 @@ wikiuniverse/
 ├── LOCAL_SETUP.md          # 本書
 ├── PROVENANCE.json         # 基準ダンプ(2026-09-02 版)の SHA-256(完全性検証用)
 ├── requirements.txt        # Python 依存(検証バージョン準拠)
+├── configs/                # 設定(追跡ファイル = 単一の真実源)
+│   ├── canonical.json      #   正式パイプラインの正準パラメータ
+│   └── publish.json        #   出版中の正典座標 run(ACTIVE_LAYOUT_RUN の真実源)
 ├── wu/                     # 本体パッケージ(純 Python)
-│   ├── paths.py            #   ★ データ配置の単一の真実源(Dirs + ACTIVE_LAYOUT_RUN)
+│   ├── paths.py            #   ★ データ配置の単一の真実源(Dirs)
+│   ├── pipeline/           #   パイプライン基盤(成果物契約/ステージ宣言/設定/ランナー)
+│   ├── stages/             #   ステージ実体(import 順 = 正式チェーン順)
 │   ├── dumpio.py           #   ダウンロード(resume/並列)・gz ストリーム
 │   ├── sqlparse.py         #   page/linktarget/redirect 解析 → ハッシュ表(parsed/)
 │   ├── xmlparse.py         #   pages-articles XML → 本文リンク抽出(body-edges)
 │   ├── catparse.py         #   categorylinks → 記事×カテゴリ対(categories)
 │   ├── buildedges.py       #   pagelinks → 解決済みエッジ(チェックポイント resume 可)
 │   ├── stats.py            #   全グラフ次数統計・ハブ top
-│   ├── subsets.py          #   BFS / ID窓 サブセット抽出(メガハブ除外付き)
-│   ├── analysis.py         #   Leiden(igraph/leidenalg)・指標・L2 階層化
-│   ├── pipeline.py         #   エンドツーエンド解析(sweep→一次選択→hub 処理→レポート)
-│   ├── report.py           #   プロット + Markdown レポート
-│   └── cli.py              #   サブコマンド(python -m wu.cli ...)
-├── scripts/                # フルグラフ系 9 本(run_full_leiden / layout_* / catalog / export 他)
-├── tests/                  # 合成データ自己テスト 6 本(スクリプト式・synth_data/ は実行時再生成)
+│   ├── fullgraph.py        #   フルグラフ Leiden 本体(dedup/detect/subdivide/metrics/cluster/export/prune)
+│   ├── purity.py           #   カテゴリ純度(purity v2)
+│   ├── catalog.py          #   銀河カタログ生成(data/final/ 台帳 + 命名)
+│   ├── layout_global.py    #   マクロ+銀河の 3D 配置(v1.6)
+│   ├── layout_local.py     #   銀河内記事座標(セクタアンカー・rank 成層)
+│   ├── layout_parallel.py  #   記事座標の並列ランチャ(LPT 分割・テレメトリ・マージ)
+│   ├── recompose.py        #   記事座標の run 間再構成
+│   ├── publish.py          #   Viewer 公開面の生成(spatial/、SCHEMA_VERSION 付き)
+│   ├── audit_*.py          #   読み取り専用監査 3 本(tiles/names/layout)
+│   ├── subsets.py          #   [実験] BFS / ID窓 サブセット抽出
+│   ├── analysis.py         #   [実験] Leiden(igraph/leidenalg)・指標・L2 階層化
+│   ├── hubsup.py           #   [実験] ハブ抑制(次数予算剪定・メガハブ端除外)
+│   ├── subset_analysis.py  #   [実験] サブセットの端到解析(sweep→選択→レポート)
+│   ├── report.py           #   [実験] プロット + Markdown レポート
+│   └── cli.py              #   python -m wu <sub>(stages/plan/run + 旧来サブコマンド)
+├── scripts/                # 互換ラッパ(実体は wu/)+ 独立研究ツール(compare_body_vs_pagelinks)
+├── tests/                  # スクリプト式テスト 10 本 + fixture.py(共有合成データ)
 ├── viewer/                 # React+TS+three ビューア(v6)
 ├── notebooks/poc_colab.ipynb  # Colab 実行版 PoC(閲覧用)
 └── results/SUMMARY.md      # ★ 評価レポート(最新状態・テーマ別)
@@ -63,8 +78,9 @@ data/
 └── spatial/     # [成果=配信] ビューア公開面(bootstrap.json + tiles/)。URL は run 名と無縁
 ```
 
-- パスを触る改修は `wu/paths.py` の `Dirs` クラスと `ACTIVE_LAYOUT_RUN` に集約する
-  (ハードコード禁止の運用)。ファイル別の生成者/消費者/削除可否の完全版は
+- パスを触る改修は `wu/paths.py` の `Dirs` クラスと成果物レジストリ
+  (`wu/pipeline/artifacts.py`)に集約する(ハードコード禁止の運用)。
+  正典 run 名は `configs/publish.json`。ファイル別の生成者/消費者/削除可否の完全版は
   paths.py の docstring が正典。
 - community の tag 規約: `res<R>`=マクロ一括 / `res<R>_sub`=2 段階(銀河)/
   `_body`=本文リンクグラフ / `_B40` 等=剪定グラフ系。
@@ -194,43 +210,51 @@ Leiden には乱択性があるため **membership の完全一致は保証さ�
 
 ## 6. フルパイプライン → 座標出版(run 運用)
 
-§4 のグラフ構築が済んだら、以下が本番データの一本道(各コマンドの詳細と期待値は
-README の該当セクション、実測結果は results/SUMMARY.md):
+§4 のグラフ構築が済んだら、以下が本番データの一本道。**正準エントリは
+`python -m wu run`**(ステージレジストリ + ランナー。実行計画の dry-run は
+`python -m wu plan …`、契約一覧は `python -m wu stages`、実行のたびに
+`data/manifests/` へ台帳が記録される)。旧来コマンド(scripts/*.py・wu.cli)は
+互換ラッパとして同一実体へ委譲するので、どちらも使える。
 
 ```bash
-# 1) コミュニティ検出(マクロ → 銀河の 2 段階)
+# 1) コミュニティ検出(マクロ → 銀河の 2 段階)+ 純度 + 銀河カタログ
+python -m wu run dedup detect subdivide metrics cluster export purity catalog --base data
+#   tag 等の正準値はステージ定義の既定(res1 → res1_sub・max_galaxy 10000・
+#   purity v2・catalog topK)。変える場合は --set subdivide.max_galaxy=… 等で
+
+# 2) (任意) 本文リンク・剪定腕: python -m wu run body_edges / prune --set …
+
+# 3) 銀河団ラベルのキュレーション: 正典コピー(リポジトリ追跡下)は
+#    results/macro_label_overrides.json。data/final/ へコピーすると出版時に
+#    適用される。編集し直す場合はテンプレ出力 → label 編集 → data/final/ に保存 →
+#    変更を正典コピーにも反映(両方まとめてコミット)
+cp results/macro_label_overrides.json data/final/macro_label_overrides.json
+python -m wu run audit_names --base data --set audit_names.dump_macro_labels=true
+
+# 4) 座標 run の生成(マクロ+銀河 → 銀河内記事 → 出版)を新 run 名で
+python -m wu run layout_global layout_local publish --base data --run <RUN>
+#   layout_local は並列ランチャ経由(事前計算 local_prep は初回のみ数分・全 run 共用、
+#   LPT 分割の並列ジョブ → 走査なしマージ)。フルランの目安 ~5分(jobs=CPU 数)
+
+# 5) 配信とビューア
+python -m http.server 8000        # リポジトリルート(別ターミナル)
+cd viewer && npm install && npm run dev    # http://localhost:5173
+```
+
+旧来コマンド列(互換ラッパ経由。詳細と期待値は README の該当セクション、
+実測結果は results/SUMMARY.md):
+
+```bash
 python scripts/run_full_leiden.py --base data dedup
 python scripts/run_full_leiden.py --base data detect --resolutions 1.0
 python scripts/run_full_leiden.py --base data subdivide --resolution 1.0 --max-galaxy 10000
 python scripts/run_full_leiden.py --base data metrics --tag res1_sub
 python scripts/run_full_leiden.py --base data cluster --tag res1_sub
 python scripts/run_full_leiden.py --base data export  --tag res1_sub
-
-# 2) (任意) 本文リンク・カテゴリ: README「本文リンクグラフ」「カテゴリ整合性」
-
-# 3) 銀河カタログ(data/final/ = データ契約)
 python scripts/build_galaxy_catalog.py --base data --galaxy-tag res1_sub --macro-tag res1
-
-# 3b) 銀河団ラベルのキュレーション: 正典コピー(リポジトリ追跡下)は
-#     results/macro_label_overrides.json。data/final/ へコピーすると (5) の出版時に
-#     適用される。編集し直す場合はテンプレ出力 → label 編集 → data/final/ に保存 →
-#     変更を正典コピーにも反映(両方まとめてコミット)
-cp results/macro_label_overrides.json data/final/macro_label_overrides.json
-python scripts/audit_names.py --base data --dump-macro-labels   # テンプレ再生成(見直し用)
-
-# 4) 座標 run の生成(① マクロ+銀河 → ② 銀河内記事 → マージ)
-python scripts/layout_global.py      --base data --run <RUN> --macro-dim 3
-python scripts/run_local_parallel.py --base data --run <RUN>   # jobs 既定=CPU 数
-#   初回のみ共有事前計算(data/graph/local_prep/<tag>/、数分・全 run で共用)が走り、
-#   その後 LPT 分割の並列ジョブ → 走査なしマージ。フルランの目安は B0 基盤導入前で
-#   ~63分(jobs 8・2026-09-26 実測)、導入後の実測は knowledge/02 §O を更新予定
-
-# 5) 出版(spatial/ へ。ビューアは常にここを読む)
+python scripts/layout_global.py      --base data --run <RUN>
+python scripts/run_local_parallel.py --base data --run <RUN>
 python scripts/export_viewer_tiles.py --base data --run <RUN>
-
-# 6) 配信とビューア
-python -m http.server 8000        # リポジトリルート(別ターミナル)
-cd viewer && npm install && npm run dev    # http://localhost:5173
 ```
 
 ### run の命名と採用
@@ -238,14 +262,17 @@ cd viewer && npm install && npm run dev    # http://localhost:5173
 - run 名 = `data/layout/` 直下のディレクトリ名。**規約: `<YYYYMMDD>_<slug>`**
   (ASCII 小文字。日付は生成日、slug は「その run が何か」= 役割・主要パラメータ)。
   正確なパラメータと品質指標は各 run の `layout_meta.json` が正典。
-- **正典ポインタ**: `wu/paths.py` の `ACTIVE_LAYOUT_RUN`。全レイアウト系スクリプト
-  (layout_global / layout_local / run_local_parallel / export_viewer_tiles)の `--run`
+- **正典ポインタ**: `configs/publish.json` の `active_layout_run`(wu/paths.py の
+  `ACTIVE_LAYOUT_RUN` がここから読む)。全レイアウト系コマンド
+  (layout_global / layout_local / recompose / publish=export)の `--run`
   既定値であり、「いま公開中の座標」を指す。
-- 新しい座標 run を**採用**する手順: 4)→5) を新 run 名で実行 →
-  `wu/paths.py` の `ACTIVE_LAYOUT_RUN` を新 run 名に更新してコミット。
+- 新しい座標 run を**採用**する手順: 4) を新 run 名で実行 →
+  `configs/publish.json` を新 run 名に更新してコミット → `python -m wu run publish`
+  で再出版(ビューアは常に spatial/ を読むので URL は不変)。
   比較実験は run を並べるだけでよい(上書き事故が起きない)。
-- 既存 run の記事座標を再利用する場合は 4) の run_local_parallel の代わりに
-  `python scripts/recompose_articles.py --base data --from-run <旧RUN> --to-run <新RUN>`。
+- 既存 run の記事座標を再利用する場合は 4) の layout_local の代わりに
+  `python -m wu run recompose --set recompose.from_run=<旧RUN> --set recompose.to_run=<新RUN>`
+  (旧形式: `python scripts/recompose_articles.py --from-run <旧RUN> --to-run <新RUN>`)。
 - `article_shards/` と `layout_local_checkpoint.json` はマージ完了後削除してよい(キャッシュ)。
 - 退役した旧 run は `data/layout/` の外(リポジトリ直下 `archive/` など、Git 管理外の
   保管場所)へ移動すればよい。

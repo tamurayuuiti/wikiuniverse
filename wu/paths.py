@@ -20,6 +20,9 @@ separated instead of piled into one folder:
         <run>/      galaxy/macro/article positions + metas + previews
       spatial/      published viewer delivery      product, consumed over HTTP
         tiles/      per-galaxy streaming tiles
+      manifests/    runner execution ledgers       intermediate (append-only;
+                    one JSON per `wu run` invocation: stages, resolved params,
+                    timings, versions, git stamp — deletable, no effect on data)
 
 Layout run naming: `<YYYYMMDD>_<slug>` (e.g. `20260926_baseline`). The slug
 says what the run is; exact parameters and timestamps live in that run's
