@@ -82,6 +82,12 @@ def main():
     sh2 = pcfg.shared_params({"shared": {"galaxy_tag": "gt1"}}, None)
     assert sh2["galaxy_tag"] == "gt1"
 
+    # ACTIVE_LAYOUT_RUN の真実源 = configs/publish.json(コード定数から移行)
+    pub = json.load(open(os.path.join(ROOT, "configs", "publish.json"),
+                         encoding="utf-8"))
+    from wu.paths import ACTIVE_LAYOUT_RUN as ALR
+    assert pub["active_layout_run"] == ALR, (pub, ALR)
+
     # ---- 3) ダミーステージで plan/execute/skip/force/manifest を検証
     artifacts.define("test.a_out", "テスト成果物A", "intermediate",
                      lambda d, q: d.base / "test_a.txt")

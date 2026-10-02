@@ -63,11 +63,11 @@ import time
 import numpy as np
 
 
-from .dumpio import read_json, write_json  # noqa: E402
+from .dumpio import now_iso as _now, read_json, write_json  # noqa: E402,F401
 from .paths import Dirs  # noqa: E402
 from .stats import load_edges_mmap, load_titles  # noqa: E402
 
-SEED = 42
+from .analysis import SEED  # noqa: E402  # 乱数シードの単一の真実源
 SHIFT = 21  # compact idx < 2^21 = 2,097,152  (jawiki: 1,516,326 articles)
 
 
@@ -76,10 +76,6 @@ def _safe_stdout():
         sys.stdout.reconfigure(errors="replace")
     except Exception:
         pass
-
-
-def _now():
-    return datetime.datetime.now().isoformat(timespec="seconds")
 
 
 def _res_tag(res: float) -> str:
@@ -331,7 +327,7 @@ def _partition_recursive(n_local: int, edges: np.ndarray, objective: str, resolu
     return inv.astype(np.int32), info
 
 
-def cmd_subdivide(dirs: Dirs, tag: str, min_size: int = 100, max_galaxy: int = 20000,
+def cmd_subdivide(dirs: Dirs, tag: str, min_size: int = 100, max_galaxy: int = 10000,
                   sub_resolution: float = 1.0, sub_objective: str = "modularity",
                   depth: int = 4, seed: int = SEED, chunk: int = 4_000_000,
                   out_tag: str | None = None, edges_name: str | None = None):
@@ -777,7 +773,8 @@ def main():
     p.add_argument("--tag", default=None)
     p.add_argument("--edges", default=None)
     p.add_argument("--min-size", type=int, default=100)
-    p.add_argument("--max-galaxy", type=int, default=20000)
+    p.add_argument("--max-galaxy", type=int, default=10000,
+                   help="galaxy size cap (canonical operating value; was 20000)")
     p.add_argument("--sub-resolution", type=float, default=1.0)
     p.add_argument("--sub-objective", default="modularity", choices=["modularity", "CPM"])
     p.add_argument("--depth", type=int, default=4)

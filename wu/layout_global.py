@@ -94,7 +94,7 @@ import time
 import numpy as np
 
 
-from .dumpio import write_json  # noqa: E402
+from .dumpio import now_iso as _now, write_json  # noqa: E402,F401
 from .paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 
 R_TOTAL = 1000.0  # canvas scale: disk areas sum to pi*R_TOTAL^2
@@ -104,10 +104,6 @@ R_TOTAL = 1000.0  # canvas scale: disk areas sum to pi*R_TOTAL^2
 # macros would dominate the percentile with measurement artifacts; they are
 # judged against per-n isotropic nulls in scripts/audit_layout.py instead.
 FLAT_MIN_MEMBERS = 8
-
-
-def _now():
-    return datetime.datetime.now().isoformat(timespec="seconds")
 
 
 def _fib_ball_slots(count: int, radius: float, seed_off: int = 0) -> np.ndarray:

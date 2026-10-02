@@ -23,8 +23,9 @@ separated instead of piled into one folder:
 
 Layout run naming: `<YYYYMMDD>_<slug>` (e.g. `20260926_baseline`). The slug
 says what the run is; exact parameters and timestamps live in that run's
-`layout_meta.json`. `ACTIVE_LAYOUT_RUN` below names the run currently published
-to `spatial/` and is the default of every layout script.
+`layout_meta.json`. The published (canonical) run name lives in
+`configs/publish.json` (loaded into `ACTIVE_LAYOUT_RUN` below) and is the
+default of every layout command.
 
 Artifact classes (used when deciding what may be deleted):
     raw          dump/                             re-downloadable input
@@ -53,9 +54,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-# The published (canonical) layout run. Updating this one constant switches
-# every layout script and the tile export to a different data/layout/<run>/.
-ACTIVE_LAYOUT_RUN = "20261002_v16"
+# 出版中(正典)の座標 run。**真実源は configs/publish.json**(追跡ファイル。
+# 採用切替は同ファイルの編集 + commit で行う = 旧「コード定数の書き換え」から移行)。
+# このファイルは wu パッケージのどのモジュールよりも先に読まれるため、
+# json 読み込みはここで一度だけ行い、失敗時のみフォールバック定数を使う。
+def _load_active_layout_run() -> str:
+    import json as _json
+    cfg = Path(__file__).resolve().parent.parent / "configs" / "publish.json"
+    try:
+        with open(cfg, encoding="utf-8") as f:
+            v = _json.load(f).get("active_layout_run")
+        if isinstance(v, str) and v:
+            return v
+        print(f"[paths][warn] {cfg} に active_layout_run がありません"
+              f"(フォールバックを使用)", flush=True)
+    except FileNotFoundError:
+        print(f"[paths][warn] {cfg} がありません(フォールバックを使用)",
+              flush=True)
+    return "20261002_v16"
+
+
+ACTIVE_LAYOUT_RUN = _load_active_layout_run()
 
 
 @dataclass

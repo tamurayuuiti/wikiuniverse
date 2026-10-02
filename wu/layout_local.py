@@ -89,7 +89,7 @@ import time
 import numpy as np
 
 
-from .dumpio import read_json, write_json  # noqa: E402
+from .dumpio import now_iso as _now, read_json, write_json  # noqa: E402,F401
 from .paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 from .stats import load_edges_mmap  # noqa: E402
 
@@ -453,10 +453,6 @@ def _rank_quantile(v: np.ndarray) -> np.ndarray:
     q = np.empty(n)
     q[idx] = np.arange(n) / (n - 1)
     return q
-
-
-def _now():
-    return datetime.datetime.now().isoformat(timespec="seconds")
 
 
 def cmd_merge(dirs: Dirs, lay_dir: str, memb: np.ndarray, n: int, G: int):

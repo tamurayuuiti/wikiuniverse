@@ -1,0 +1,9 @@
+{
+  "_comment": [
+    "出版状態の単一の真実源。active_layout_run = data/layout/ 配下の正典 run 名で、",
+    "export(publish)と監査・レイアウト系コマンドの --run 既定値に使われる。",
+    "採用切替(run の差し替え)はこのファイルの編集 + commit で行う",
+    "(旧: wu/paths.py のコード定数。2026-10-02 に設定へ移行)。"
+  ],
+  "active_layout_run": "20261002_v16"
+}
