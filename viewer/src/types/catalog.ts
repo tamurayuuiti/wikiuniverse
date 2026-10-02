@@ -22,6 +22,7 @@ export type RawPair = [number, number, number]
 /** bootstrap.json 生フォーマット。 */
 export interface RawBootstrap {
   meta: {
+    schema_version?: number
     galaxy_tag: string
     layout_run: string
     n_articles: number

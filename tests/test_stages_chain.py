@@ -26,7 +26,7 @@ from wu.pipeline.stage import get  # noqa: E402
 
 CHAIN = ("parse", "edges", "stats", "categories", "dedup", "detect",
          "subdivide", "metrics", "cluster", "export", "purity", "catalog",
-         "layout_global", "layout_local")
+         "layout_global", "layout_local", "publish")
 
 
 def main():
@@ -81,6 +81,30 @@ def main():
                            encoding="utf-8"))
     assert lmeta["quality"]["galaxy_spill_count"] == 0, lmeta["quality"]
     assert lmeta["r_expo"] == 0.5, lmeta  # 既定腕 = 従来の √n
+
+    # ---- 公開面(publish: bootstrap + tiles + tiles_meta、契約バージョン付き)
+    sp = os.path.join(BASE, "spatial")
+    boot = json.load(open(os.path.join(sp, "bootstrap.json"), encoding="utf-8"))
+    assert boot["meta"]["layout_run"] == "r_chain", boot["meta"]
+    assert boot["meta"]["schema_version"] == 1, boot["meta"]
+    assert len(boot["galaxies"]) == meta["n_galaxies"]
+    tmeta = json.load(open(os.path.join(sp, "tiles_meta.json"),
+                           encoding="utf-8"))
+    assert tmeta["n_tiles"] == meta["n_galaxies"], tmeta
+    assert os.path.exists(os.path.join(sp, "tiles", "gal_000000.bin"))
+    # tiles_meta の総数は bin ヘッダ実測と一致する(F22 シャドーイング回帰)
+    import struct
+    sum_ne = sum_nx = 0
+    for g_i in range(meta["n_galaxies"]):
+        bf = os.path.join(sp, "tiles", f"gal_{g_i:06d}.bin")
+        if not os.path.exists(bf):
+            continue
+        with open(bf, "rb") as fh:
+            _nn, ne_i, nx_i = struct.unpack("<III", fh.read(12))
+        sum_ne += ne_i
+        sum_nx += nx_i
+    assert tmeta["internal_edges"] == sum_ne, (tmeta, sum_ne)
+    assert tmeta["cross_links"] == sum_nx, (tmeta, sum_nx)
 
     # ---- manifest: 全 12 ステージが ok で記録されている
     mans = [f for f in os.listdir(str(dirs.manifests)) if f.endswith("_chain.json")]

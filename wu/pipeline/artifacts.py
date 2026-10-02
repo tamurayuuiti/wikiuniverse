@@ -201,6 +201,14 @@ define("layout.local_meta", "銀河内レイアウトのメタ + fr_quality(run 
 define("layout.parallel_meta", "並列ランチャの実測テレメトリ(run 別)",
        "intermediate", lambda d, p: d.layout_run(p["run"]) / "parallel_meta.json")
 
+# ---- 公開面(data/spatial/。run 名と無縁の固定 URL 契約 = delivery 分類)----
+define("spatial.bootstrap", "ビューアの一括 fetch(宇宙+銀河ビューのデータ)",
+       "delivery", lambda d, p: d.spatial / "bootstrap.json")
+define("spatial.tiles", "銀河タイル(gal_XXXXXX.bin + sidecar json)のディレクトリ",
+       "delivery", lambda d, p: d.tiles)
+define("spatial.tiles_meta", "出版の集計メタ(件数・サイズ・契約バージョン)",
+       "delivery", lambda d, p: d.spatial / "tiles_meta.json")
+
 # ---- 原始データ(Wikipedia ダンプ。再取得可能 = raw 分類)----
 for _k, _fn in (("page", "jawiki-latest-page.sql.gz"),
                 ("redirect", "jawiki-latest-redirect.sql.gz"),
