@@ -4,31 +4,30 @@
 #   `local#NN` 表示の原因がデータ側(A)かビューア側 LRU(B)かを切り分ける。
 # 注意: 正準実行は python -m wu run audit_tiles(読み取り専用・再計算なし)。
 
-"""Audit the published viewer tiles (data/spatial/) — read-only, no recompute.
+"""出版済みビューアタイル(data/spatial/)の監査 - 読み取り専用・再計算なし。
 
-Purpose: the viewer falls back to the label ``local#<idx>`` whenever it cannot
-resolve an article title. That happens for two independent reasons, and this
-script separates them:
+目的: ビューアは記事タイトルを解決できないときラベル ``local#<idx>`` へ
+フォールバックする。原因は独立に 2 つあり、本スクリプトはそれらを区別する:
 
-  (A) DATA side  — the sidecar ``gal_XXXXXX.json`` is missing, unreadable, or
-      has fewer titles than the ``n`` declared in ``gal_XXXXXX.bin``. Then the
-      shortfall is padded with ``local#k`` at decode time (tileCache.padTitles).
-  (B) VIEWER side — titles are complete on disk but the tile was evicted from
-      the in-memory LRU while its points were still on screen, so hover could
-      not look the title up. This script cannot see (B); if (A) reports 0
-      missing titles yet the viewer still shows ``local#NN``, the cause is (B).
+  (A) データ側 - sidecar ``gal_XXXXXX.json`` が欠落/読めない、または
+      ``gal_XXXXXX.bin`` の宣言 ``n`` よりタイトルが少ない。この場合、
+      不足分はデコード時に ``local#k`` で補完される(tileCache.padTitles)。
+  (B) ビューア側 - ディスク上のタイトルは完全だが、タイルがメモリ内 LRU から
+      追い出された後もその点群が画面上に残っており、hover がタイトルを
+      引けなかった。本スクリプトは (B) を観測できない。(A) が欠損 0 を
+      報告してもビューアが ``local#NN`` を出すなら、原因は (B) である。
 
-Checks per galaxy tile:
-  - .bin exists and its header ``n`` matches bootstrap ``galaxies[gid][6]``
-  - .bin size matches the declared n / n_edges / n_cross
-  - .json exists, parses, and ``len(t) == n``
-  - titles are non-empty strings and none literally start with ``local#``
-  - sums: total articles, total internal edges, total cross links
+銀河タイルごとの検査:
+  - .bin が存在し、ヘッダの ``n`` が bootstrap ``galaxies[gid][6]`` と一致
+  - .bin のサイズが宣言の n / n_edges / n_cross と一致
+  - .json が存在・パース可能で、``len(t) == n``
+  - タイトルが非空文字列で、``local#`` で字面開始するものが無い
+  - 総和: 記事総数・銀河内エッジ総数・クロスのリンク総数
 
-Also prints the recorded graph totals for comparison (these live in
-results/SUMMARY.md §1 and LOCAL_SETUP.md §3; nothing is recomputed here).
+比較用に、記録済みのグラフ総量も表示する(記録値は results/SUMMARY.md §1 と
+LOCAL_SETUP.md §3 にある。本スクリプトは何も再計算しない)。
 
-Usage:
+使い方:
   python -m wu run audit_tiles --base data   (--set audit_tiles.limit=N)
 """
 from __future__ import annotations

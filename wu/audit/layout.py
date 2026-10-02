@@ -7,46 +7,41 @@
 #   正準実行は python -m wu run audit_layout(読み取り専用)。cp932 コンソール安全
 #   (出力文字は cp932 エンコード可能範囲に制限 + errors=replace 保険、テスト済み)。
 
-"""Audit a coordinate-layout run (data/layout/<run>/) — read-only, no recompute.
+"""座標レイアウト run(data/layout/<run>/)の監査 - 読み取り専用・再計算なし。
 
-Third audit script (after audit_tiles / audit_names). layout_global.py records
-quality NUMBERS in layout_meta.json but not their context; this script answers
-"which galaxies, in which surroundings" from the published parquets alone:
+audit_tiles / audit_names と並ぶ読み取り専用監査。layout_global.py は
+layout_meta.json へ品質の「数値」を記録するが文脈は記録しない。本スクリプトは
+公開済み parquet だけから「どの銀河が、どんな環境で」に答える:
 
-  1. spill list    non-dust galaxies whose sphere does not fit inside their
-                   macro sphere (d3 + r > 1.02 Rm — the same rule as
-                   quality.galaxy_spill_count), sorted by excess, with the
-                   context columns (class, sizes, r/Rm, macro scale, name)
-                   needed to tell placement-regime causes apart.
-  2. per macro     galaxy-cloud flatness (the same PCA anisotropy as
-                   quality.galaxy_flat_*, imported from layout_global so the
-                   numbers are identical) + bary_frac = the share of members
-                   placed by the centroid rule (medium galaxies + regular
-                   galaxies with zero intra-macro pairs). Each row carries a
-                   per-n ISOTROPIC NULL baseline (fixed seed): the eigenvalue
-                   ratio is heavily small-n biased (isotropic clouds measure
-                   ~0.96 at n=4), so macros with flat > null p90 are flagged
-                   (*) as real pancake candidates.
-  3. corr(flat, bary_frac)   Pearson r over macros with >= 4 members:
-                   quantifies whether disk-like macro clouds are explained by
-                   centroid-placed members piling up near the boundary in the
-                   direction of their link targets.
-  4. run summary   layout_meta params/quality cross-checked against the
-                   recomputation (the flatness cross-check follows the run's
-                   galaxy_flat_domain_min; legacy runs without the key are
-                   compared on the old n>=4 domain). Any mismatch prints a
-                   WARN (never silent — same principle as the viewer's
-                   local# fallback warning).
+  1. spill 一覧    銀河球がマクロ球に収まらない非 dust 銀河
+                   (d3 + r > 1.02 Rm - quality.galaxy_spill_count と同じ判定)。
+                   超過順にソートし、配置レジームごとの原因を区別するための
+                   文脈列(class・サイズ・r/Rm・マクロ規模・名前)を付ける。
+  2. マクロ別      銀河点群の平坦度(quality.galaxy_flat_* と同一の PCA 異方性 -
+                   layout_global から import するため数値は一致する)+
+                   bary_frac = 重心規則で配置された成員の割合(medium 銀河 +
+                   マクロ内ペア 0 の通常銀河)。各行に同成員数の等方 NULL
+                   ベースライン(固定シード)を付ける: 固有値比は強い小 n
+                   バイアスを持つ(n=4 の完全等方点群でも ~0.96 と測れる)ため、
+                   flat > null p90 のマクロを真の円盤候補として (*) 表示する。
+  3. corr(flat, bary_frac)   成員 >= 4 のマクロに対する Pearson r:
+                   円盤状のマクロ点群が「重心配置された成員がリンク先方向の
+                   境界付近に集中する」ことで説明できるかを定量化する。
+  4. run サマリ    layout_meta のパラメータ/品質を再計算値と突合する
+                   (平坦度の突合ドメインはその run の galaxy_flat_domain_min
+                   に従う。キーのない旧 run は旧ドメイン n>=4 で比較)。
+                   不一致は必ず WARN を出す(silent にしない - ビューアの
+                   local# フォールバック警告と同じ原則)。
 
-Reads: layout/<run>/{galaxy_positions,macro_positions}.parquet + layout_meta.json
-(required); final/galaxies.parquet (names), final/macros.parquet (labels) and
-final/galaxy_pairs_topK.parquet (intra-macro degrees) are OPTIONAL context —
-missing files/columns degrade with a warning, never with a KeyError.
-Writes nothing.
+読み取り: layout/<run>/{galaxy_positions,macro_positions}.parquet + layout_meta.json
+(必須)。final/galaxies.parquet(名前)・final/macros.parquet(ラベル)・
+final/galaxy_pairs_topK.parquet(マクロ内次数)は任意の文脈情報 -
+ファイル/列の欠落は警告付きで縮退し、KeyError にはしない。
+書き込みは一切行わない。
 
-Usage:
+使い方:
   python -m wu run audit_layout --base data [--run RUN]
-      # --run default = wu.paths.ACTIVE_LAYOUT_RUN
+      # --run 既定 = wu.paths.ACTIVE_LAYOUT_RUN
 """
 from __future__ import annotations
 
@@ -70,12 +65,12 @@ _NULL_CACHE: dict = {}
 
 
 def _null_flat(n: int, samples: int = 200):
-    """(mean, p90) of flatness for a PERFECTLY ISOTROPIC n-point cloud.
+    """完全等方な n 点群における平坦度の (mean, p90)。
 
-    The PCA eigenvalue ratio is heavily small-n biased (n=4 -> mean ~0.96):
-    this null is the baseline for deciding whether a macro's cloud is a real
-    pancake or just small. Fixed seed + numpy's RNG stability policy =>
-    identical numbers on any machine/run.
+    PCA 固有値比は強い小 n バイアスを持つ(n=4 -> mean ~0.96)。
+    この null は「マクロの点群が真の円盤か、単に小さいだけか」を判定する
+    ベースラインである。固定シード + numpy の RNG 安定性方針により、
+    どんなマシン/実行でも同一の数値になる。
     """
     if n not in _NULL_CACHE:
         rng = np.random.default_rng(12345)
@@ -87,15 +82,15 @@ def _null_flat(n: int, samples: int = 200):
 
 
 class RunMissing(FileNotFoundError):
-    """The run directory or its required artifacts do not exist (fail fast)."""
+    """run ディレクトリか必須の成果物が存在しない(fail-fast)。"""
 
 
 def _strings(d: dict, key: str, n: int) -> list:
-    """Defensive string-column read: a missing column or None cells become "".
+    """文字列列の防御的読み取り: 欠落列や None セルは "" として扱う。
 
-    Catalogs predating name curation have no name/rep_titles/display_class
-    columns; the audit must report, not crash (hardening lesson from the
-    fixture e2e: KeyError on a catalog without `name`).
+    名前キュレーション導入前のカタログには name/rep_titles/display_class 列が
+    無い。監査はそれに対してクラッシュせず縮退して報告する
+    (データ形式上の制約: pre-v2 カタログの許容)。
     """
     col = d.get(key)
     if col is None:
@@ -104,7 +99,7 @@ def _strings(d: dict, key: str, n: int) -> list:
 
 
 def load_run(dirs: Dirs, run: str | None) -> dict:
-    """Load one run's published artifacts. Raises RunMissing when incomplete."""
+    """1 run の公開済み成果物を読み込む。不完全な場合は RunMissing を raise する。"""
     lay = dirs.layout_run(run)
     need = ("galaxy_positions.parquet", "macro_positions.parquet",
             "layout_meta.json")
@@ -125,7 +120,7 @@ def load_run(dirs: Dirs, run: str | None) -> dict:
 
 
 def load_catalog(dirs: Dirs) -> dict:
-    """Optional data/final/ context: names, macro labels, intra-macro degrees."""
+    """data/final/ 由来の任意コンテキスト: 名前・マクロラベル・マクロ内次数。"""
     import pyarrow.parquet as pq
     cat = {"names": {}, "macro_labels": {}, "pairs": None, "warnings": []}
     gp = os.path.join(str(dirs.final), "galaxies.parquet")
@@ -157,10 +152,10 @@ def load_catalog(dirs: Dirs) -> dict:
 
 
 def audit(dirs: Dirs, run: str | None = None) -> dict:
-    """Audit one run; returns {"spill", "macros", "corr", "summary", "warnings"}.
+    """1 run を監査し、{"spill", "macros", "corr", "summary", "warnings"} を返す。
 
-    spill rows are dicts sorted by excess desc; macro rows carry flatness and
-    the centroid-placement share. Tests call this directly.
+    spill 行は超過量の降順にソートされた dict。macro 行は平坦度と
+    重心配置率を含む。テストはこの関数を直接呼ぶ。
     """
     rd = load_run(dirs, run)
     cat = load_catalog(dirs)
