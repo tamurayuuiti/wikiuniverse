@@ -68,7 +68,7 @@ def main(a):
     idf = np.log(max(1, n) / np.maximum(1, cat_freq))
 
     def seg_stats(mask_pairs: np.ndarray, use_idf: bool):
-        """Return per-community segment arrays over filtered pairs."""
+        """フィルタ済みペア上のコミュニティ別セグメント配列を返す。"""
         cm, ct = comm[mask_pairs], cat[mask_pairs]
         key = cm * K + ct
         uk, cnt = np.unique(key, return_counts=True)

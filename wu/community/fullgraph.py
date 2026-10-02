@@ -251,13 +251,14 @@ def cmd_detect(dirs: Dirs, resolutions, max_edges: int = 0, seed: int = SEED,
 # ------------------------------------------------------------------ prune --
 
 def cmd_prune(dirs: Dirs, budget: int, mode: str = "smart", seed: int = SEED):
-    """Build a layout graph: degree-budget pruning of the undirected unique graph.
+    """レイアウト用グラフの構築: 無向一意グラフの次数予算剪定。
 
-    smart mode (recommended): keep an edge if its random rank < budget at either
-    endpoint OR either endpoint has undirected degree <= budget. Preserves
-    galaxy structure (low-degree spokes) while thinning hub<->hub highways.
-    Output: graph/edges_pruned_<mode><budget>.bin
-    RAM peak: ~4-5 GB at 108M edges (full arrays + lexsort workspace).
+    smart モード(推奨): どちらかの端点でランダム順位 < budget、または
+    どちらかの端点の無向次数 <= budget ならエッジを残す。
+    銀河構造(低次数のスポーク)を保ちつつ、ハブ同士の「銀河間高速道路」だけを
+    間引く。
+    出力: graph/edges_pruned_<mode><budget>.bin
+    RAM ピーク: 108M エッジで ~4-5 GB(フル配列 + lexsort 作業領域)。
     """
     from ..experiments.hubsup import prune_edges_degree_budget
 
@@ -290,7 +291,7 @@ def cmd_prune(dirs: Dirs, budget: int, mode: str = "smart", seed: int = SEED):
 
 def _partition_recursive(n_local: int, edges: np.ndarray, objective: str, resolution: float,
                          max_size: int, depth: int, seed: int):
-    """Leiden + recursive splitting of pieces still larger than max_size."""
+    """Leiden + max_size を超える断片の再帰分割。"""
     memb, mod, q = _leiden_once(n_local, edges, objective, resolution, seed=seed)
     info = {"modularity": mod, "quality": q}
     sizes = np.bincount(memb)
@@ -318,8 +319,8 @@ def cmd_subdivide(dirs: Dirs, tag: str, min_size: int = 100, max_galaxy: int = 1
                   sub_resolution: float = 1.0, sub_objective: str = "modularity",
                   depth: int = 4, seed: int = SEED, chunk: int = 4_000_000,
                   out_tag: str | None = None, edges_name: str | None = None):
-    """Two-stage refinement: split each macro community internally until every
-    piece is <= max_galaxy nodes. Bypasses the modularity resolution limit."""
+    """2 段階分割: 各マクロコミュニティの内部を、全ての断片が
+    <= max_galaxy ノードになるまで分割する。モジュラリティの解像度限界を回避する。"""
     t0 = time.time()
     outdir = _full_dir(dirs)
     memb_path = os.path.join(outdir, f"membership_{tag}.npy")
