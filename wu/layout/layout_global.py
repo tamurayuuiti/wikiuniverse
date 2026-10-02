@@ -485,7 +485,7 @@ addEventListener('resize', () => {
 
 def write_html_preview(path, g_centers, g_radius, gal_colors, dust_mask,
                        m_centers, R_m, eff_m, labels, mode_tag, info):
-    """gal_colors: hex color per galaxy index (already curated)."""
+    """gal_colors: 銀河 index 毎の hex 色(キュレーション済み)。"""
     garr = []
     for i in np.flatnonzero(~dust_mask):
         garr.append([round(float(g_centers[i, 0]), 2), round(float(g_centers[i, 1]), 2),

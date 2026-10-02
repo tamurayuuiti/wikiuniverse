@@ -1,7 +1,7 @@
-"""Streaming parsers for Wikimedia SQL dumps -> compact numpy/parquet artifacts.
+"""Wikimedia SQL ダンプのストリーミングパーサ -> コンパクトな numpy/parquet 成果物。
 
-All string titles are hashed with blake2b(digest_size=8) so that joins can be
-done with sorted-array searchsorted instead of giant python dicts (low RAM).
+文字列タイトルはすべて blake2b(digest_size=8) でハッシュ化し、join は巨大な
+Python dict ではなくソート済み配列の searchsorted で行う(低 RAM)。
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def unescape(s: bytes) -> bytes:
 
 
 def h64(title: bytes) -> int:
-    """Deterministic 64-bit hash of a (canonical, underscore-separated) title."""
+    """(正規化された=アンダースコア区切りの)タイトルの決定的な 64bit ハッシュ。"""
     v = int.from_bytes(blake2b(title, digest_size=8).digest(), "big")
     return v if v != 0 else 1  # 0 is the 'missing' sentinel
 
@@ -43,7 +43,7 @@ def h64(title: bytes) -> int:
 # --------------------------------------------------------------- growlist ---
 
 class GrowArr:
-    """Append-only int array with geometric growth (avoids python-list memory)."""
+    """幾何成長の追記専用 int 配列(Python リストのメモリオーバーヘッドを回避)。"""
 
     def __init__(self, dtype=np.int64, cap=1 << 16):
         self.dtype = np.dtype(dtype)
@@ -74,10 +74,10 @@ PAGE_RE = re.compile(rb"\((\d+),(-?\d+),'((?:[^'\\]|\\.)*)',(\d+)")
 
 
 def build_page_artifacts(page_gz: str, parsed_dir: str, meta_path: str, chunk_bytes=1 << 24):
-    """Parse page.sql.gz ->
-      articles.parquet        : page_id, title(str)  (ns0, non-redirect), sorted by page_id
-      ns0_all_hashes.npz      : sorted hashes + page_ids of ALL ns0 pages (articles+redirects)
-      article_ids.npy         : sorted page_ids of ns0 non-redirect articles (int64)
+    """page.sql.gz の解析 ->
+      articles.parquet        : page_id, title(str)(ns0・非リダイレクト)、page_id 順ソート
+      ns0_all_hashes.npz      : 全 ns0 ページ(記事+リダイレクト)のソート済みハッシュ + page_id
+      article_ids.npy         : ns0 非リダイレクト記事のソート済み page_id(int64)
     """
     os.makedirs(parsed_dir, exist_ok=True)
     t0 = time.time()
@@ -165,8 +165,8 @@ LT_RE = re.compile(rb"\((\d+),(-?\d+),'((?:[^'\\]|\\.)*)'")
 
 
 def build_linktarget_artifacts(lt_gz: str, parsed_dir: str, meta_path: str, chunk_bytes=1 << 24):
-    """Parse linktarget.sql.gz -> lt_hash_ns0.npy : dense int64 array indexed by lt_id
-    holding blake2b64(lt_title) for ns0 targets, 0 for missing/non-ns0."""
+    """linktarget.sql.gz の解析 -> lt_hash_ns0.npy: lt_id で索引される dense int64 配列。
+    ns0 ターゲットは blake2b64(lt_title)、欠落/非 ns0 は 0 を保持する。"""
     t0 = time.time()
     ids = GrowArr(np.int64)
     hashes = GrowArr(np.uint64)
@@ -204,10 +204,10 @@ RD_RE = re.compile(rb"\((\d+),(-?\d+),'((?:[^'\\]|\\.)*)','((?:[^'\\]|\\.)*)'")
 
 
 def build_redirect_artifacts(rd_gz: str, parsed_dir: str, meta_path: str, chunk_bytes=1 << 24):
-    """Parse redirect.sql.gz -> rd_map.npz {rd_from(sorted int64), rd_final(int64 page_id, 0=dangling)}
+    """redirect.sql.gz の解析 -> rd_map.npz {rd_from(ソート済み int64), rd_final(int64 page_id, 0=宙づり)}
 
-    Targets are resolved against the ns0 hash table; chains are chased up to 10 hops.
-    Final targets that are not articles (missing/redirect-loop) become 0.
+    ターゲットは ns0 ハッシュ表に対して解決する。チェーンは最大 10 hop まで
+    追跡する。最終ターゲットが記事でない場合(欠落/リダイレクトループ)は 0 になる。
     """
     z = np.load(os.path.join(parsed_dir, "ns0_all_hashes.npz"))
     all_h, all_pid = z["hashes"], z["page_ids"]

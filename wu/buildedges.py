@@ -1,19 +1,19 @@
-"""Stream pagelinks.sql.gz -> resolved ns0 article->article edge list (int32 binary).
+"""pagelinks.sql.gz のストリーム解析 -> 解決済み ns0 記事->記事エッジリスト(int32 バイナリ)。
 
-Schema (2026 dumps): pagelinks(pl_from, pl_from_namespace, pl_target_id)
+スキーマ(2026 ダンプ): pagelinks(pl_from, pl_from_namespace, pl_target_id)
   pl_target_id -> linktarget(lt_id, lt_namespace, lt_title)
 
-Resolution pipeline (fully vectorized per chunk):
-  1. keep rows with pl_from_namespace == 0
-  2. drop rows whose pl_from is a redirect page (redirect pages are not nodes)
-  3. lt_id -> blake2b64(title) via dense array (0 = non-ns0 / missing)
-  4. hash -> page_id via searchsorted on sorted ns0-all hash table (miss = red link)
-  5. redirect targets resolved via rd_map (dangling -> dropped)
-  6. drop self loops; require src to be a non-redirect article
-  7. append (src, dst) int32 pairs to edges_ns0.bin
+解決パイプライン(チャンク毎に完全ベクトル化):
+  1. pl_from_namespace == 0 の行を残す
+  2. pl_from がリダイレクトページの行を落とす(リダイレクトはノードではない)
+  3. lt_id -> blake2b64(title)(dense 配列経由。0 = 非 ns0/欠落)
+  4. hash -> page_id(ソート済み ns0-all ハッシュ表の searchsorted。miss = 赤リンク)
+  5. リダイレクト先は rd_map で解決(宙づり -> 除去)
+  6. セルフループを除去。src は非リダイレクト記事であることを要求
+  7. (src, dst) int32 ペアを edges_ns0.bin へ追記
 
-Checkpointed: (decompressed offset, rows seen) persisted so an interrupted run
-can resume by fast-forwarding the gzip stream.
+チェックポイント付き: (解凍後オフセット, 既読行数)が永続化されるため、
+中断した実行は gzip ストリームの高速送りから再開できる。
 """
 from __future__ import annotations
 

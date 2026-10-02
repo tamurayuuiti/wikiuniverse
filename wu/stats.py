@@ -1,7 +1,7 @@
-"""Full-graph statistics computed with memmap + chunked passes (low RAM).
+"""memmap + チャンクパスで計算するフルグラフ統計(低 RAM)。
 
-Layout policy: reads graph/edges_ns0.bin + parsed/article_ids.npy,
-writes graph/indeg.npy, graph/outdeg.npy, graph/full_stats.json.
+入出力ポリシー: graph/edges_ns0.bin + parsed/article_ids.npy を読み、
+graph/indeg.npy、graph/outdeg.npy、graph/full_stats.json を書き出す。
 """
 from __future__ import annotations
 

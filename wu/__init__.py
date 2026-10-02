@@ -1,8 +1,8 @@
-"""wikiuniverse (wu): PoC toolkit for jawiki article-graph community analysis.
+"""wikiuniverse (wu): jawiki 記事グラフのコミュニティ解析 PoC ツールキット。
 
-Design constraints:
-- Low RAM (streaming parsers, memmap, sorted-array joins via searchsorted).
-- Deterministic (fixed seeds, blake2b64 title hashes, recorded metadata).
-- Artifacts on disk: parquet / npy / raw int32 binary edge lists.
+設計上の制約:
+- 低 RAM(ストリーミングパーサ、memmap、searchsorted によるソート済み配列 join)。
+- 決定性(固定シード、blake2b64 タイトルハッシュ、メタデータの記録)。
+- 成果物はディスク上: parquet / npy / 生 int32 バイナリのエッジリスト。
 """
 __version__ = "0.1.0"
