@@ -42,8 +42,8 @@ python -m wu run all --config configs/canonical.json \
 - **実験(腕)の作法**: 同じ入力 → `--set`/`--config` でパラメータだけ変える →
   別 run/別 tag の生成物 → メタ比較。ビット同一が要求される既定腕
   (例: `layout_global.r_expo=0.5`、`layout_local.fr_mode` の ml 既定)は回帰テストが担保する。
-- 以降の各セクションのコマンド(`python scripts/….py` 形式と旧 `wu.cli` サブコマンド)は
-  **互換ラッパとして引き続き動作する**(実体は同一の wu/ モジュール)。
+- 以降の各セクションのコマンドはすべて canonical 形式(`python -m wu run <stage>` と、
+  ステージ化していない研究/実験コマンド `python -m wu <sub>`)。
   GUI 等の将来の別インターフェースもランナー API(plan/execute)へ直接接続できる。
 
 
@@ -76,33 +76,35 @@ wikiuniverse/
 │   │   ├── layout.py      #   layout_global / layout_local(並列ランチャ経由)/ recompose
 │   │   ├── publish.py     #   publish(data/spatial/ への出版)
 │   │   └── audit.py       #   audit_tiles / audit_names / audit_layout(読み取り専用)
-│   ├── dumpio.py          # ダウンロード(resume/並列)、gz ストリーム、json I/O
+│   ├── dumpio.py          # ダウンロード(resume/並列)、gz ストリーム、json I/O、now_iso
 │   ├── sqlparse.py        # page/linktarget/redirect のストリーミング解析 → parsed/
-│   ├── xmlparse.py        # pages-articles XML → 本文 [[リンク]] 抽出(body-edges)
+│   ├── xmlparse.py        # pages-articles XML → 本文 [[リンク]] 抽出(body_edges)
 │   ├── catparse.py        # categorylinks → 記事×カテゴリ対(categories)
 │   ├── buildedges.py      # pagelinks → 解決済み ns0 エッジ(ベクトル化 join、チェックポイント)
 │   ├── stats.py           # 全グラフ次数統計・ハブ検出(チャンク bincount)
-│   ├── fullgraph.py       # フルグラフ Leiden の処理本体(cmd_dedup/detect/subdivide/
-│   │                      #   metrics/cluster/export/prune。旧 run_full_leiden.py)
-│   ├── purity.py          # カテゴリ純度(purity v2)の処理本体
-│   ├── catalog.py         # 銀河カタログ生成の処理本体(data/final/ 台帳 + 命名)
-│   ├── layout_global.py   # マクロ+銀河の 3D 配置(v1.6: spill 構造保証・cone 散布)
-│   ├── layout_local.py    # 銀河内記事座標(セクタアンカー・rank 成層・local_prep 共有)
-│   ├── layout_parallel.py # 記事座標の並列ランチャ(LPT 分割・テレメトリ・走査なしマージ)
-│   ├── recompose.py       # 記事座標の run 間再構成
 │   ├── publish.py         # Viewer 公開面の生成(bootstrap + tiles、SCHEMA_VERSION 付き)
-│   ├── audit_tiles.py     # [検査] 公開面の整合(読み取り専用)
-│   ├── audit_names.py     # [検査] 命名内訳 + ラベルテンプレ(読み取り専用)
-│   ├── audit_layout.py    # [検査] 座標 run の spill/平坦度/重心配置率(読み取り専用)
-│   ├── subsets.py         # [実験] ID窓 / BFS サブセット抽出(第1期研究系)
-│   ├── analysis.py        # [実験] Leiden(igraph/leidenalg)、指標、ハブ、L2 階層化
-│   ├── hubsup.py          # [実験] ハブ抑制(次数予算剪定・メガハブ端除外)
-│   ├── subset_analysis.py # [実験] 1 サブセットの端到解析(sweep→選択→レポート)
-│   ├── report.py          # [実験] プロット(matplotlib)+ Markdown レポート
-│   └── cli.py             # python -m wu <sub>(stages/plan/run + 旧来サブコマンド)
-├── scripts/               # 互換ラッパ(実体は wu/ へ移設済み。旧来のコマンド行は
-│                          #   そのまま動作する)+ 独立研究ツール 1 本
-│   └── compare_body_vs_pagelinks.py  # [実験] 本文次数 vs pagelinks 次数の対比較
+│   ├── community/         # コミュニティ検出と銀河カタログの実装本体
+│   │   ├── fullgraph.py   #   フルグラフ Leiden(cmd_dedup/detect/subdivide/metrics/
+│   │   │                  #   cluster/export/prune。ステージが参数付きで委譲)
+│   │   ├── analysis.py    #   Leiden エンジンと指標の共有ライブラリ(igraph/leidenalg)
+│   │   ├── purity.py      #   カテゴリ純度(purity v2)
+│   │   └── catalog.py     #   銀河/マクロ台帳 + 命名キュレーション(data/final/)
+│   ├── layout/            # 座標生成の実装本体
+│   │   ├── layout_global.py # マクロ+銀河の 3D 配置(spill 構造保証・cone 散布)
+│   │   ├── layout_local.py # 銀河内記事座標(モジュール CLI = バッチ/job-spec/preview)
+│   │   ├── parallel.py    #   並列ランチャ(LPT 分割・テレメトリ・走査なしマージ)
+│   │   └── recompose.py   #   記事座標の run 間再構成
+│   ├── audit/             # 読み取り専用監査(再計算なし・書き込みなし)
+│   │   ├── tiles.py       #   公開面の整合
+│   │   ├── names.py       #   命名内訳 + ラベルテンプレ
+│   │   └── layout.py      #   座標 run の spill/平坦度/重心配置率
+│   ├── experiments/       # 研究・実験系(canonical チェーン外)
+│   │   ├── subsets.py     #   ID窓 / BFS サブセット抽出(第1期研究系)
+│   │   ├── subset_analysis.py # 1 サブセットの端到解析(sweep→選択→レポート)
+│   │   ├── hubsup.py      #   ハブ抑制(次数予算剪定・メガハブ端除外)
+│   │   ├── report.py      #   プロット(matplotlib)+ Markdown レポート
+│   │   └── compare_body_vs_pagelinks.py # 本文次数 vs pagelinks 次数の対比較
+│   └── cli.py             # python -m wu <sub>(stages/plan/run + subset-id/subset-bfs/analyze)
 ├── tests/                 # スクリプト式テスト 10 本(ネットワーク不要。synth_data/ は
 │                          #   実行時再生成。役割分担は各ファイルの docstring 参照)
 │   ├── fixture.py               # 共有 fixture ビルダー(60 記事の偽ダンプ)
@@ -156,19 +158,19 @@ pip install -r requirements.txt   # numpy scipy pandas pyarrow matplotlib igraph
 
 BASE=data   # 作業ディレクトリ(dump ~1.2GB + edges ~1.2GB が生成される)
 
-python3 -m wu.cli --base $BASE download --files page,redirect,linktarget,pagelinks  # ~1.13GB
-python3 -m wu.cli --base $BASE parse --dump-date 2026-09-02
-python3 -m wu.cli --base $BASE edges          # ~4分 (2vCPU) → edges_ns0.bin (1.14GB)
-python3 -m wu.cli --base $BASE stats          # 全グラフ次数・ハブ統計
+python3 -m wu --base $BASE run download       # 既定4種 ~1.13GB(追加: --set download.files=…)
+python3 -m wu --base $BASE run parse --set parse.dump_date=2026-09-02
+python3 -m wu --base $BASE run edges          # ~4分 (2vCPU) → edges_ns0.bin (1.14GB)
+python3 -m wu --base $BASE run stats          # 全グラフ次数・ハブ統計
 
 # サブセット(例: 地理系 BFS 10万ノード)
-python3 -m wu.cli --base $BASE subset-bfs \
+python3 -m wu --base $BASE subset-bfs \
   --seeds "東京都,大阪府,京都府,北海道,福岡県,愛知県,宮城県,広島県,新潟県,長野県,日本の地理,市町村" \
   --max-nodes 100000 --cap 60 --hops 4 --max-in-degree 10000 --name bfs_geo_100k
 
 # 解析(Leiden スイープ → 指標 → ハブ → L2 階層 → レポート)
 # 既定出力先: data/community/<subset名>(--out-dir で変更可)
-python3 -m wu.cli --base $BASE analyze --subset bfs_geo_100k \
+python3 -m wu --base $BASE analyze --subset bfs_geo_100k \
   --resolutions 0.5,1.0,2.0 --engine igraph
 
 # レイアウト用グラフ実験
@@ -179,41 +181,44 @@ python3 -m wu.cli --base $BASE analyze --subset bfs_geo_100k \
 
 ## 全グラフ Leiden(全 1.45M ノードのコミュニティ分割 → 銀河/銀河団)
 
-`scripts/run_full_leiden.py`(工程別サブコマンド制、各段階がディスクに保存され再開可能):
+`python -m wu run <stage>`(工程別ステージ制、各段階がディスクに保存され再開可能。
+tag/run 等は共通フラグ(`--galaxy-tag` 等)、ステージ固有値は `--set <stage>.<key>=<値>`):
 
 ```bash
 # 0) スモーク(数分): 先頭 500 万エッジで動作確認 → 本番前に membership_res*.npy を削除するか --force
-python scripts/run_full_leiden.py --base data dedup
-python scripts/run_full_leiden.py --base data detect --resolutions 1.0 --max-edges 5000000 --force
+python -m wu run dedup
+python -m wu run detect --set detect.max_edges=5000000 --set detect.force=true
 
 # 1) 無向一意化: 142.4M 有向 → 108.2M 無向一意(~4-6分、RAM ピーク ~4-5GB)
-python scripts/run_full_leiden.py --base data dedup
+python -m wu run dedup
 
 # 2) 検出: igraph ネイティブ Leiden(グラフ構築 ~6-10分 + res ごと ~2-45分、RSS ~7-9GB)
 #    複数 resolution は 1 回の起動でまとめて実行(グラフ構築を共有)
-python scripts/run_full_leiden.py --base data detect --resolutions 0.5,1.0,2.0
+python -m wu run detect --set detect.resolutions=0.5,1.0,2.0
 
 # 3) 2 段階分割(本流): 一括 Leiden はモジュラリティ解像度限界(√2m ≈ 1.5万ノード未満を
 #    分解不能)とハブ支配により「数十個のマクロコミュニティ + 孤立ノード」になる。
 #    → subdivide(マクロコミュニティ内の誘導部分グラフで Leiden を再帰実行)で
 #      銀河サイズ(数百〜1万ノード)まで分割する。
-python scripts/run_full_leiden.py --base data subdivide --resolution 1.0 --max-galaxy 10000
+python -m wu run subdivide   # 既定: tag=res1 → out_tag=res1_sub、max_galaxy=10000
 
 # 4) 指標(チャンク方式、~3-6分)→ 5) L2 銀河団クラスタリング(~1分)→ 6) エクスポート
-python scripts/run_full_leiden.py --base data metrics --tag res1_sub
-python scripts/run_full_leiden.py --base data cluster --tag res1_sub
-python scripts/run_full_leiden.py --base data export  --tag res1_sub
-# (一括分割のまま評価したい場合: metrics/cluster/export --resolution 1.0)
+python -m wu run metrics cluster export --galaxy-tag res1_sub
+# (一括分割のまま評価したい場合: --galaxy-tag res1)
 
 # レイアウト用グラフ(次数予算剪定)の構築と交差評価
-python scripts/run_full_leiden.py --base data prune --budget 40 --mode smart   # ~53% 辺保持、RAM ~4-5GB
+python -m wu run prune   # 既定 budget=40 mode=smart。~53% 辺保持、RAM ~4-5GB
 #   既存の分割を剪定グラフ上で評価(分割はそのまま、評価グラフだけ差し替え):
-python scripts/run_full_leiden.py --base data metrics --tag res1_sub --edges edges_pruned_smart40.bin --label res1_sub_B40
+python -m wu run metrics --galaxy-tag res1_sub \
+    --set metrics.edges_name=edges_pruned_smart40.bin --set metrics.label=res1_sub_B40
 #   剪定グラフで分割そのものを作り直す場合:
-python scripts/run_full_leiden.py --base data detect --resolutions 1.0 --edges edges_pruned_smart40.bin --suffix _B40 --force
-python scripts/run_full_leiden.py --base data subdivide --tag res1_B40 --edges edges_pruned_smart40.bin --max-galaxy 10000
-python scripts/run_full_leiden.py --base data metrics --tag res1_B40_sub --edges edges_pruned_smart40.bin
-python scripts/run_full_leiden.py --base data cluster --tag res1_B40_sub
+python -m wu run detect --set detect.edges_name=edges_pruned_smart40.bin \
+    --set detect.suffix=_B40 --set detect.force=true
+python -m wu run subdivide --set subdivide.tag=res1_B40 \
+    --set subdivide.out_tag=res1_B40_sub --set subdivide.edges_name=edges_pruned_smart40.bin
+python -m wu run metrics --set metrics.tag=res1_B40_sub \
+    --set metrics.edges_name=edges_pruned_smart40.bin
+python -m wu run cluster --set cluster.tag=res1_B40_sub
 ```
 
 出力は `data/community/full/`:
@@ -236,23 +241,23 @@ pagelinks 表はトランスクルード(ナビボックス等)由来リンク�
 記事自身の wikitext 内の [[リンク]] のみから「真の記事グラフ」を構築する:
 
 ```bash
-python -m wu.cli --base data download --files pages-articles   # 4.7GB(resume 対応)
-python -m wu.cli --base data body-edges                        # ~15-25分、checkpoint resume 対応
-#   派生実験: --strip-refs(引用内リンクも除去)/ --limit-pages N(スモーク)
+python -m wu run download --set download.files=pages-articles   # 4.7GB(resume 対応)
+python -m wu run body_edges                        # ~15-25分、checkpoint resume 対応
+#   派生実験: --set body_edges.strip_refs=true(引用内リンクも除去)/
+#             --set body_edges.limit_pages=N(スモーク)
 #   再実行したい場合は graph/body_checkpoint.json を削除
 
-python scripts/run_full_leiden.py --base data dedup --edges-in edges_body_directed.bin \
-    --out-name edges_body_undirected.bin --meta-name dedup_body_meta.json
-python scripts/run_full_leiden.py --base data detect --resolutions 1.0 \
-    --edges edges_body_undirected.bin --suffix _body --force
-python scripts/run_full_leiden.py --base data subdivide --tag res1_body \
-    --edges edges_body_undirected.bin --max-galaxy 10000
-python scripts/run_full_leiden.py --base data metrics --tag res1_body_sub --edges edges_body_undirected.bin
-python scripts/run_full_leiden.py --base data cluster --tag res1_body_sub
-python scripts/run_full_leiden.py --base data export  --tag res1_body_sub
+python -m wu run dedup --set dedup.edges_in=edges_body_directed.bin \
+    --set dedup.out_name=edges_body_undirected.bin --set dedup.meta_name=dedup_body_meta.json
+python -m wu run detect --set detect.edges_name=edges_body_undirected.bin \
+    --set detect.suffix=_body --set detect.force=true
+python -m wu run subdivide --set subdivide.tag=res1_body \
+    --set subdivide.out_tag=res1_body_sub --set subdivide.edges_name=edges_body_undirected.bin
+python -m wu run metrics cluster export --galaxy-tag res1_body_sub \
+    --set metrics.edges_name=edges_body_undirected.bin
 
 # pagelinks 次数 vs 本文次数の対比較(テンプレート膨張率の定量)
-python scripts/compare_body_vs_pagelinks.py --base data
+python -m wu.experiments.compare_body_vs_pagelinks --base data
 #   部分 XML で検証した場合は --max-pid 114794 を付ける
 ```
 
@@ -267,14 +272,14 @@ python scripts/compare_body_vs_pagelinks.py --base data
 純度(top1_share)が高いほど「銀河の名前」をカテゴリから自動付与できる。
 
 ```bash
-python -m wu.cli --base data download --files categorylinks   # 176MB
-python -m wu.cli --base data categories                        # ~1-2分
+python -m wu run download --set download.files=categorylinks   # 176MB
+python -m wu run categories                        # ~1-2分
 #   → graph/categories.parquet + graph/article_categories.bin
 
-python scripts/community_purity.py --base data --tag res1_sub        # 生グラフ銀河の純度
-python scripts/community_purity.py --base data --tag res1_body_sub   # 本文グラフ銀河の純度
+python -m wu run purity --galaxy-tag res1_sub        # 生グラフ銀河の純度
+python -m wu run purity --galaxy-tag res1_body_sub   # 本文グラフ銀河の純度
 #   → community/full/purity_<tag>.parquet / purity_<tag>.json + コンソール表
-#   --max-cat-freq 20000(既定)でメタカテゴリ(すべてのスタブ記事/存命人物/
+#   --set purity.max_cat_freq=20000(既定)でメタカテゴリ(すべてのスタブ記事/存命人物/
 #       ウィキデータ座標 等)を命名から除外し、tf-idf で name 列を生成(purity v2)
 ```
 
@@ -287,7 +292,7 @@ python scripts/community_purity.py --base data --tag res1_body_sub   # 本文グ
 台帳を一括生成する:
 
 ```bash
-python scripts/build_galaxy_catalog.py --base data --galaxy-tag res1_sub --macro-tag res1
+python -m wu run catalog --galaxy-tag res1_sub --macro-tag res1
 #   → data/final/galaxies.parquet        銀河台帳(macro_id, n_articles, e_in/out, out_ratio,
 #                                         is_dust, name(カテゴリ名。スタブ等の保守サフィックスは
 #                                         語幹正規化 → results/SUMMARY.md §7.1), rep_titles,
@@ -306,21 +311,21 @@ python scripts/build_galaxy_catalog.py --base data --galaxy-tag res1_sub --macro
 銀河カタログから階層レイアウトを生成する(上位コミュニティ配置 → 下位配置 → 座標合成):
 
 ```bash
-python scripts/layout_global.py --base data --run <RUN> --pack 0.6 --seed 42
+python -m wu run layout_global --run <RUN>   # pack=0.6 / seed=42 は既定値
 #   <RUN> = data/layout/<run>/ の名前(規約 <YYYYMMDD>_<slug>。省略時は
 #   configs/publish.json の正典 run)。run の採用手順は LOCAL_SETUP.md §6
 #   正準 = 完全 3D(既定のまま): マクロ 3D 球パッキング + 銀河の 3D 球緩和/クランプ。
 #   焼き込みレンズは無い — 地図/hybrid ビューは視聴時の z 圧縮(ビューアのスライダー)で
-#   行う(D17)。実験腕: --macro-dim 2 / --macro-z-squash <1 / --macro-w-power >1
-#   --r-spacing 1.5(銀河半径フロア r>=1.5*n^(1/3)、小銀河の記事詰まり防止)
+#   行う。実験腕: --set layout_global.macro_dim=2 / macro_z_squash=<1 /
+#   macro_w_power>1。r_spacing 既定 1.5(銀河半径フロア r>=1.5*n^(1/3)、小銀河の記事詰まり防止)
 #   → data/layout/<run>/galaxy_positions.parquet  (galaxy_id, macro_id, x,y,z, radius, display_class)
 #   → data/layout/<run>/macro_positions.parquet   (マクロの中心と半径)
 #   → data/layout/<run>/layout_meta.json / preview.png / preview_*.html
 ```
 
-アルゴリズム(階層レイアウト v1.5、**正準方針 = 完全 3D**):
-①マクロ配置(既定 `--macro-dim 3`)= 3D 球パッキング(macro_pairs 重み付き FR + 球分離緩和、
-重なり ≤2%)。`--macro-w-power τ` は FR 引力の重み温度(w^τ。1.0=中立、>1 で強いリンクの
+アルゴリズム(階層レイアウト、**正準方針 = 完全 3D**):
+①マクロ配置(既定 `macro_dim=3`)= 3D 球パッキング(macro_pairs 重み付き FR + 球分離緩和、
+重なり ≤2%)。`macro_w_power`(τ)は FR 引力の重み温度(w^τ。1.0=中立、>1 で強いリンクの
 近接を強調)。**hybrid/地図ビューはレイアウトではなく視点パラメータ**: プレビュー/ビューアの
 z-compress スライダー(1.0=純 3D ↔ 0.05=ほぼ地図)が視聴時に z を圧縮する(xy 不変なので
 俯瞰は同一、レイアウト焼き直し不要)。
@@ -335,7 +340,7 @@ z-compress スライダー(1.0=純 3D ↔ 0.05=ほぼ地図)が視聴時に z �
 でマクロ球に収める(完全一致点は決定的方向で分離される)。半径はマクロ R_M ∝ √記事数、
 銀河 r_g = max(pack·R_M·√(n_g/n_M), r_spacing·n_g^(1/3))、体積キャップ (Σr³)^(1/3) ≤ 0.9·R_M。
 ③**媒介銀河(display_class=medium)も同じ重心規則(円錐内散布を含む)**で配置し
-(「銀河間物質」が橋渡しの相手に面した位置に来る = D16 の特別描画の座標側裏付け)、
+(「銀河間物質」が橋渡しの相手に面した位置に来る = 特別描画方針の座標側裏付け)、
 通常銀河からの押し出し緩和で重なりを解く。
 ④dust は遠方シェル(フィボナッチ球面)。品質は `layout_meta.json` の `quality`:
 `macro_native_overlap_frac`(配置次元でのマクロ重なり)、`macro_proj_overlap`
@@ -347,12 +352,12 @@ z-compress スライダー(1.0=純 3D ↔ 0.05=ほぼ地図)が視聴時に z �
 `galaxy_flat_mean`/`galaxy_flat_p90`(マクロ毎の銀河点群の PCA 異方性: ≈1=円盤状。
 円盤化の客観指標。**成員 8 個以上のマクロのみ**がドメイン — それ以下は等方的な配置でも
 高く測られる固有値比の小nバイアスがあるため(等方 null: n=4 で mean ≈0.96)。小マクロは
-`scripts/audit_layout.py` の同成員数等方ベースライン対比(`*` = 真の円盤候補)で判定する)、`macro_adj_recall_top5`・`macro_adj_spearman`
+`python -m wu run audit_layout` の同成員数等方ベースライン対比(`*` = 真の円盤候補)で判定する)、`macro_adj_recall_top5`・`macro_adj_spearman`
 (マクロ配置の意味的近接の保持度: リンク強さ上位の隣接が空間的にも近いか /
 重みと空間距離の順位相関、負=強いリンクほど近い)。比較実行は `--run <name>` で
 別ディレクトリへ。preview.png(4 パネル: xy/xz/yz/深度カラー)+ **preview_macro*.html**
 (three.js・OrbitControls・z-compress スライダー、データ埋め込み)。1,971 銀河 + 63 マクロなら ~2 秒。
-spill の文脈と平坦度の要因の監査は `scripts/audit_layout.py`(読み取り専用・再計算なし):
+spill の文脈と平坦度の要因の監査は `python -m wu run audit_layout`(読み取り専用・再計算なし):
 超過順の spill 一覧(r/Rm・マクロ規模・銀河名などの文脈列付き)、マクロ毎の平坦度 +
 重心配置率(medium + 孤立銀河の成員比)+ **同成員数の等方ベースライン対比**
 (固定シード。flat > null p90 のマクロは「真の円盤候補」として `*` 表示)、
@@ -363,27 +368,27 @@ spill の文脈と平坦度の要因の監査は `scripts/audit_layout.py`(読�
 ## 銀河内部ローカルレイアウト(記事座標)
 
 銀河ごとに**完全に独立したジョブ**(境界を跨ぐ依存がないためバッチ分割・並列・resume が可能)。
-B0 基盤(2026-09-30): **run 非依存の重計算を tag 毎に1回だけ事前計算**して全 run・全ジョブで
+共有事前計算: **run 非依存の重計算を tag 毎に1回だけ事前計算**して全 run・全ジョブで
 mmap 共有する(`data/graph/local_prep/<tag>/`: 内部エッジのバケット、(記事, 隣接銀河)の
 **グループ済みクロスペアと多重度**、記事毎の外部次数 = 中間生成物・削除自由・`--prep` で再構築)。
-run 依存のアンカー方向だけ実行毎に数秒で再構築(bincount 蓄積 = 旧 add.at と数学的に同一)。
+run 依存のアンカー方向だけ実行毎に数秒で再構築(bincount 蓄積 = per-edge add.at と数学的に同一)。
 **座標はジョブ割当・並列度に依存しない**(銀河毎の数式と seed は不変。回帰テストで
 逐次分割と LPT 並列のビット一致を保証)。
 
 ```bash
-python scripts/run_local_parallel.py --base data --run <RUN>   # 推奨: 全銀河を並列
+python -m wu run layout_local --base data --run <RUN>   # 推奨: 全銀河を並列
 #   前提: 同名 run の galaxy_positions.parquet が存在すること(先の layout_global で
-#   生成。無い場合は両スクリプトが再実行コマンドを示して即終了 = fail-fast)。
+#   生成。無い場合はどちらの経路も再実行コマンドを示して即終了 = fail-fast)。
 #   **新しい run 名を使う際は必ず layout_global を先に実行する**
-#   腕フラグ(--fr-mode flat / --ml-threshold / --ml-niter)は全ジョブへパススルーされる
-#   --jobs 既定 = CPU 数。prep を1回実行してから LPT(コスト ~ n^1.93、02 §O 実測)で
+#   腕パラメータ(--set layout_local.fr_mode=flat / ml_threshold / ml_niter)は全ジョブへ
+#   パススルーされる。jobs 既定 = CPU 数。prep を1回実行してから LPT(コスト ~ n^1.93 実測)で
 #   銀河をジョブへビンパッキング(ストラグラ解消)、終了後 --merge-only で走査なしマージ。
 #   ジョブ割当は <run>/parallel_jobs/job_*.gids.txt(キャッシュ)、実測テレメトリは
 #   <run>/parallel_meta.json → layout_local_meta.json の parallel に畳み込み
 #   進捗: 並列実行中は 10 秒毎に集約行([parallel] progress done/total %・elapsed・eta)
 #   を表示。ジョブ毎の stdout は <run>/parallel_jobs/job_*.log、銀河毎の所要時間は
 #   job_*.meta.json から parallel_meta.json の per_galaxy_secs へ集約される
-python scripts/layout_local.py --base data --run <RUN> --galaxies all   # 逐次(単一プロセス)
+python -m wu.layout.layout_local --base data --run <RUN> --galaxies all   # 逐次(単一プロセス)
 # バッチ分割例: --galaxies 0-499 / --galaxies 500-1499 (resume 対応、checkpoint 記録)
 #   --prep = 事前計算のみ / --merge-only = シャードからマージのみ(走査なし)
 #   → data/layout/<run>/article_shards/gal_XXXXXX.npy (銀河毎・マージ後は削除可)
@@ -397,21 +402,21 @@ python scripts/layout_local.py --base data --run <RUN> --galaxies all   # 逐次
 galaxy_positions 由来。「銀河 = アンカー制約付きレイアウト単位」(results/SUMMARY.md §9 の
 確定条件)の実装そのもの。
 
-内部 FR は **マルチレベル初期化**(2026-09-30): n ≥ `--ml-threshold`(既定 2000)の銀河は
+内部 FR は **マルチレベル初期化**: n ≥ `ml_threshold`(既定 2000)の銀河は
 Louvain 縮約 → クラスタ図の重み付き FR → 成員座標へ展開+決定的 jitter を **FR の初期座標**
-(`seed`)として `--ml-niter`(既定 100)で refine する。FR コストは n^1.93 × niter に比例する
-(02 §O)ため、良初期座標に反復を費やす方が平坦アニールより速く・局所構造も保たれる
+(`seed`)として `ml_niter`(既定 100)で refine する。FR コストは n^1.93 × niter に比例する
+ため、良初期座標に反復を費やす方が平坦アニールより速く・局所構造も保たれる
 (サンドボックス実測 n=2,500: **4.7× 高速かつ隣接再現率も向上**)。閾値未満の銀河は
-旧来の flat パスに完全一致(`--fr-mode flat` で全体も再現 = 比較腕)。
-アンカーバネは **セクタアンカー(B1)**: 記事毎にクロスリンクが最も多い**優勢隣接銀河**
+単一レベルの flat パスに完全一致(`--set layout_local.fr_mode=flat` で全体も再現 = 比較腕)。
+アンカーバネは **セクタアンカー**: 記事毎にクロスリンクが最も多い**優勢隣接銀河**
 を方向に採用(2位が1位の半重量以上なら2方向をブレンド)、バネの強さは**確信度**
 =blend した隣接への重量シェアに比例(リンクが分散した記事は内部に留まる)。
-旧「全クロスリンクの単位ベクトル総和」は逆向きリンクの相殺問題のため
-`--anchor-mode sum` の再現腕へ退避。半径方向は **rank 成層(B2)**: 外部次数の
+「全クロスリンクの単位ベクトル総和」方式は逆向きリンクの相殺問題のため
+`--set layout_local.anchor_mode=sum` の比較腕として保持。半径方向は **rank 成層**: 外部次数の
 銀河内ランク分位 q_ext に対し target = R*(0.35+0.65*q_ext)(スケールフリー、
-旧 /20 固定飽和の代替)+ 内部次数 q_int>0.9 かつ低外部のハブは tgt_r×0.6 で**コア**へ。
-FR 正規化は **ロバスト(B2-a)**: 重心引き算 + scale=p98 + 外れ値の球面クランプ
-(旧 max-norm は孤立記事1点にスケールを支配されていた = 02 §O-6)。
+/20 固定飽和の置き換え)+ 内部次数 q_int>0.9 かつ低外部のハブは tgt_r×0.6 で**コア**へ。
+FR 正規化は **ロバスト**: 重心引き算 + scale=p98 + 外れ値の球面クランプ
+(素の max-norm は孤立記事1点にスケールを支配される = `--set layout_local.fr_norm=max` 比較腕)。
 品質は run 毎に `fr_quality` へ自動記録(単一プロセス= `layout_local_meta.json`、
 並列= ジョブ別集計を `parallel_meta.json` 経由で畳み込み): `adj_recall_mean`
 (サンプル記事のグラフ近傍が空間近傍に再現される率)/ `edge_len_cv`(バネ長の分散)/
@@ -423,11 +428,12 @@ FR 正規化は **ロバスト(B2-a)**: 重心引き算 + scale=p98 + 外れ値�
 座標 run を公開面(`data/spatial/`)へ出版し、ビューアを起動する:
 
 ```bash
-python scripts/export_viewer_tiles.py --base data    # --run 既定 = 正典 run(configs/publish.json)
+python -m wu run publish --base data    # --run 既定 = 正典 run(configs/publish.json)
 #   銀河団ラベル = rep_titles 先頭 16 文字。data/final/macro_label_overrides.json
 #   (手動キュレーション・任意)があれば非空 label が優先される。キュレーション表の
 #   正典コピーは results/macro_label_overrides.json(data/final/ へコピーして使う)。
-#   テンプレ再生成(見直し用): python scripts/audit_names.py --base data --dump-macro-labels
+#   テンプレ再生成(見直し用): python -m wu run audit_names --base data
+#       --set audit_names.dump_macro_labels=true
 python -m http.server 8000                           # リポジトリルートで起動(/data を配信)
 
 cd viewer && npm install
@@ -464,13 +470,13 @@ npm run dev        # http://localhost:5173 (vite proxy が /data を :8000 へ)
   (5 桁スケール対応)。銀河ハブ星・銀河名ラベル(top42、距離 LOD α)・マクロ二層グロー。
 - **カメラ**: OrbitControls 慣性(damping 0.075)、wheel=乗算ドリー(対数ズーム)、
   銀河クリック=r·5 へ、マクロクリック=r·2.4 へ、検索/ランダム=連続ジャンプ。
-- **タイル契約**(export_viewer_tiles.py と固定): bin = header u32×3 + pos f32 n×3 +
+- **タイル契約**(wu/publish.py と固定): bin = header u32×3 + pos f32 n×3 +
   edges u32 ne×2 + cross u32 nx×3、全配列 rank 順。sidecar json = タイトル(rank 順)。
   deg はクライアント算出。z スライダはキャッシュタイルの z を in-place 再構成
   (gz=マクロ z アンカー、zBase=canonical コピー)。
   タイトル解決は sidecar json(正)→ 浮上エントリ保持の参照(タイルが LRU 追い出し
   されても hover 名を維持)→ `local#NN`(最後のフォールバック = データ欠落か版ズレの
-  兆候。`scripts/audit_tiles.py` で計測)。点群は geometry が pos を参照保持するため
+  兆候。`python -m wu run audit_tiles` で計測)。点群は geometry が pos を参照保持するため
   タイル喪失後も描画され続ける → 浮上中銀河は `pinTiles` で追い出しから保護する。
 
 ## 指標定義(評価レポート共通)
@@ -521,7 +527,7 @@ out_ratio・conductance・サイズの分布、コミュニティ間エッジ to
 - 必要に応じてコンポーネント名・関数名・技術用語を使用する。
 - **開発過程由来の符丁(内部のバッチ名・方針番号・事象番号など、リポジトリ単体で
   読めない語)はコミットコメントに入れない**。変更内容そのものを読み手だけで
-  理解できる語で書く(2026-09-30 ユーザー方針)。
+  理解できる語で書く(ユーザー方針)。
 - 簡潔・客観的な日本語とし、既存のコミット履歴と同程度の粒度・文体を維持する。
 
 ## 既知の注意点

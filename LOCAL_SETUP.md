@@ -41,22 +41,13 @@ wikiuniverse/
 │   ├── catparse.py         #   categorylinks → 記事×カテゴリ対(categories)
 │   ├── buildedges.py       #   pagelinks → 解決済みエッジ(チェックポイント resume 可)
 │   ├── stats.py            #   全グラフ次数統計・ハブ top
-│   ├── fullgraph.py        #   フルグラフ Leiden 本体(dedup/detect/subdivide/metrics/cluster/export/prune)
-│   ├── purity.py           #   カテゴリ純度(purity v2)
-│   ├── catalog.py          #   銀河カタログ生成(data/final/ 台帳 + 命名)
-│   ├── layout_global.py    #   マクロ+銀河の 3D 配置(v1.6)
-│   ├── layout_local.py     #   銀河内記事座標(セクタアンカー・rank 成層)
-│   ├── layout_parallel.py  #   記事座標の並列ランチャ(LPT 分割・テレメトリ・マージ)
-│   ├── recompose.py        #   記事座標の run 間再構成
 │   ├── publish.py          #   Viewer 公開面の生成(spatial/、SCHEMA_VERSION 付き)
-│   ├── audit_*.py          #   読み取り専用監査 3 本(tiles/names/layout)
-│   ├── subsets.py          #   [実験] BFS / ID窓 サブセット抽出
-│   ├── analysis.py         #   [実験] Leiden(igraph/leidenalg)・指標・L2 階層化
-│   ├── hubsup.py           #   [実験] ハブ抑制(次数予算剪定・メガハブ端除外)
-│   ├── subset_analysis.py  #   [実験] サブセットの端到解析(sweep→選択→レポート)
-│   ├── report.py           #   [実験] プロット + Markdown レポート
-│   └── cli.py              #   python -m wu <sub>(stages/plan/run + 旧来サブコマンド)
-├── scripts/                # 互換ラッパ(実体は wu/)+ 独立研究ツール(compare_body_vs_pagelinks)
+│   ├── community/          #   コミュニティ検出+カタログ本体(fullgraph/analysis/purity/catalog)
+│   ├── layout/             #   座標生成本体(layout_global/layout_local/parallel/recompose)
+│   ├── audit/              #   読み取り専用監査 3 本(tiles/names/layout)
+│   ├── experiments/        #   [実験] サブセット抽出・端到解析・ハブ抑制・レポート・
+│   │                       #   本文次数比較ツール(canonical チェーン外)
+│   └── cli.py              #   python -m wu <sub>(stages/plan/run + subset-id/subset-bfs/analyze)
 ├── tests/                  # スクリプト式テスト 10 本 + fixture.py(共有合成データ)
 ├── viewer/                 # React+TS+three ビューア(v6)
 ├── notebooks/poc_colab.ipynb  # Colab 実行版 PoC(閲覧用)
@@ -122,7 +113,7 @@ python tests/test_catalog.py      # カタログ→レイアウト→タイル�
 
 ```bash
 cd wikiuniverse
-python -m wu.cli --base data download --files page,redirect,linktarget,pagelinks
+python -m wu --base data run download   # 既定4種(追加: --set download.files=…)
 # → data/dump/ に 4 ファイル(~1.13GB)。中断しても再実行で続きから取得。
 ```
 
@@ -164,13 +155,13 @@ sha256sum data/dump/*.gz   # Windows: certutil -hashfile <file> SHA256
 cd wikiuniverse
 
 # (1) ページ/リダイレクト/linktarget 解析 → data/parsed/(合計 ~1分)
-python -m wu.cli --base data parse --dump-date 2026-09-02
+python -m wu --base data run parse --set parse.dump_date=2026-09-02
 
 # (2) pagelinks 全行ストリーム解析 → data/graph/edges_ns0.bin(~2-5分)
-python -m wu.cli --base data edges
+python -m wu --base data run edges
 
 # (3) 全グラフ統計(~1分)
-python -m wu.cli --base data stats
+python -m wu --base data run stats
 ```
 
 ### 検証値(2026-09-02 版ダンプなら完全一致するはず)
@@ -194,11 +185,11 @@ python -m wu.cli --base data stats
 README「使い方(サブセット解析)」の通り `subset-bfs` → `analyze`。代表例(地理系 100k):
 
 ```bash
-python -m wu.cli --base data subset-bfs \
+python -m wu --base data subset-bfs \
   --seeds "東京都,大阪府,京都府,北海道,福岡県,愛知県,宮城県,広島県,新潟県,長野県,日本の地理,市町村" \
   --max-nodes 100000 --cap 60 --hops 4 --max-in-degree 10000 --name bfs_geo_100k
 
-python -m wu.cli --base data analyze --subset bfs_geo_100k \
+python -m wu --base data analyze --subset bfs_geo_100k \
   --resolutions 0.5,1.0,2.0 --engine igraph
 # 出力先: data/community/bfs_geo_100k/(--out-dir で変更可。場所はどこでもよい)
 ```
@@ -213,8 +204,8 @@ Leiden には乱択性があるため **membership の完全一致は保証さ�
 §4 のグラフ構築が済んだら、以下が本番データの一本道。**正準エントリは
 `python -m wu run`**(ステージレジストリ + ランナー。実行計画の dry-run は
 `python -m wu plan …`、契約一覧は `python -m wu stages`、実行のたびに
-`data/manifests/` へ台帳が記録される)。旧来コマンド(scripts/*.py・wu.cli)は
-互換ラッパとして同一実体へ委譲するので、どちらも使える。
+`data/manifests/` へ台帳が記録される)。実行経路はこれに一本化されている
+(バッチ分割・preview 等の細粒度操作だけモジュール CLI `python -m wu.layout.layout_local`)。
 
 ```bash
 # 1) コミュニティ検出(マクロ → 銀河の 2 段階)+ 純度 + 銀河カタログ
@@ -241,22 +232,6 @@ python -m http.server 8000        # リポジトリルート(別ターミナル)
 cd viewer && npm install && npm run dev    # http://localhost:5173
 ```
 
-旧来コマンド列(互換ラッパ経由。詳細と期待値は README の該当セクション、
-実測結果は results/SUMMARY.md):
-
-```bash
-python scripts/run_full_leiden.py --base data dedup
-python scripts/run_full_leiden.py --base data detect --resolutions 1.0
-python scripts/run_full_leiden.py --base data subdivide --resolution 1.0 --max-galaxy 10000
-python scripts/run_full_leiden.py --base data metrics --tag res1_sub
-python scripts/run_full_leiden.py --base data cluster --tag res1_sub
-python scripts/run_full_leiden.py --base data export  --tag res1_sub
-python scripts/build_galaxy_catalog.py --base data --galaxy-tag res1_sub --macro-tag res1
-python scripts/layout_global.py      --base data --run <RUN>
-python scripts/run_local_parallel.py --base data --run <RUN>
-python scripts/export_viewer_tiles.py --base data --run <RUN>
-```
-
 ### run の命名と採用
 
 - run 名 = `data/layout/` 直下のディレクトリ名。**規約: `<YYYYMMDD>_<slug>`**
@@ -272,7 +247,7 @@ python scripts/export_viewer_tiles.py --base data --run <RUN>
   比較実験は run を並べるだけでよい(上書き事故が起きない)。
 - 既存 run の記事座標を再利用する場合は 4) の layout_local の代わりに
   `python -m wu run recompose --set recompose.from_run=<旧RUN> --set recompose.to_run=<新RUN>`
-  (旧形式: `python scripts/recompose_articles.py --from-run <旧RUN> --to-run <新RUN>`)。
+  (`--set recompose.from_run=<旧RUN> --set recompose.to_run=<新RUN>`)。
 - `article_shards/` と `layout_local_checkpoint.json` はマージ完了後削除してよい(キャッシュ)。
 - 退役した旧 run は `data/layout/` の外(リポジトリ直下 `archive/` など、Git 管理外の
   保管場所)へ移動すればよい。
@@ -289,7 +264,7 @@ python scripts/export_viewer_tiles.py --base data --run <RUN>
 | Windows で RSS が高止まり | `malloc_trim` 不在のため。WSL2 なら Linux と同挙動 |
 | 数値が検証値と微妙に違う | ダンプが更新されている可能性(§3 の SHA-256 確認) |
 | ビューアがデータを取得できない | リポジトリルートで `python -m http.server 8000` が起動しているか(vite proxy の転送先)。file:// 直オープンは CORS で不可 |
-| 星の hover 名が `local#NN` になる | 記事が無いのではなく**タイトルが引けていない**状態。①`python scripts/audit_tiles.py --base data` でサイドカー(`spatial/tiles/gal_*.json`)の欠落・不足を計測(欠落があれば `export_viewer_tiles.py` を再実行)②データ側が 0 件ならビューア側のタイル LRU 追い出しが原因(浮上中銀河は `pinTiles` で保護・`Entry.titles` 参照で hover 名をキャッシュ状態から独立させ済み。DevTools の `[tile N] サイドカー…` 警告で判別) |
-| 銀河名が「〜のスタブ」等のまま | 保守サフィックスは語幹正規化済み(`build_galaxy_catalog.py` の `_stem_name`)。`python scripts/audit_names.py --base data` で再計測し、残存パターンがあれば `MAINT_SUFFIX_RE` か `NAME_BLACKLIST` に追加 → catalog + export 再実行(再 Leiden/再レイアウト不要) |
-| 銀河団ラベルが「ISBN」「地理座標系」等ハブ記事名になる | 既定導出(rep_titles 先頭 16 文字)の限界。リポジトリ同梱のキュレーション表(正典)`results/macro_label_overrides.json` を `data/final/` へコピー → `export_viewer_tiles.py` 再実行(§6 の 3b)。編集し直す場合: `python scripts/audit_names.py --base data --dump-macro-labels` → `final/macro_label_overrides.template.json` の label を編集 → `final/macro_label_overrides.json` として保存(正典コピーへの反映も忘れずに) |
-| 銀河団が平坦(円盤状)に見える / `layout_meta.json` の `galaxy_spill_count > 0` | `python scripts/audit_layout.py --base data --run <RUN>` で計測する(読み取り専用・再計算なし): ①spill 一覧(超過順、r/Rm・マクロ規模・銀河名などの文脈列付き)②マクロ毎の平坦度 + 重心配置率(medium + 孤立銀河の成員比)③両者の相関(円盤化 = 重心配置銀河の境界付近への集中という仮説の定量検証)。`layout_meta.json` の quality 数値と突合し、不一致は警告する |
+| 星の hover 名が `local#NN` になる | 記事が無いのではなく**タイトルが引けていない**状態。①`python -m wu run audit_tiles --base data` でサイドカー(`spatial/tiles/gal_*.json`)の欠落・不足を計測(欠落があれば `python -m wu run publish` を再実行)②データ側が 0 件ならビューア側のタイル LRU 追い出しが原因(浮上中銀河は `pinTiles` で保護・`Entry.titles` 参照で hover 名をキャッシュ状態から独立させ済み。DevTools の `[tile N] サイドカー…` 警告で判別) |
+| 銀河名が「〜のスタブ」等のまま | 保守サフィックスは語幹正規化済み(`wu/community/catalog.py` の `_stem_name`)。`python -m wu run audit_names --base data` で再計測し、残存パターンがあれば `MAINT_SUFFIX_RE` か `NAME_BLACKLIST` に追加 → `python -m wu run catalog publish` 再実行(再 Leiden/再レイアウト不要) |
+| 銀河団ラベルが「ISBN」「地理座標系」等ハブ記事名になる | 既定導出(rep_titles 先頭 16 文字)の限界。リポジトリ同梱のキュレーション表(正典)`results/macro_label_overrides.json` を `data/final/` へコピー → `python -m wu run publish` 再実行(§6 の 3b)。編集し直す場合: `python -m wu run audit_names --base data --set audit_names.dump_macro_labels=true` → `final/macro_label_overrides.template.json` の label を編集 → `final/macro_label_overrides.json` として保存(正典コピーへの反映も忘れずに) |
+| 銀河団が平坦(円盤状)に見える / `layout_meta.json` の `galaxy_spill_count > 0` | `python -m wu run audit_layout --base data --run <RUN>` で計測する(読み取り専用・再計算なし): ①spill 一覧(超過順、r/Rm・マクロ規模・銀河名などの文脈列付き)②マクロ毎の平坦度 + 重心配置率(medium + 孤立銀河の成員比)③両者の相関(円盤化 = 重心配置銀河の境界付近への集中という仮説の定量検証)。`layout_meta.json` の quality 数値と突合し、不一致は警告する |

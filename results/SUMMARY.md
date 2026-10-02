@@ -211,7 +211,7 @@ modularity(igraph, geo100k): res0.5=**0.649** / res1.0=0.578 / res2.0=0.512(mixe
 `wu/xmlparse.py` + CLI `body-edges`: pages-articles XML から記事自身の wikitext 内の [[リンク]] のみを抽出(トランスクルード由来はソースに含まれないため自動除去)。コメント/nowiki/includeonly 除去、`--strip-refs` オプション、別名/アンカー/ucfirst/ns prefix/リダイレクト解決/記事内 dedupe 対応、チェックポイント resume 付き。dedup は `--edges-in/--out-name` で汎用化。合成 XML テスト(tests/test_bodylinks.py)全経路パス。
 
 部分検証(pages-articles1 = pageID 1–114,794 の最古記事群 403MB、生存者バイアス強):
-59,617 記事 → **7,890,263 本文エッジ**、193 秒(~280 pages/s)。同一記事の pagelinks 次数 vs 本文次数の対比較(`scripts/compare_body_vs_pagelinks.py`、~44k 記事)で膨張比 p50 ×1.42 / p90 ×4.67 / p99 ×17.0、Pearson 0.84 / Spearman 0.80。top 膨張(化学に関する記事の一覧、扇千景 ×7.4、アメトーーク! ×5.0 等)が**トランスクルード navbox =「銀河間高速道路」の正体**であることを実証。
+59,617 記事 → **7,890,263 本文エッジ**、193 秒(~280 pages/s)。同一記事の pagelinks 次数 vs 本文次数の対比較(`wu/experiments/compare_body_vs_pagelinks.py`、~44k 記事)で膨張比 p50 ×1.42 / p90 ×4.67 / p99 ×17.0、Pearson 0.84 / Spearman 0.80。top 膨張(化学に関する記事の一覧、扇千景 ×7.4、アメトーーク! ×5.0 等)が**トランスクルード navbox =「銀河間高速道路」の正体**であることを実証。
 
 ### 6.2 フルラン実測(XML 4.7GB、DL 56分 + 処理 ~25分)
 
@@ -283,7 +283,7 @@ modularity(igraph, geo100k): res0.5=**0.649** / res1.0=0.578 / res2.0=0.512(mixe
 `data/final/macro_label_overrides.json`(`{"macros":[{"macro_id":N,"label":"..."}]}`、
 空 label は無視)を `export_viewer_tiles.py` が出版時に優先適用する。
 編集用テンプレート(マクロごとのサイズ・既定ラベル・所属銀河名 top5 付き)は
-`python scripts/audit_names.py --base data --dump-macro-labels` が
+`python -m wu run audit_names --base data --set audit_names.dump_macro_labels=true` が
 `final/macro_label_overrides.template.json` に出力する(実効マクロのみ・サイズ降順)。
 キュレーション表の**正典コピー**はリポジトリ追跡下の `results/macro_label_overrides.json`
 (実行時は `data/final/` へコピーして使う)。キュレーションの内訳: 実効 63 マクロのうち
@@ -318,7 +318,7 @@ display_class=medium で表示は格下げ済み)、識別子系ハブ銀河(「
 5 銀河 5 記事)は実害がないため対象外。**銀河名の一意性制約は無い**
 (例: 「地理座標系の一覧」が複数銀河に付きうる。識別は galaxy_id と位置で行う)。
 
-保守ラベル混入の再計測は `python scripts/audit_names.py --base data`
+保守ラベル混入の再計測は `python -m wu run audit_names --base data`
 (語幹正規化後、スタブ系のヒットは **0 件が期待値**。残存があれば `_stem_name` の
 `MAINT_SUFFIX_RE` がカバーしていないパターン)。名前だけを変えたい場合は
 `build_galaxy_catalog.py` → `export_viewer_tiles.py` の再実行で足り、
@@ -332,7 +332,7 @@ display_class=medium で表示は格下げ済み)、識別子系ハブ銀河(「
 
 **グローバルレイアウト(layout_global.py、正準方針 = 完全 3D)**: ①マクロ配置 = 3D 球パッキング(macro_pairs 重み付き FR + 球分離緩和)→ ②マクロ内銀河の 3D 配置(連結銀河 = 重み付き FR、孤立・媒介銀河 = リンク先の重み付き重心 + 隣接マクロ方向の円錐内散布、球緩和 + 無条件の包含クランプ)→ ③dust 遠方シェル。計算 **~1 秒**(1,971 銀河 + 63 マクロ)。地図風ビューはレイアウトではなく**視点側 z 圧縮**(プレビュー HTML のスライダー)で実現する。
 
-**正典 run(`wu/paths.py` の `ACTIVE_LAYOUT_RUN` = `20261002_v16`)の品質**(`layout_meta.json`): macro_native_overlap_frac **0.0** / galaxy_spill_count **0**(包含クランプの無条件適用 + 体積キャップによる構造保証。はみ出し発生時は `galaxy_spill_ids` に gid が記録される)/ macro_proj_overlap(射影重なり)= top_z 0.359 / side_x 0.473 / random_mean 0.337。射影重なりが高いことは「3D 配置を 2D に潰すと必ず重なる」= 3D 正準・視点側圧縮方針の根拠。spill の文脈・マクロ毎の平坦度(同成員数の等方ベースライン対比付き)は `scripts/audit_layout.py`(読み取り専用)で計測する。
+**正典 run(`configs/publish.json` の `ACTIVE_LAYOUT_RUN` = `20261002_v16`)の品質**(`layout_meta.json`): macro_native_overlap_frac **0.0** / galaxy_spill_count **0**(包含クランプの無条件適用 + 体積キャップによる構造保証。はみ出し発生時は `galaxy_spill_ids` に gid が記録される)/ macro_proj_overlap(射影重なり)= top_z 0.359 / side_x 0.473 / random_mean 0.337。射影重なりが高いことは「3D 配置を 2D に潰すと必ず重なる」= 3D 正準・視点側圧縮方針の根拠。spill の文脈・マクロ毎の平坦度(同成員数の等方ベースライン対比付き)は `python -m wu run audit_layout`(読み取り専用)で計測する。
 
 **銀河内記事座標(layout_local.py / run_local_parallel.py)**: 銀河ごとに完全独立なジョブ(並列フルラン **~5 分**: タグ共有の事前計算 + 最長ジョブ優先の分割 + 大銀河のマルチレベル FR 初期化。座標はジョブ割当に依存せずビット一致)。力モデル = igraph FR(3D)の形状 + セクタアンカーバネ(記事は優勢隣接銀河の方向へ。2 位隣接のブレンド付き、強さ = 確信度)+ rank 成層(外部次数の銀河内分位で半径目標、内部ハブはコアへ)+ 弾性 prior + ボール内クランプ、FR 正規化はロバスト(重心引き算 + p98 スケール)。§6.3 の「アンカー制約付きレイアウト単位」の実装そのもの。
 
@@ -373,7 +373,7 @@ display_class=medium で表示は格下げ済み)、識別子系ハブ銀河(「
 
 ## 10. 再現手順と計算時間の目安
 
-コマンドは README.md(工程別セクション)と LOCAL_SETUP.md(環境構築・データ取得・フルパイプライン・出版)が正。**正準エントリは `python -m wu run <stage>|all`**(ステージレジストリ + ランナー。実行台帳は `data/manifests/`)で、README/LOCAL_SETUP 記載の `scripts/*.py` 形式は同一実体への互換ラッパ。ダンプは `PROVENANCE.json` の SHA-256 と照合して同一性を確認できる(latest が更新されていた場合は数%のずれを許容)。Leiden は乱択性があるため **membership の完全一致は保証されない**(seed=42 固定・同一バージョンなら通常一致。指標が ±数% 以内なら再現成功)。
+コマンドは README.md(工程別セクション)と LOCAL_SETUP.md(環境構築・データ取得・フルパイプライン・出版)が正。**正準エントリは `python -m wu run <stage>|all`**(ステージレジストリ + ランナー。実行台帳は `data/manifests/`)。バッチ分割・preview 等の細粒度操作はモジュール CLI(`python -m wu.layout.layout_local`)。ダンプは `PROVENANCE.json` の SHA-256 と照合して同一性を確認できる(latest が更新されていた場合は数%のずれを許容)。Leiden は乱択性があるため **membership の完全一致は保証されない**(seed=42 固定・同一バージョンなら通常一致。指標が ±数% 以内なら再現成功)。
 
 計算時間実測:
 
