@@ -1,4 +1,4 @@
-# wu/catalog.py — 銀河カタログの生成(data/final/ = レイアウト・ビューアのデータ契約)
+# wu/community/catalog.py — 銀河カタログの生成(data/final/ = レイアウト・ビューアのデータ契約)
 #
 # 責務:
 # - 既存成果物(membership/pairs/per_community/purity/clusters)から、表示とレイアウトが

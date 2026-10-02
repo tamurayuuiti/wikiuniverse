@@ -1,4 +1,4 @@
-# wu/subset_analysis.py — サブセットのエンドツーエンド解析(第1期の実験系)
+# wu/experiments/subset_analysis.py — サブセットのエンドツーエンド解析(第1期の実験系)
 #
 # 責務:
 # - 1 つのサブセット(graph/subsets/<name>/)に対して Leiden の resolution スイープ

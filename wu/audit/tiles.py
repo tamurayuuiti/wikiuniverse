@@ -1,4 +1,4 @@
-# wu/audit_tiles.py — 公開面(data/spatial/)の整合監査(読み取り専用・再計算なし)
+# wu/audit/tiles.py — 公開面(data/spatial/)の整合監査(読み取り専用・再計算なし)
 #
 # 責務: タイル bin/サイドカー json の欠落・サイズ/件数不一致・タイトル欠落を計測し、
 #   `local#NN` 表示の原因がデータ側(A)かビューア側 LRU(B)かを切り分ける。

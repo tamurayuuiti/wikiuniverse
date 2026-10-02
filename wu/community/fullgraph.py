@@ -1,4 +1,4 @@
-# wu/fullgraph.py — フルグラフのコミュニティ検出(マクロ → 銀河の 2 段階 Leiden)
+# wu/community/fullgraph.py — フルグラフのコミュニティ検出(マクロ → 銀河の 2 段階 Leiden)
 #
 # 責務:
 # - 全グラフ(jawiki ns0 全体)のコミュニティ検出パイプラインの処理本体:

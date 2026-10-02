@@ -1,4 +1,4 @@
-# wu/recompose.py — 記事座標の run 間再構成(再レイアウトなしの移植)
+# wu/layout/recompose.py — 記事座標の run 間再構成(再レイアウトなしの移植)
 #
 # 責務:
 # - グローバル配置だけが変わった新 run へ、既存 run の記事座標を

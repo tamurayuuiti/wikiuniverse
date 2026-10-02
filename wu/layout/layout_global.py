@@ -1,4 +1,4 @@
-# wu/layout_global.py — グローバル階層レイアウト(マクロ=銀河団 + 銀河の 3D 配置)
+# wu/layout/layout_global.py — グローバル階層レイアウト(マクロ=銀河団 + 銀河の 3D 配置)
 #
 # 責務:
 # - 銀河カタログ(data/final/)から宇宙の空間配置を生成する:

@@ -1,10 +1,10 @@
-# wu/hubsup.py — ハブ抑制ユーティリティ(次数予算剪定・メガハブ端の除外)
+# wu/experiments/hubsup.py — ハブ抑制ユーティリティ(次数予算剪定・メガハブ端の除外)
 #
 # 責務:
 # - レイアウト用グラフのハブ抑制 2 手法を提供する:
 #   prune_edges_degree_budget(smart/both 次数予算剪定 = 決定 D8)と
 #   filter_edges_by_hub(フルグラフ次数キャップによるメガハブ端の除外)。
-# - 利用元: サブセット解析(wu/subset_analysis.py)とフルグラフ剪定
+# - 利用元: サブセット解析(wu/experiments/subset_analysis.py)とフルグラフ剪定
 #   (python -m wu run prune)。
 #
 # 注意:

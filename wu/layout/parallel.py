@@ -1,4 +1,4 @@
-# wu/layout_parallel.py — 銀河内レイアウトの並列ランチャ(LPT 分割 + 集約マージ)
+# wu/layout/parallel.py — 銀河内レイアウトの並列ランチャ(LPT 分割 + 集約マージ)
 #
 # 責務:
 # - layout_local を全銀河に対して N 並列の subprocess で実行する:

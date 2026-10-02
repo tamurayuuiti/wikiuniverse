@@ -1,4 +1,4 @@
-# wu/purity.py — カテゴリ純度の計算(purity v2: tf-idf 命名・メタカテゴリ除外)
+# wu/community/purity.py — カテゴリ純度の計算(purity v2: tf-idf 命名・メタカテゴリ除外)
 #
 # 責務:
 # - リンク由来コミュニティ(銀河)がカテゴリ=主題とどれだけ一致するかを定量し、
