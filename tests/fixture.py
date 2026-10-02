@@ -9,8 +9,8 @@
 # 注意:
 # - synth_data/ は実行時に再生成される gitignore 対象の生成物。テストは先頭で
 #   rmtree → build_fixtures して使う(実行間の状態を持ち越さない)。
-# - 旧 test_synthetic.py からの抽出(2026-10-02、テスト再編)。中身は無変更で、
-#   6 本のテストがここから import する( fixture = テストデータ配置の単一の真実源)。
+# - 共有 fixture: 各テストがここから import する
+#   (テストデータ配置の単一の真実源)。
 import gzip
 import os
 import shutil

@@ -144,15 +144,15 @@ def sha256_of(path: str, limit: int | None = None) -> str:
 
 
 def now_iso() -> str:
-    """現在時刻の ISO 文字列(秒精度)。meta 系の generated_at 用の共通実装
-    (旧: 3 モジュールに _now() が重複していた = 一元化)。"""
+    """現在時刻の ISO 文字列(秒精度)。meta 系の generated_at 用の
+    単一実装(時刻関数の重複定義を防ぐ)。"""
     import datetime
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
 def read_json(path, default=None):
     """UTF-8 first; fall back to cp932 for files written on Windows before the
-    encoding fix (2026-09-25). Prints a warning when the fallback triggers."""
+    UTF-8 encoding fix. Prints a warning when the fallback triggers."""
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as f:

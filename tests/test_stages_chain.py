@@ -92,7 +92,8 @@ def main():
                            encoding="utf-8"))
     assert tmeta["n_tiles"] == meta["n_galaxies"], tmeta
     assert os.path.exists(os.path.join(sp, "tiles", "gal_000000.bin"))
-    # tiles_meta の総数は bin ヘッダ実測と一致する(F22 シャドーイング回帰)
+    # tiles_meta の総数は bin ヘッダ実測と一致する
+    # (シャドーイング回帰: ループ内局所の集計値が総数を上書きしていた不具合)
     import struct
     sum_ne = sum_nx = 0
     for g_i in range(meta["n_galaxies"]):

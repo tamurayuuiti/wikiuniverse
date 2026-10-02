@@ -27,7 +27,7 @@ from ..pipeline.stage import Param, stage
 
 @stage(
     name="layout_global",
-    title="マクロ+銀河の 3D 配置(球パッキング/FR、v1.6 = spill 構造保証)",
+    title="マクロ+銀河の 3D 配置(球パッキング/FR、spill 構造保証)",
     group="canonical",
     params=(
         Param("run", str, None, "座標 run 名(既定: 共有 run = 正典)"),
@@ -76,9 +76,9 @@ def run_layout_global(ctx) -> None:
         Param("ml_threshold", int, 2000, "マルチレベル初期化を適用する銀河サイズ以上"),
         Param("ml_niter", int, 100, "マルチレベル後の refine 反復数"),
         Param("anchor_mode", str, "sector",
-              "アンカーバネ(sector=優勢隣接銀河方向 / sum=旧来の総和)",
+              "アンカーバネ(sector=優勢隣接銀河方向 / sum=総和単位ベクトル=比較腕)",
               choices=("sector", "sum")),
-        Param("fr_norm", str, "p98", "FR 正規化(p98=ロバスト / max=旧来)",
+        Param("fr_norm", str, "p98", "FR 正規化(p98=ロバスト / max=最大正規化=比較腕)",
               choices=("p98", "max")),
         Param("sector_ratio", float, 0.5, "top-2 隣接ブレンドの重量比閾値"),
     ),

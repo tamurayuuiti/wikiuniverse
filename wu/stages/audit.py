@@ -7,7 +7,7 @@
 #
 # 注意:
 # - 監査は再計算も書き込みも行わない(outputs 空 = 常に実行)。
-# - 旧 CLI の終了コード(0=正常/2=対象なし)はランナーの規約へ翻訳する:
+# - 監査 main の終了コード(0=正常/2=対象なし)はランナーの規約へ翻訳する:
 #   rc != 0 は RuntimeError にして manifest に failed として記録させる。
 
 from __future__ import annotations

@@ -13,13 +13,13 @@
 #   和集合 = 並列レース対策の原則)。正準実行は python -m wu run layout_local。
 
 """Run layout_local over all remaining galaxies with N parallel subprocesses
-(Windows-safe; each galaxy shard is independent = the §12 batch model).
+(Windows-safe; each galaxy shard is independent = the batch model).
 
-B0 foundation (2026-09-30):
+Shared run-independent prep:
   1. the shared prep artifacts (grouped cross pairs + internal buckets) are
      built ONCE here before any job spawns (jobs only memory-map them),
   2. galaxies are assigned to jobs by greedy LPT bin-packing on the measured
-     FR cost model cost ~ n_articles^1.93 (02 §O) instead of equal id counts,
+     FR cost model cost ~ n_articles^1.93 (measured) instead of equal id counts,
      which removes the straggler that used to set the wall time,
   3. --jobs defaults to the machine's cpu count,
   4. per-job walls and bin costs are recorded in <run>/parallel_meta.json and
@@ -44,7 +44,7 @@ import time
 from ..dumpio import read_json, write_json  # noqa: E402
 from ..paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 
-COST_EXP = 1.93  # measured FR scaling (02 §O): t ~ c * n^1.93
+COST_EXP = 1.93  # measured FR scaling: t ~ c * n^1.93
 
 
 def main(a):

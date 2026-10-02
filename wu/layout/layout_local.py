@@ -16,9 +16,9 @@
 #   --prep/--merge-only/--preview-galaxy は本モジュールの CLI
 #   (python -m wu.layout.layout_local …)が担う。
 
-"""Local (intra-galaxy) article layout — independent-batch jobs (B0 foundation).
+"""Local (intra-galaxy) article layout - independent-batch jobs.
 
-B0 foundation (2026-09-30): the run-INDEPENDENT heavy work is precomputed ONCE
+Shared prep: the run-INDEPENDENT heavy work is precomputed ONCE
 per galaxy tag into data/graph/local_prep/<tag>/ and memory-mapped by every job
 and every layout run:
 
@@ -26,27 +26,27 @@ and every layout run:
   cross_u.npy / cross_g.npy / cross_w.npy  grouped cross-galaxy endpoint pairs
                                         (article, neighbour galaxy, edge count),
                                         sorted by (article, galaxy); also the
-                                        input for the planned sector anchors (B1)
+                                        input for the sector anchors
   ext_deg.npy                           per-article cross-edge degree
   prep_meta.json                        provenance (schema, input size+mtime)
 
 The run-DEPENDENT anchor directions are rebuilt from cross_* in seconds with
 bincount accumulation; this is mathematically identical to the old per-edge
 np.add.at accumulation (only fp summation order differs, ~1e-16).
-COORDINATES ARE INVARIANT under B0: the per-galaxy math (FR shape, anchor pull,
+COORDINATES ARE INVARIANT under batching: the per-galaxy math (FR shape, anchor pull,
 elastic prior, ball clamp) and all seeds are untouched, and job assignment
 (ranges or LPT bins) does not enter any formula.
 
 Each galaxy remains a fully independent job:
   internal edges  -> igraph FR (3D) shape, scaled into the galaxy ball
-                     (B3: multilevel seed for n >= --ml-threshold;
-                      B2-a: recentred + robust p98 normalization, --fr-norm)
-  sector anchors  -> (B1) articles with cross-galaxy links are pulled toward
+                     (multilevel seed for n >= --ml-threshold;
+                      recentred + robust p98 normalization, --fr-norm)
+  sector anchors  -> articles with cross-galaxy links are pulled toward
                      the ball boundary facing their DOMINANT neighbour galaxy
                      (top-1, blended with top-2 when comparable); the pull gain
                      scales with the confidence = weight share of the blended
                      neighbours, so diffuse articles stay interior
-  radial strata   -> (B2) target radius follows the within-galaxy rank
+  radial strata   -> target radius follows the within-galaxy rank
                      quantile of external degree (scale-free), and internal
                      hubs with few external links are pulled toward the core
   elastic prior   -> keeps the FR internal structure while anchors bend it
@@ -93,7 +93,7 @@ from ..dumpio import now_iso as _now, read_json, write_json  # noqa: E402,F401
 from ..paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 from ..stats import load_edges_mmap  # noqa: E402
 
-PREP_SCHEMA = 2  # v2 adds int_deg.npy (B2 stratification)
+PREP_SCHEMA = 2  # v2 adds int_deg.npy (core/hub stratification input)
 CH = 4_000_000  # edge-scan chunk size
 
 
@@ -103,13 +103,13 @@ def _fr_unit(n: int, edges_local: np.ndarray, dim: int, seed: int,
              fr_norm: str = "p98") -> np.ndarray:
     """FR layout normalized to unit ball (deterministic via random.seed).
 
-    B3: for n >= ml_threshold the flat force-directed anneal is replaced by a
-    MULTILEVEL seed: Louvain contraction -> weighted FR on the cluster graph ->
+    Multilevel FR: for n >= ml_threshold the flat force-directed anneal is
+    replaced by a MULTILEVEL seed: Louvain contraction -> weighted FR on the cluster graph ->
     member expansion with deterministic jitter -> FR refine from those initial
     coordinates (igraph `seed` param) with ml_niter iterations. igraph FR cost
-    grows ~n^1.93 and linearly in niter (02 §O), so spending iterations on a
+    grows ~n^1.93 and linearly in niter, so spending iterations on a
     good initial state is both faster and better-conditioned than flat
-    annealing. Galaxies below the threshold keep the exact legacy flat path
+    annealing. Galaxies below the threshold keep the exact single-level flat path
     (blast radius limited; median galaxy is 279 articles = 0.18 s).
     """
     import igraph as ig
@@ -148,9 +148,9 @@ def _fr_unit(n: int, edges_local: np.ndarray, dim: int, seed: int,
         coords = np.asarray(lay.coords, np.float64)
     c = coords
     if fr_norm == "p98":
-        # B2-a: recentre + robust scale. The legacy max-norm let a single
+        # Recentre + robust scale: the plain max-norm lets a single
         # isolated outlier article set the scale (cloud shrank to ~half the
-        # ball, off-centre; 02 §O-6). p98 -> 1.0 with outliers clamped onto
+        # ball, off-centre). p98 -> 1.0 with outliers clamped onto
         # the unit ball keeps the body filling the galaxy sphere.
         c = c - c.mean(axis=0)
         r = np.linalg.norm(c, axis=1)
@@ -247,8 +247,8 @@ def cmd_prep(dirs: Dirs, tag: str, memb_path: str, edges_path: str) -> dict:
     """Bucket internal edges and group cross-galaxy endpoint pairs, once per tag.
 
     Grouped cross pairs carry the FULL multiplicity (edge count) of each
-    (article, neighbour-galaxy) relation, so anchors and the planned sector
-    anchors (B1) need no further scan of the 108M-edge file.
+    (article, neighbour-galaxy) relation, so sector anchors need no
+    further scan of the 108M-edge file.
     """
     t0 = time.time()
     pp = _prep_paths(dirs, tag)
@@ -296,8 +296,8 @@ def cmd_prep(dirs: Dirs, tag: str, memb_path: str, edges_path: str) -> dict:
                       minlength=n)
     ext = np.rint(ext).astype(np.int32)
 
-    # ---- pass 2: bucket internal edges (order identical to the pre-B0 code:
-    #      per-chunk stable sort by community + rank scatter; the F7 asserts stay)
+    # ---- pass 2: bucket internal edges (order identical to the per-edge
+    #      reference impl: per-chunk stable sort by community + rank scatter)
     offs = np.zeros(G + 1, np.int64)
     offs[1:] = np.cumsum(cnt)
     buf = np.empty((int(cnt.sum()), 2), np.int32)
@@ -325,7 +325,7 @@ def cmd_prep(dirs: Dirs, tag: str, memb_path: str, edges_path: str) -> dict:
                   f"({100.0 * (i + len(blk)) / max(1, len(E)):.0f}%, "
                   f"{time.time() - t0:.0f}s)", flush=True)
     assert np.array_equal(fill, offs[1:])
-    # per-article internal degree (B2 core/hub stratification input)
+    # per-article internal degree (core/hub stratification input)
     int_deg = (np.bincount(buf[:, 0].astype(np.int64), minlength=n)
                + np.bincount(buf[:, 1].astype(np.int64), minlength=n))
     int_deg = int_deg.astype(np.int32)
@@ -380,7 +380,7 @@ def build_anchors(prep: dict, memb: np.ndarray, centers: np.ndarray,
                   n: int) -> np.ndarray:
     """Per-article anchor vector = sum over grouped cross pairs of
     w * unit(centre[neighbour] - centre[own]); chunked, bincount accumulation
-    (mathematically identical to the pre-B0 per-edge np.add.at, ~4x faster)."""
+    (mathematically identical to per-edge np.add.at, ~4x faster)."""
     cu, cg, cw = prep["cu"], prep["cg"], prep["cw"]
     anchor = np.zeros((n, 3), np.float64)
     own = memb[cu]
@@ -398,15 +398,15 @@ def build_anchors(prep: dict, memb: np.ndarray, centers: np.ndarray,
 
 def build_anchor_dirs(prep: dict, memb: np.ndarray, centers: np.ndarray,
                       n: int, ratio: float = 0.5):
-    """B1 sector anchors: per-article direction toward its dominant neighbour.
+    """Sector anchors: per-article direction toward its dominant neighbour.
 
     Returns (dir, conf). dir = unit vector toward the top-1 neighbour galaxy,
     blended with top-2 when w2 >= ratio*w1 (articles tied to two galaxies sit
     between them); conf = share of the article's cross-edge weight carried by
     the blended neighbours = pull gain (diffuse "cosmopolitan" articles get a
-    weak pull and stay interior). Replaces the legacy summed-unit-vector
-    anchor, where opposing links cancelled and multi-direction articles lost
-    their anchor entirely (02 §O, D34). Vectorized over the sorted grouped
+    weak pull and stay interior). Supersedes the summed-unit-vector anchor
+    (kept as --anchor-mode sum), where opposing links cancel and
+    multi-direction articles lose their anchor entirely. Vectorized over the sorted grouped
     cross pairs: one argsort by (article, weight desc) + segment heads.
     """
     cu, cg, cw = prep["cu"], prep["cg"], prep["cw"]
@@ -445,7 +445,7 @@ def build_anchor_dirs(prep: dict, memb: np.ndarray, centers: np.ndarray,
 
 def _rank_quantile(v: np.ndarray) -> np.ndarray:
     """Within-galaxy rank quantile in [0, 1] (scale-free across galaxy sizes;
-    B2 replaces the fixed ext/20 saturation with this)."""
+    replaces the fixed ext/20 saturation)."""
     n = len(v)
     if n < 2:
         return np.zeros(n)
@@ -529,21 +529,21 @@ def _build_parser():
                          "and exit (no edge scans, no anchor computation)")
     ap.add_argument("--fr-mode", default="ml", choices=["ml", "flat"],
                     help="ml = multilevel-seeded FR for galaxies with n >= "
-                         "--ml-threshold (default); flat = legacy single-level "
-                         "FR (comparison arm)")
+                         "--ml-threshold (default); flat = single-level FR "
+                         "(comparison arm)")
     ap.add_argument("--ml-threshold", type=int, default=2000,
                     help="article count where the multilevel FR kicks in "
-                         "(smaller galaxies keep the exact legacy flat path)")
+                         "(smaller galaxies keep the exact flat path)")
     ap.add_argument("--ml-niter", type=int, default=100,
                     help="FR refine iterations on top of the multilevel seed "
                          "(the flat path keeps igraph's default 500)")
     ap.add_argument("--anchor-mode", default="sector", choices=["sector", "sum"],
-                    help="sector = B1 dominant-neighbour sector direction with "
-                         "confidence-scaled gain (default); sum = legacy "
-                         "summed-unit-vector anchor (comparison arm)")
+                    help="sector = dominant-neighbour sector direction with "
+                         "confidence-scaled gain (default); sum = summed-unit-"
+                         "vector anchor (comparison arm)")
     ap.add_argument("--fr-norm", default="p98", choices=["p98", "max"],
                     help="p98 = recentred + robust p98 scale with outlier clamp "
-                         "(B2-a, default); max = legacy max-norm (comparison arm)")
+                         "(default); max = max-norm (comparison arm)")
     ap.add_argument("--sector-ratio", type=float, default=0.5,
                     help="blend the top-2 neighbour direction when w2 >= ratio*w1")
     ap.add_argument("--iters", type=int, default=40)
@@ -691,8 +691,8 @@ def main(a=None):
             pos_g = fr * (R * 0.92)
             ext_m = ext_deg[members].astype(np.float64)
             if a.anchor_mode == "sector":
-                # B1: sector direction + confidence gain; B2: rank-quantile
-                # radial band + hub-core correction (scale-free per galaxy)
+                # sector direction + confidence gain; rank-quantile radial
+                # band + hub-core correction (scale-free per galaxy)
                 av = anchor_dir[members]
                 cf = anchor_conf[members]
                 has = cf > 1e-9
@@ -705,7 +705,7 @@ def main(a=None):
                 gain = np.zeros(ng)
                 gain[has] = a.kappa * cf[has]
             else:
-                # legacy: summed-unit-vector anchor + fixed /20 band
+                # comparison arm: summed-unit-vector anchor + fixed /20 band
                 av = anchor[members]
                 avn = np.linalg.norm(av, axis=1)
                 has = avn > 1e-9

@@ -17,7 +17,7 @@
 # - 銀河団ラベルは final/macro_label_overrides.json(手動キュレーション・任意)が
 #   既定導出(rep_titles 先頭 16 字)より優先される。
 
-"""Export viewer tiles + bootstrap JSON (LOD streaming prototype, §8).
+"""Export viewer tiles + bootstrap JSON (LOD streaming; results/SUMMARY.md 参照).
 
 Per-galaxy self-contained tile (data/spatial/tiles/gal_XXXXXX.bin, little-endian):
   uint32  n_articles
@@ -189,7 +189,7 @@ def main(a):
             print(f"  tiles pass2 {i + len(blk):,}/{len(E):,} ({time.time()-t0:.0f}s)", flush=True)
     assert np.array_equal(e_fill, e_off[1:]) and np.array_equal(x_fill, x_off[1:])
 
-    # ---- write tiles (with per-galaxy index validation; 2026-09-27 NaN 事象の防御)
+    # ---- write tiles (per-galaxy index validation = NaN 混入事象の防御)
     sizes = np.bincount(memb, minlength=G)
     cls_code = {"galaxy": 0, "medium": 1, "dust": 2}
     for g in range(G):
@@ -273,6 +273,6 @@ def main(a):
 
 def local_idx(rank, pids, gids, starts_arr):
     """記事 pid の銀河内ローカル索引。rank は順列 order の逆写像であること
-    (order 自体は非単調なので searchsorted は使えない — 2026-09-27 バグの根因)。"""
+    (order 自体は非単調なので searchsorted は使えない = 過去バグの根因)。"""
     return (rank[pids] - starts_arr[gids]).astype(np.uint32)
 

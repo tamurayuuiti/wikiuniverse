@@ -5,7 +5,7 @@
 #   → 指標(metrics)→ L2 銀河団(cluster)→ 結合表(export)の正式チェーンを
 #   ステージとして登録する。実体は wu.fullgraph の cmd_* へ委譲(挙動同一)。
 # - prune(次数予算剪定)はレイアウト用グラフの実験腕 = experiment 分類
-#   (D16: 構造決定には生グラフが正史。剪定は描画コスト削減と交差評価用)。
+#   (構造決定には生グラフが正史。剪定は描画コスト削減と交差評価用)。
 #
 # 注意:
 # - tag の解決: 各ステージの "tag" パラメータは既定 None = 共有パラメータ
@@ -83,7 +83,7 @@ def run_detect(ctx) -> None:
         Param("out_tag", str, "res1_sub", "出力タグ(銀河)"),
         Param("min_size", int, 100, "最小コミュニティサイズ"),
         Param("max_galaxy", int, 10000,
-              "銀河のサイズ上限(正準運用値。旧 CLI 既定は 20000 だった)"),
+              "銀河のサイズ上限(正準運用値)"),
         Param("sub_resolution", float, 1.0, "内部 Leiden の resolution"),
         Param("sub_objective", str, "modularity", "内部の目的関数",
               choices=("modularity", "CPM")),
@@ -162,7 +162,7 @@ def run_export(ctx) -> None:
 
 @stage(
     name="prune",
-    title="次数予算剪定(レイアウト用グラフの実験腕。構造決定には不使用 = D16)",
+    title="次数予算剪定(レイアウト用グラフの実験腕。構造決定には不使用)",
     group="experiment",
     params=(
         Param("budget", int, 40, "高次数ノードあたりの保持辺数の上限"),

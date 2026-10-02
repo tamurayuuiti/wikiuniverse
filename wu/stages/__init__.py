@@ -10,8 +10,8 @@
 # - ステージの追加手順: このディレクトリにモジュールを置き、@stage で登録し、
 #   下の import 列の正しい位置(実行順)に追加する。入出力は必ず artifacts.py へ
 #   成果物を登録してからキーで宣言する(パスの f-string 直組み禁止)。
-# - 既存スクリプトからの移行は strangler 方式(挙動を変えずに移し、旧入口は
-#   ラッパ化する)。移行計画 = knowledge/work/pipeline-cleanup.md。
+# - すべての処理ステージはこのディレクトリの宣言を経由する(CLI・テスト・
+#   将来の GUI からも同じ入口 = wu.pipeline.runner が唯一の実行系)。
 
 from . import ingest  # noqa: F401  (download/parse/edges/categories/body_edges)
 from . import stats  # noqa: F401  (stats)

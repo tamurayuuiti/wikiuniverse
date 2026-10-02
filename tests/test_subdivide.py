@@ -1,6 +1,6 @@
 """Regression test for `subdivide` (wu/community/fullgraph.py).
 
-Guards against the duplicate-index scatter bug (2026-09-26): induced-edge
+Guards against the duplicate-index scatter bug: induced-edge
 bucketing must deliver the REAL subgraph to the per-community Leiden, so a
 dense chain community must split into coherent multi-node pieces -- never into
 singletons.

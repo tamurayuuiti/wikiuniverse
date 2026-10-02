@@ -5,7 +5,7 @@
 #   「実行 / スキップ(生成物あり)/ 入力不足(fail-fast)」を計画する。
 # - 実行し、ステージごとの解決パラメータ・所要時間・生成物・バージョンを
 #   data/manifests/<ts>_<label>.json へ記録する(来歴の総台帳 = 問題 P11 の解決)。
-# - 失敗時は「どの成果物が無いか、どのステージ(または旧来コマンド)で作れるか」を
+# - 失敗時は「どの成果物が無いか、どのステージ(またはコマンド)で作れるか」を
 #   示して即終了する(既存スクリプト群の fail-fast 方針を一般化する)。
 #
 # 注意:
@@ -133,7 +133,7 @@ def _missing_message(e: dict, dirs) -> str:
         producer = artifacts.producer_of(key, REGISTRY.values())
         how = (f"ステージ `{producer}`(python -m wu run {producer})で生成"
                if producer else
-               f"旧来コマンドで生成: {artifacts.hint_for(key) or '(手段不明)'}")
+               f"生成コマンド: {artifacts.hint_for(key) or '(手段不明)'}")
         lines.append(f"  - {key}: {desc}\n    パス: {path}\n    {how}")
     return (f"[wu] ステージ `{e['stage'].name}` の必須入力がありません:\n"
             + "\n".join(lines))

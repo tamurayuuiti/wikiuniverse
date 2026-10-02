@@ -6,7 +6,7 @@
 #   ②マクロ内銀河配置(連結=重み付き FR / 孤立・媒介=リンク先の重み付き重心 +
 #     隣接マクロ方向の決定的な円錐内散布 / 球緩和 + 無条件の包含クランプ)
 #   ③dust 遠方シェル ④品質指標(layout_meta.json の quality)⑤プレビュー出力。
-# - 正準方針 = 完全 3D・焼き込みレンズ無し(地図ビューは視聴時の z 圧縮 = D17)。
+# - 正準方針 = 完全 3D・焼き込みレンズ無し(地図ビューは視聴時の z 圧縮)。
 #
 # 注意:
 # - 銀河球の包含は構造保証: 無条件の包含クランプ + 体積キャップ(r <= 0.9 R_M)
@@ -50,7 +50,7 @@ deterministic fibonacci-ball slots when they have no usable pairs at all.
      volume cap (sum r^3)^(1/3) <= 0.9 * R_M; sphere relaxation + 3D radial
      clamp (|center| + r <= R_M). Unlinked galaxies: bary centroid of link
      targets (cross-macro links pull toward the macro rim) or fib-ball slots.
-  4. Medium galaxies (display_class=medium, the "intergalactic medium" of D16)
+  4. Medium galaxies (display_class=medium, the "intergalactic medium" concept)
      use the same bary rule, then a push pass keeps them out of regulars.
   5. Dust galaxies (n=1) get positions on a far shell (cosmic dust ring).
 
@@ -106,7 +106,7 @@ def _fib_ball_slots(count: int, radius: float, seed_off: int = 0) -> np.ndarray:
     """Deterministic volume-uniform ball slots (fibonacci sphere directions,
     cbrt-spaced radii). Replaces the old PLANAR golden spiral: isolated nodes
     must fill a BALL in the 3D regime, otherwise macros dominated by unlinked
-    members collapse into visible pancakes (2026-09-29, user screenshot)."""
+    members collapse into visible pancakes."""
     k = np.arange(count, dtype=np.float64)
     n = max(1, count)
     y = 1 - 2 * (k + 0.5) / n
@@ -119,7 +119,7 @@ def _fib_ball_slots(count: int, radius: float, seed_off: int = 0) -> np.ndarray:
                     axis=1)
 
 
-_CONE_MAX = 0.75  # rad (~43 deg): half-angle of the rim cone spread (v1.6)
+_CONE_MAX = 0.75  # rad (~43 deg): half-angle of the rim cone spread
 
 
 def _fib_dir(k: int) -> np.ndarray:
@@ -133,7 +133,7 @@ def _fib_dir(k: int) -> np.ndarray:
 
 def _cone_spread(d_unit: np.ndarray, seed_key: int):
     """(unit vector, depth factor 0.35-0.95): deterministic sample inside the
-    cone around `d_unit` (v1.6, rim-point de-concentration).
+    cone around `d_unit` (rim-point de-concentration).
 
     Uniform-on-disk cone sampling (sqrt for the half-angle) x azimuth x
     radial depth, all derived from `seed_key` by irrational multipliers —
@@ -276,7 +276,7 @@ def relax_disks(centers: np.ndarray, radii: np.ndarray, iters: int = 40) -> np.n
     agnostic: works on 2D disks and 3D spheres). Exactly-coincident bodies get
     a deterministic separation direction: a zero vector cannot be pushed, so
     without this, stacks of identical positions never resolve (found via the
-    unlinked-galaxy boundary stacks, 2026-09-29)."""
+    unlinked-galaxy boundary stacks)."""
     c = centers.astype(np.float64).copy()
     k = len(c)
     if k < 2:
@@ -374,7 +374,7 @@ def medium_local(reg_local: dict, pairs, macro_centers: np.ndarray,
     reg_local: dict gid -> local 3D vec of PLACED regular galaxies (this macro).
     pairs: iterable of (other_gid, weight) for the medium galaxy.
     Intra-macro neighbours contribute their placed local positions; cross-macro
-    neighbours contribute a CONE-SPREAD point (v1.6) inside the macro sphere
+    neighbours contribute a CONE-SPREAD point inside the macro sphere
     around the direction of THEIR macro center (so mediums bridging other
     clusters sit near the rim facing them): every galaxy sharing the same
     dominant neighbour used to land on ONE identical rim point, which the
@@ -693,8 +693,8 @@ def main(a):
             else np.zeros((0, 3))
         if len(P) >= 2:
             P = relax_disks(P, g_radius[reg_all], iters=120)
-        # 3D radial clamp, applied UNCONDITIONALLY (v1.6): the old
-        # `len(P) >= 2` gate skipped single-regular-galaxy macros, where a
+        # 3D radial clamp, applied UNCONDITIONALLY: a `len(P) >= 2` gate
+        # would skip single-regular-galaxy macros, where a
         # pairless isolated galaxy on its fibonacci slot could stick out of
         # the macro sphere (measured (d3+r)/Rm up to 1.114). With the volume
         # cap (r <= 0.9 Rm) and lim = max(Rm-r, 0.05Rm), d3 + r <= Rm now
@@ -847,10 +847,10 @@ def main(a):
             "n_dust_shell": int(len(dust_idx)), "R_TOTAL": R_TOTAL,
             "mode": {"macro_dim": a.macro_dim, "macro_z_squash": a.macro_z_squash,
                      "canonical": a.macro_dim == 3 and a.macro_z_squash == 1.0,
-                     "note": ("canonical policy (v1.6): full 3D, macro-dim 3 "
+                     "note": ("canonical policy: full 3D, macro-dim 3 "
                               "unsquashed, sphere-relaxed galaxies, NO baked lens "
                               "(map/hybrid views are VIEW-TIME z-compression in "
-                              "the viewer, D17); unlinked galaxies are bary-placed "
+                              "the viewer); unlinked galaxies are bary-placed "
                               "(rim contributions cone-spread); containment clamp "
                               "is unconditional => spill == 0 by construction")
                      if (a.macro_dim == 3 and a.macro_z_squash == 1.0) else

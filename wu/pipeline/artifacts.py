@@ -7,9 +7,9 @@
 #   案内・実行台帳(manifest)に利用する。
 #
 # 注意:
-# - ファイル名を f-string で各所に散らすのが旧構造の問題だった(契約が docstring
-#   頼みになる)。新規ステージは必ずここに成果物を登録してから入出力を宣言する。
-# - kind は data/ 配置の分類(運用ルール D10): raw=原始(再取得可)/
+# - ファイル名を f-string で各所に散らすと契約が docstring 頼みになり監査できない。
+#   ステージは必ずここに成果物を登録してから入出力を宣言する。
+# - kind は data/ 配置の分類: raw=原始(再取得可)/
 #   intermediate=中間(削除・再生成自由)/ product=成果(下流の契約)/
 #   delivery=配信(Viewer 公開面)/ cache=キャッシュ。
 # - tag/run を templating に使う成果物は params 経由で解決する

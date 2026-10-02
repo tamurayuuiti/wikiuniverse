@@ -10,7 +10,9 @@
 # 注意:
 # - ステージ実体は wu/stages/ に 1 ステージ = 1 モジュールで置く。
 #   import 時にレジストリへ登録されるため、wu.stages を import すること。
-# - この基盤は既存スクリプトの挙動を変えない(strangler 方式で段階移行する。
+# - 実行系はこの基盤(runner)へ一本化されている: ステージ宣言(wu/stages/)が
+#   入出力契約とパラメータの単一の真実源で、CLI・テスト・将来の GUI からも
+#   同じ plan/execute 経路を使う。
 #   移行計画は knowledge/work/pipeline-cleanup.md 参照)。
 
 from . import artifacts, config, runner  # noqa: F401

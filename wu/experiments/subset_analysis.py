@@ -6,9 +6,8 @@
 #   (analyze_subset)。出力は community/<subset名>/ の report.md + metrics.json 他。
 #
 # 注意:
-# - 旧 wu/pipeline.py からの分割(2026-10-02、パイプライン再整理)。関数実装は
-#   無変更(挙動は test_synthetic が担保する)。ハブ抑制ユーティリティは
-#   wu/hubsup.py へ分離済み(そちらも実装無変更)。
+# - 挙動は test_synthetic が担保する。ハブ抑制ユーティリティは
+#   wu/experiments/hubsup.py にある。
 # - 位置づけは「実験系(experiment)」: 第1期のサブセット検証装置であり、
 #   全グラフ正式チェーン(detect/subdivide/metrics/…)とは別物。分類は
 #   設計決定 D-g(knowledge/work/pipeline-cleanup.md)参照。

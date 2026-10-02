@@ -9,7 +9,7 @@ cone 散布・セクタアンカー/rank 成層/ロバスト正規化・包含�
 
 注意: ステージ単体の契約テストは tests/test_stages_*.py / test_pipeline_core.py が
 担当し、本ファイルは「複数ステージをまたぐ統合」と「歴史的な単体節」を担う
-(2026-10-02 のテスト再編による役割分担。分割のさらなる細分化は残課題として
+(テストの役割分担。さらなる細分化の方針は
 knowledge/work/pipeline-cleanup.md に記録)。
 """
 import json
@@ -131,7 +131,7 @@ def main():
     for _src in ["数学", "スタブ", "すべてのスタブ記事の一覧", "Xのスタブ"]:
         assert bgc._stem_name(_src) == "", _src  # 非該当/語幹短すぎ/ブラックリスト
 
-    # ---- global layout smoke (v1.5 canonical: full 3D, sphere relax,
+    # ---- global layout smoke (canonical: full 3D, sphere relax,
     #      bary placement for mediums AND unlinked galaxies, no baked lens)
     out2 = run_wu("--base", BASE, "run", "layout_global",
                   "--galaxy-tag", "res1_s", "--run", "r_main")
@@ -177,7 +177,7 @@ def main():
                                   "macro_adj_spearman"}, lm
     assert lm["quality"]["galaxy_flat_domain_min"] == 8, lm["quality"]
     assert set(lm["quality"]["macro_proj_overlap"]) >= {"top_z", "side_x", "random_mean"}
-    # v1.5 canonical: the old placement knobs are gone from the schema entirely
+    # canonical schema: baked-lens placement knobs must not exist at all
     for gone in ("dim", "z_squash", "galaxy_relax", "medium_place"):
         assert gone not in lm, f"{gone} should have been removed"
         assert gone not in lm["mode"], f"mode.{gone} should have been removed"
@@ -189,7 +189,7 @@ def main():
 
     # --- 3D containment regression on the canonical run: every placed non-dust
     #     galaxy sphere must fit inside its macro sphere (|c| + r <= Rm). Catches
-    #     z-composition bugs (2026-09-26) and the pancake/lens regimes (v1.5).
+    #     z-composition bugs and the pancake/lens regressions).
     mpos = pq.read_table(os.path.join(lay, "macro_positions.parquet")).to_pydict()
     mxyz = _np.stack([mpos["x"], mpos["y"], mpos["z"]], axis=1)
     mr = _np.asarray(mpos["radius"])
@@ -361,10 +361,10 @@ def main():
     for w_cat in al.load_catalog(Dirs(os.path.join(tmpb, "nope")))["warnings"]:
         w_cat.encode("cp932")
 
-    # ---- v1.6 containment regression (unconditional clamp): a macro with a
+    # ---- containment regression (unconditional clamp): a macro with a
     #      SINGLE regular, pairless galaxy used to skip the clamp entirely and
     #      its fibonacci slot pushed the galaxy outside the macro sphere —
-    #      (d3+r)/Rm = 1.114 measured with the pre-v1.6 code on this exact
+    #      (d3+r)/Rm = 1.114 measured with the gated-clamp code on this exact
     #      fixture shape (single n=20 galaxy + 5x200k-article macro). With the
     #      clamp unconditional the galaxy is projected exactly onto the
     #      boundary (ratio 1.000), spill vanishes by construction, and
@@ -475,7 +475,7 @@ def main():
     # (the bias this revision works around) and lower at large n
     assert al._null_flat(4)[0] > 0.9 > al._null_flat(40)[0]
 
-    # ---- v1.5 helper unit tests (flatness / adjacency / medium_local / fib slots)
+    # ---- layout helper unit tests (flatness / adjacency / medium_local / fib slots)
     import wu.layout.layout_global as lg
 
     rng_t = _np.random.default_rng(7)
@@ -504,7 +504,7 @@ def main():
     p_in = lg.medium_local(reg_local, [(1, 1.0), (2, 1.0)], mcen, mof,
                            midx_t, 0, 50.0, 1.0, 42)
     assert _np.allclose(p_in, [0, 0, 0], atol=1e-9), p_in
-    # v1.6 cone spread: a cross-macro contribution lands INSIDE a deterministic
+    # cone spread: a cross-macro contribution lands INSIDE a deterministic
     # cone around the neighbour direction (was: one exact rim point at 0.85 that
     # every galaxy sharing this neighbour collapsed onto -> flat cap)
     rim_t = 50.0 - 1.0
@@ -547,7 +547,7 @@ def main():
     assert _np.allclose(S, lg._fib_ball_slots(60, 10.0, 42))
     assert lg._fib_ball_slots(0, 10.0).shape == (0, 3)
 
-    # ---- B1 sector anchors: dominant neighbour, top-2 blend, confidence
+    # ---- sector anchors: dominant neighbour, top-2 blend, confidence
     import wu.layout.layout_local as ll
     prep_t = {"cu": _np.array([0, 0, 1, 1], _np.int32),
               "cg": _np.array([1, 2, 1, 2], _np.int32),
@@ -568,12 +568,12 @@ def main():
         _np.array([0, 0]), cen_t, 2)
     assert not dv0.any() and not cf0.any()
 
-    # ---- B2 rank quantile
+    # ---- rank quantile
     q_t = ll._rank_quantile(_np.array([10.0, 0.0, 5.0]))
     assert _np.allclose(q_t, [1.0, 0.0, 0.5]), q_t
     assert ll._rank_quantile(_np.array([7.0])).tolist() == [0.0]
 
-    # ---- B2-a robust norm: recentred, outlier-clamped, body fills the ball
+    # ---- robust norm: recentred, outlier-clamped, body fills the ball
     #      (star 196 + 4 isolated outliers = the real-galaxy situation: a few
     #      weakly-linked articles must not set the scale for the whole cloud)
     star = [(0, i) for i in range(1, 196)]
@@ -586,14 +586,14 @@ def main():
     assert _np.median(rp) > _np.median(rm) * 1.5, (_np.median(rp), _np.median(rm))
 
     # relax_disks: exactly-coincident bodies must separate (the zero-vector
-    # degeneracy that stacked unlinked galaxies onto one point, 2026-09-29)
+    # degeneracy that stacked unlinked galaxies onto one point)
     stk = lg.relax_disks(_np.zeros((12, 3)), _np.ones(12) * 5.0, iters=120)
     dd = _np.linalg.norm(stk[:, None, :] - stk[None, :, :], axis=2)
     ii_t, jj_t = _np.triu_indices(12, 1)
     assert (dd[ii_t, jj_t] >= 10.2 * 0.99).all(), dd[ii_t, jj_t].min()
 
     # fr_layout isolated nodes: 3D arm must fill a BALL (pancake regression
-    # guard, 2026-09-29); the dim=2 experimental arm keeps the planar spiral
+    # guard); the dim=2 experimental arm keeps the planar spiral
     edges_c = [(i, i + 1) for i in range(9)]              # chain over nodes 0..9
     C3 = lg.fr_layout(40, edges_c, None, 3, 42)
     iso3 = C3[10:]
@@ -623,7 +623,7 @@ def main():
     d = _np.linalg.norm(P - C3[gid], axis=1)
     assert (d <= _np.maximum(R3[gid] * 1.25, 1e-6)).all(), "article outside galaxy ball"
 
-    # ---- B0 prep artifacts: existence + brute-force equality of the grouped
+    # ---- shared prep artifacts: existence + brute-force equality of the grouped
     #      cross pairs and ext_deg (the foundation must not lose/duplicate edges)
     prep_dir = os.path.join(BASE, "graph", "local_prep", "res1_s")
     for f in ("internal_offs.npy", "internal_buf.npy", "cross_u.npy",
@@ -672,7 +672,7 @@ def main():
                        if memb_s[u] == g and memb_s[v] == g)
         assert got_e == exp_e, f"internal bucket mismatch g={g}"
 
-    # ---- B0 anchor equivalence: grouped+bincount == legacy per-edge add.at
+    # ---- anchor equivalence: grouped+bincount == per-edge add.at
     import wu.layout.layout_local as ll
     pp = ll._prep_paths(Dirs(BASE), "res1_s")
     prep = ll.load_prep(pp)
@@ -708,7 +708,7 @@ def main():
     run_wu("--base", BASE, "run", "layout_local", "--galaxy-tag", "res1_s",
            "--run", "r_main", "--set", "layout_local.jobs=2")
 
-    # ---- B0 invariance: an LPT-split 3-job parallel run must reproduce the
+    # ---- batch invariance: an LPT-split 3-job parallel run must reproduce the
     #      sequential range-split article positions EXACTLY (coordinates are
     #      job-assignment independent by design)
     run_wu("--base", BASE, "run", "layout_global", "--galaxy-tag", "res1_s",
@@ -724,7 +724,7 @@ def main():
     pmeta = json.load(open(os.path.join(BASE, "layout", "r_par",
                                         "parallel_meta.json"), encoding="utf-8"))
     assert pmeta["lpt"] is True and pmeta["failures"] == 0, pmeta
-    # B0 telemetry: per-galaxy timings must survive parallel mode (job metas ->
+    # parallel telemetry: per-galaxy timings must survive parallel mode (job metas ->
     # aggregated by the launcher) and progress/log side files must exist
     assert pmeta["per_galaxy_secs"].get("n", 0) > 0, pmeta
     pjobs = os.path.join(BASE, "layout", "r_par", "parallel_jobs")
@@ -747,7 +747,7 @@ def main():
         assert r_nf.returncode != 0, f"{cmd[2]} should fail without globals"
         assert "layout_global" in (r_nf.stdout + r_nf.stderr), r_nf.stderr[-500:]
 
-    # ---- B3 multilevel FR: determinism / validity / quality metrics / gating
+    # ---- multilevel FR: determinism / validity / quality metrics / gating
     import igraph as _ig
     g1200 = _ig.Graph.Barabasi(1200, m=15, directed=False)
     e1200 = [e.tuple for e in g1200.es]
@@ -790,7 +790,7 @@ def main():
     assert set(lm_b3["fr_quality"]) >= {"n_eval", "adj_recall_mean",
                                         "edge_len_cv_mean", "n_ml_applied"}
 
-    # ---- B1/B2 arms: default (sector+p98) must differ from the legacy arm
+    # ---- comparison arms: default (sector+p98) must differ from the sum/max arm
     run_wu("--base", BASE, "run", "layout_global", "--galaxy-tag", "res1_s",
            "--run", "r_leg")
     run_mod("wu.layout.layout_local", "--base", BASE, "--galaxies", "0-11",
@@ -799,14 +799,14 @@ def main():
     sh_new = _np.load(os.path.join(lay, "article_shards", "gal_000000.npy"))
     sh_leg = _np.load(os.path.join(BASE, "layout", "r_leg", "article_shards",
                                    "gal_000000.npy"))
-    assert not _np.array_equal(sh_new, sh_leg), "B1/B2 arms must differ"
+    assert not _np.array_equal(sh_new, sh_leg), "arms must differ"
     lm_def = json.load(open(os.path.join(BASE, "layout", "r_b3a",
                                          "layout_local_meta.json"),
                             encoding="utf-8"))
     assert lm_def["params"]["anchor_mode"] == "sector"
     assert lm_def["params"]["fr_norm"] == "p98"
 
-    # ---- B3 launcher pass-through: --fr-mode must reach every job and the meta
+    # ---- launcher pass-through: --fr-mode must reach every job and the meta
     run_wu("--base", BASE, "run", "layout_global", "--galaxy-tag", "res1_s",
            "--run", "r_b3c")
     run_wu("--base", BASE, "run", "layout_local", "--galaxy-tag", "res1_s",
@@ -835,14 +835,14 @@ def main():
         ("sum", "max", "flat"), pmd
 
     # ---- checkpoint repair: after a parallel run + merge, a single-process
-    #      `--galaxies all` must see everything done (2026-09-30 race fix)
+    #      `--galaxies all` must see everything done (parallel race regression)
     out_b3c = run_mod("wu.layout.layout_local", "--base", BASE,
                       "--galaxies", "all", "--galaxy-tag", "res1_s",
                       "--run", "r_b3c")
     assert "done: 0 galaxies this run" in out_b3c, out_b3c[-500:]
 
     # ---- no-op invocation (run complete) must not rebuild anchors and must
-    #      still serve preview + merge (2026-09-30 lazy-anchor fix)
+    #      still serve preview + merge (lazy-anchor regression)
     run_mod("wu.layout.layout_local", "--base", BASE, "--galaxies", "all",
             "--galaxy-tag", "res1_s", "--run", "r_par", "--preview-galaxy", "0")
 
@@ -899,7 +899,7 @@ def main():
 
     # ---- tile CONTENT round-trip: local idx must map back to the exact global
     #      undirected internal edges of the galaxy (catches searchsorted-on-
-    #      permutation class bugs, 2026-09-27)
+    #      permutation class bugs)
     import struct as _st
     with open(t0f, "rb") as fh:
         raw = fh.read()

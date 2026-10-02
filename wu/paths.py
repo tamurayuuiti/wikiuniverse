@@ -11,7 +11,7 @@ separated instead of piled into one folder:
         subsets/    per-subset node/edge cuts      intermediate (Phase-1 PoC)
         local_prep/ per-tag prep for layout_local  intermediate (rebuilt by
           <tag>/      (bucketed internal edges,    `layout_local --prep`; shared
-                       grouped cross pairs, ext_deg) across layout runs, B0)
+                       grouped cross pairs, ext_deg) across layout runs)
       community/    Leiden outputs                 result
         full/       full-graph runs: membership_<tag>.npy, pairs, metrics, purity
         <subset>/   Phase-1 per-subset analyze runs
@@ -58,7 +58,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # 出版中(正典)の座標 run。**真実源は configs/publish.json**(追跡ファイル。
-# 採用切替は同ファイルの編集 + commit で行う = 旧「コード定数の書き換え」から移行)。
+# 採用切替は同ファイルの編集 + commit で行う = 正典 run 名の単一の真実源)。
 # このファイルは wu パッケージのどのモジュールよりも先に読まれるため、
 # json 読み込みはここで一度だけ行い、失敗時のみフォールバック定数を使う。
 def _load_active_layout_run() -> str:
@@ -146,7 +146,7 @@ class Dirs:
         return str(self.community / name)
 
     def local_prep_dir(self, tag: str) -> Path:
-        """Prep artifact directory for layout_local (B0 foundation), per galaxy tag.
+        """Prep artifact directory for layout_local (run-independent shared prep), per galaxy tag.
 
         Holds run-independent heavy work (bucketed internal edges, grouped
         cross-galaxy pairs, ext_deg) shared by every layout run and every

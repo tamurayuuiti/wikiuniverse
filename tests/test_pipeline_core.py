@@ -176,10 +176,10 @@ def main():
                        cwd=ROOT, env=env)
     assert r.returncode == 2, r.returncode  # edges_ns0 無し → fail-fast
     assert "graph.edges_ns0" in (r.stdout + r.stderr)
-    # 生成元ステージ登録済み(ingest 移行後)→ 旧来コマンドでなくステージへ案内
+    # 生成元ステージが登録済み → fail-fast 案内はステージを指す
     assert "wu run edges" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-500:]
     # CLI 面 = 研究/実験コマンド + パイプライン(stages/plan/run)。
-    # 取得・解析の旧サブコマンドは廃止済み(run <stage> へ一本化)。
+    # 取得・解析は run <stage> へ一本化(単独サブコマンドは無い)。
     r = subprocess.run([sys.executable, "-m", "wu.cli", "--help"],
                        capture_output=True, text=True, cwd=ROOT, env=env)
     assert r.returncode == 0 and "run" in r.stdout and "stages" in r.stdout
