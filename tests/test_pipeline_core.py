@@ -170,7 +170,8 @@ def main():
                        cwd=ROOT, env=env)
     assert r.returncode == 2, r.returncode  # edges_ns0 無し → fail-fast
     assert "graph.edges_ns0" in (r.stdout + r.stderr)
-    assert "python -m wu edges" in (r.stdout + r.stderr)  # 旧来コマンド案内
+    # 生成元ステージ登録済み(ingest 移行後)→ 旧来コマンドでなくステージへ案内
+    assert "wu run edges" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-500:]
     # 既存コマンドが無傷であること(回帰): --help が新設後も正常
     r = subprocess.run([sys.executable, "-m", "wu.cli", "--help"],
                        capture_output=True, text=True, cwd=ROOT, env=env)

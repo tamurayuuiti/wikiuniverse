@@ -106,8 +106,23 @@ define("parsed.articles", "page/linktarget/redirect 解析 → 記事表(page_id
        "intermediate", lambda d, p: d.articles)
 define("parsed.article_ids", "記事 page_id の昇順配列(compact idx の基準)",
        "intermediate", lambda d, p: d.article_ids)
+define("parsed.article_hashes", "記事タイトルの blake2b64 ハッシュ(page_id 昇順)",
+       "intermediate", lambda d, p: d.article_hashes)
+define("parsed.ns0_hashes", "ns0 全タイトルのハッシュ表(エッジ解決・本文リンク用)",
+       "intermediate", lambda d, p: d.parsed / "ns0_all_hashes.npz")
+define("parsed.rd_map", "リダイレクト解決表(rd_from → rd_final)",
+       "intermediate", lambda d, p: d.parsed / "rd_map.npz")
+define("parsed.meta", "解析メタデータ(dump_date・ファイル台帳・配置ポリシー)",
+       "intermediate", lambda d, p: d.meta)
 define("graph.edges_ns0", "解決済み ns0 有向エッジ(int32 ペアの生バイナリ)",
        "intermediate", lambda d, p: d.edges_bin)
+define("graph.categories", "記事×カテゴリ対(parquet)",
+       "intermediate", lambda d, p: d.graph / "categories.parquet")
+define("graph.article_categories", "記事→カテゴリの生バイナリ(純度計算用)",
+       "intermediate", lambda d, p: d.graph / "article_categories.bin")
+define("graph.edges_body", "本文リンクの解決済み有向エッジ(out_name で名前解決)",
+       "intermediate",
+       lambda d, p: d.graph / p.get("out_name", "edges_body_directed.bin"))
 define("graph.indeg", "記事ごとの in 次数(compact idx 順)",
        "intermediate", lambda d, p: d.indeg)
 define("graph.outdeg", "記事ごとの out 次数(compact idx 順)",
@@ -118,3 +133,13 @@ define("graph.local_prep", "銀河内レイアウトの run 非依存事前計�
        "cache", lambda d, p: d.local_prep_dir(p["tag"]))
 define("community.membership", "ノード → コミュニティ ID(compact idx 順、tag 別)",
        "product", lambda d, p: d.community_full / f"membership_{p['tag']}.npy")
+
+# ---- 原始データ(Wikipedia ダンプ。再取得可能 = raw 分類)----
+for _k, _fn in (("page", "jawiki-latest-page.sql.gz"),
+                ("redirect", "jawiki-latest-redirect.sql.gz"),
+                ("linktarget", "jawiki-latest-linktarget.sql.gz"),
+                ("pagelinks", "jawiki-latest-pagelinks.sql.gz"),
+                ("categorylinks", "jawiki-latest-categorylinks.sql.gz"),
+                ("pages_articles", "jawiki-latest-pages-articles.xml.bz2")):
+    define(f"dump.{_k}", f"Wikipedia ダンプ: {_fn}", "raw",
+           (lambda name: (lambda d, p: d.dump / name))(_fn))

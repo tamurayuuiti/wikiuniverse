@@ -87,13 +87,21 @@ def expand_targets(targets) -> list[Stage]:
 
 
 def plan(stages, dirs, cfg, shared: dict, force: bool = False) -> list[dict]:
-    """各ステージの状態を解決する: run / skip / missing-input。"""
+    """各ステージの状態を解決する: run / skip / missing-input。
+
+    多段チェーン(wu run all 等)では、後段の入力を前段が同一実行内で生成する。
+    そのため「このプラン内で先行ステージが outputs に宣言した成果物キー」を
+    satisfied 集合として積み上げ、入力検査から除外する(= 実行順の連鎖を尊重)。
+    単発実行でも、ディスク上の実体とプラン内生成予定の和集合で判定する。
+    """
     entries = []
+    satisfied: set[str] = set()  # このプラン内で生成される予定の成果物キー
     for st in stages:
         params = stage_params(st, cfg)
         p_all = {**shared, **params}
         missing = [k for k in st.inputs
-                   if not artifacts.exists(k, dirs, p_all)]
+                   if k not in satisfied
+                   and not artifacts.exists(k, dirs, p_all)]
         outs = {k: str(artifacts.resolve(k, dirs, p_all)) for k in st.outputs}
         outputs_exist = bool(outs) and all(os.path.exists(v) for v in outs.values())
         if missing:
@@ -102,6 +110,10 @@ def plan(stages, dirs, cfg, shared: dict, force: bool = False) -> list[dict]:
             status = "skip"
         else:
             status = "run"
+        # skip 以外(= 実行される/された)ステージの outputs は後段の入力を満たす。
+        # missing-input のステージは実行されないので satisfied に足さない。
+        if status != "missing-input":
+            satisfied.update(st.outputs)
         entries.append({"stage": st, "params": params, "shared_used": p_all,
                         "missing": missing, "outputs": outs, "status": status})
     return entries
