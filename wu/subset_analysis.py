@@ -1,5 +1,18 @@
-"""Analyze one subset end-to-end: Leiden sweep -> pick primary -> metrics ->
-hubs -> hierarchy -> plots -> report.md + metrics.json."""
+# wu/subset_analysis.py — サブセットのエンドツーエンド解析(第1期の実験系)
+#
+# 責務:
+# - 1 つのサブセット(graph/subsets/<name>/)に対して Leiden の resolution スイープ
+#   → 一次選択 → 指標 → ハブ解析 → L2 階層 → プロット/レポートを一括実行する
+#   (analyze_subset)。出力は community/<subset名>/ の report.md + metrics.json 他。
+#
+# 注意:
+# - 旧 wu/pipeline.py からの分割(2026-10-02、パイプライン再整理)。関数実装は
+#   無変更(挙動は test_synthetic が担保する)。ハブ抑制ユーティリティは
+#   wu/hubsup.py へ分離済み(そちらも実装無変更)。
+# - 位置づけは「実験系(experiment)」: 第1期のサブセット検証装置であり、
+#   全グラフ正式チェーン(detect/subdivide/metrics/…)とは別物。分類は
+#   設計決定 D-g(knowledge/work/pipeline-cleanup.md)参照。
+
 from __future__ import annotations
 
 import datetime
@@ -13,6 +26,7 @@ import pyarrow.parquet as pq
 
 from . import analysis as an
 from .dumpio import read_json, write_json
+from .hubsup import filter_edges_by_hub, prune_edges_degree_budget
 from .paths import Dirs
 
 
@@ -32,79 +46,6 @@ def _pick_primary(sweep_results, target_median=(200, 3000), ideal=800):
         if score < best_d:
             best, best_d = s, score
     return best
-
-
-def filter_edges_by_hub(E: np.ndarray, nodes: dict, dirs: Dirs,
-                        indeg_cap: int | None = None, outdeg_cap: int | None = None):
-    """Drop edges whose endpoint is a mega-hub in the FULL graph (layout-graph
-    style hub suppression). Returns (E_filtered, info)."""
-    if indeg_cap is None and outdeg_cap is None:
-        return E, {"dropped": 0}
-    article_ids = np.load(dirs.article_ids)
-    pid = np.asarray(nodes["page_id"], dtype=np.int64)
-    pos = np.clip(np.searchsorted(article_ids, pid), 0, len(article_ids) - 1)
-    keep_n = np.ones(len(pid), bool)
-    info = {}
-    if indeg_cap is not None:
-        indeg = np.load(dirs.indeg)[pos]
-        info["nodes_indeg_capped"] = int((indeg > indeg_cap).sum())
-        keep_n &= indeg <= indeg_cap
-    if outdeg_cap is not None:
-        outdeg = np.load(dirs.outdeg)[pos]
-        info["nodes_outdeg_capped"] = int((outdeg > outdeg_cap).sum())
-        keep_n &= outdeg <= outdeg_cap
-    m = keep_n[E[:, 0]] & keep_n[E[:, 1]]
-    info["edges_dropped"] = int((~m).sum())
-    info["edges_dropped_frac"] = float((~m).sum() / max(1, len(E)))
-    info["nodes_isolated_by_filter"] = int((~keep_n).sum())
-    return E[m], info
-
-
-def prune_edges_degree_budget(E: np.ndarray, budget: int, seed: int = an.SEED,
-                              mode: str = "both"):
-    """Degree-budget pruning of the layout graph.
-
-    modes:
-      both : keep edge iff random-rank < budget at BOTH endpoints
-             (hard cap per node; fragments star-peripheries -> not recommended)
-      smart: keep edge iff rank<budget at either endpoint OR either endpoint has
-             degree<=budget. Rationale: galaxy structure lives in low-degree
-             (stub<->local-hub) edges; only hub<->hub "intergalactic highways"
-             are thinned. Preserves connectivity of the periphery.
-    """
-    rng = np.random.default_rng(seed)
-    E = np.asarray(E)
-    n_edges = len(E)
-    if n_edges == 0:
-        return E, {"budget": budget, "mode": mode, "kept": 0}
-    n = int(E.max()) + 1
-    deg = np.bincount(E[:, 0], minlength=n) + np.bincount(E[:, 1], minlength=n)
-    prio = rng.random(n_edges)
-
-    def _ranks(col):
-        node = E[:, col]
-        order = np.lexsort((prio, node))
-        node_sorted = node[order]
-        starts = np.searchsorted(node_sorted, np.arange(n), side="left")
-        rank = np.empty(n_edges, dtype=np.int64)
-        rank[order] = np.arange(n_edges) - starts[node_sorted]
-        return node, rank
-
-    if mode == "both":
-        keep = np.ones(n_edges, bool)
-        for col in (0, 1):
-            _, rank = _ranks(col)
-            keep &= rank < budget
-    elif mode == "smart":
-        keep = np.zeros(n_edges, bool)
-        for col in (0, 1):
-            node, rank = _ranks(col)
-            keep |= (rank < budget) | (deg[node] <= budget)
-    else:
-        raise ValueError(f"unknown mode: {mode}")
-    info = {"budget": budget, "mode": mode, "kept": int(keep.sum()),
-            "kept_frac": float(keep.mean())}
-    return E[keep], info
 
 
 def analyze_subset(subset_dir: str, out_dir: str, resolutions=(0.5, 1.0, 2.0),

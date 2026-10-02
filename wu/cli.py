@@ -11,6 +11,12 @@ Commands:
   subset-id  Extract page-id-window subset (contrast/baseline use)
   subset-bfs Extract BFS subset from seed titles
   analyze    Leiden + metrics + hierarchy + report for one subset
+
+Pipeline (stage registry + config + runner; see wu/pipeline/):
+  stages     List registered stages with their input/output contracts
+  plan       Show the execution plan (run/skip/missing-input) without side effects
+  run        Execute stages (name... or "all") and record a manifest under
+             data/manifests/ (resume = existing outputs are skipped, --force to redo)
 """
 from __future__ import annotations
 
@@ -131,7 +137,7 @@ def cmd_body_edges(a):
 
 
 def cmd_analyze(a):
-    from .pipeline import analyze_subset
+    from .subset_analysis import analyze_subset
     dirs = Dirs(a.base)
     subset_dir = a.subset_dir or dirs.subset(a.subset)
     out_dir = a.out_dir or dirs.community_run(os.path.basename(subset_dir.rstrip("/")))
@@ -147,6 +153,68 @@ def cmd_analyze(a):
 def _dump_date(dirs: Dirs) -> str:
     m = read_json(dirs.meta, {}) or {}
     return m.get("dump_date", "?")
+
+
+def cmd_stages(a):
+    """登録済みステージの一覧(分類・入出力契約・パラメータ)を表示する。"""
+    import wu.stages  # noqa: F401  (import によりステージが登録される)
+    from .pipeline.stage import all_stages
+    groups = {}
+    for st in all_stages():
+        groups.setdefault(st.group, []).append(st)
+    print("[wu] 登録済みステージ(group = canonical 正式 / optional 随伴 /"
+          " audit 読み取り専用監査 / experiment 研究・実験系):")
+    for g in ("canonical", "optional", "audit", "experiment"):
+        for st in groups.get(g, []):
+            print(f"\n  {st.name}  [{g}]  {st.title}")
+            if st.inputs:
+                print(f"    in : {', '.join(st.inputs)}")
+            if st.outputs:
+                print(f"    out: {', '.join(st.outputs)}")
+            for p in st.params:
+                ch = f" choices={list(p.choices)}" if p.choices else ""
+                print(f"    --{p.name.replace('_', '-')}"
+                      f" (既定 {p.default!r}{ch}): {p.help}")
+
+
+def _pipeline_args(a):
+    """plan/run 共通: 設定読み込み + 共有パラメータ解決。"""
+    import wu.stages  # noqa: F401
+    from .pipeline import config as pcfg
+    cfg = pcfg.load(a.config)
+    cfg = pcfg.apply_overrides(cfg, getattr(a, "overrides", None))
+    shared = pcfg.shared_params(cfg, {
+        "run": getattr(a, "run", None),
+        "galaxy_tag": getattr(a, "galaxy_tag", None),
+        "macro_tag": getattr(a, "macro_tag", None),
+        "dump_date": getattr(a, "dump_date", None),
+    })
+    return cfg, shared
+
+
+def cmd_plan(a):
+    """実行計画(実行/スキップ/入力不足)を表示する(dry-run。副作用なし)。"""
+    from .pipeline import runner
+    from .paths import Dirs
+    cfg, shared = _pipeline_args(a)
+    stages = runner.expand_targets(a.targets)
+    entries = runner.plan(stages, Dirs(a.base), cfg, shared, force=a.force)
+    print(runner.format_plan(entries))
+
+
+def cmd_run(a):
+    """ステージを実行し、実行台帳(manifest)を data/manifests/ へ記録する。"""
+    from .pipeline import runner
+    from .paths import Dirs
+    cfg, shared = _pipeline_args(a)
+    stages = runner.expand_targets(a.targets)
+    entries = runner.plan(stages, Dirs(a.base), cfg, shared, force=a.force)
+    print(runner.format_plan(entries))
+    label = a.label or "-".join(t for t in a.targets)[:40]
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    rc = runner.execute(entries, Dirs(a.base), cfg, shared, label,
+                        repo_root=repo_root)
+    sys.exit(rc)
 
 
 def main():
@@ -205,6 +273,37 @@ def main():
     p.add_argument("--hub-weight", default=None, help="'log' or 'deg<alpha>' e.g. deg1, deg0.5")
     p.add_argument("--engine", default="igraph", choices=["igraph", "leidenalg"])
     p.set_defaults(fn=cmd_analyze)
+
+    # ---- パイプライン基盤(stages/plan/run)。ステージ契約は wu/stages/ 参照 ----
+    p = sub.add_parser("stages", help="登録済みステージと入出力契約の一覧")
+    p.set_defaults(fn=cmd_stages)
+
+    def _add_pipe_args(sp, with_run_opts=True):
+        sp.add_argument("targets", nargs="+",
+                        help="ステージ名(複数可)または all(= canonical 全 chain)")
+        sp.add_argument("--config", default=None,
+                        help="設定 JSON(既定: なし = ステージ既定値のみ。"
+                             "リポジトリ同梱の正準設定は configs/canonical.json)")
+        sp.add_argument("--set", action="append", dest="overrides",
+                        metavar="STAGE.KEY=VALUE",
+                        help="パラメータ上書き(複数可。値は JSON リテラル解釈)")
+        sp.add_argument("--galaxy-tag", default=None)
+        sp.add_argument("--macro-tag", default=None)
+        sp.add_argument("--force", action="store_true",
+                        help="生成物があっても再実行する")
+        if with_run_opts:
+            sp.add_argument("--run", default=None,
+                            help="座標 run 名(既定: 正典 ACTIVE_LAYOUT_RUN)")
+            sp.add_argument("--label", default=None,
+                            help="manifest ファイル名用ラベル")
+
+    p = sub.add_parser("plan", help="実行計画の表示(dry-run、副作用なし)")
+    _add_pipe_args(p, with_run_opts=False)
+    p.set_defaults(fn=cmd_plan)
+
+    p = sub.add_parser("run", help="ステージ実行 + manifest 記録")
+    _add_pipe_args(p)
+    p.set_defaults(fn=cmd_run)
 
     a = ap.parse_args()
     a.fn(a)

@@ -200,7 +200,7 @@ def main():
                             parsed_dir=art, graph_dir=dirs.graph)
     assert 1001 in set(nodes.tolist())
 
-    from wu.pipeline import analyze_subset
+    from wu.subset_analysis import analyze_subset
     m = analyze_subset(dirs.subset("idwin"), dirs.community_run("idwin"),
                        resolutions=(0.5, 1.0), seed=42, dirs=dirs)
     adir = dirs.community_run("idwin")

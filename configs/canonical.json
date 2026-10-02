@@ -1,0 +1,22 @@
+{
+  "_comment": [
+    "正準パイプライン設定(単一の真実源)。優先度: ステージ Param 既定 < defaults",
+    "< stages.<name> < CLI --set。shared は全体共有キー(run=null のときは",
+    "wu/paths.py の ACTIVE_LAYOUT_RUN = 出版中の正典 run を使う)。",
+    "移行計画に従い、移行済みステージのパラメータだけをここに集約していく",
+    "(効かないキーの黙殺を防ぐため、未宣言キーは runner がエラーにする)。"
+  ],
+  "shared": {
+    "run": null,
+    "galaxy_tag": "res1_sub",
+    "macro_tag": "res1"
+  },
+  "defaults": {
+    "seed": 42
+  },
+  "stages": {
+    "stats": {
+      "titles_needed": 200
+    }
+  }
+}

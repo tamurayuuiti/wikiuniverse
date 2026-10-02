@@ -260,7 +260,7 @@ def cmd_prune(dirs: Dirs, budget: int, mode: str = "smart", seed: int = SEED):
     Output: graph/edges_pruned_<mode><budget>.bin
     RAM peak: ~4-5 GB at 108M edges (full arrays + lexsort workspace).
     """
-    from wu.pipeline import prune_edges_degree_budget
+    from wu.hubsup import prune_edges_degree_budget
 
     t0 = time.time()
     E_mm = _load_undirected(dirs)

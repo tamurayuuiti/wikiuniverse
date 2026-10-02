@@ -82,6 +82,9 @@ class Dirs:
         self.layout = self.base / "layout"
         self.spatial = self.base / "spatial"
         self.tiles = self.spatial / "tiles"
+        # 実行台帳(pipeline runner がステージ実行の来歴を記録する。中間生成物:
+        # 削除自由・パイプラインの動作には影響しない)
+        self.manifests = self.base / "manifests"
         # --- frequently-used file paths
         self.meta = self.parsed / "meta.json"
         self.articles = self.parsed / "articles.parquet"
