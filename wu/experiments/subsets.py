@@ -1,22 +1,23 @@
-"""Subset extraction from the full resolved edge list (chunked scans, low RAM).
+"""解決済みフルエッジリストからのサブセット抽出(チャンク走査・低 RAM)。
 
-Strategies (recorded in subset_meta.json):
-  * id_window : contiguous window of page_id order (contrast case; leaks ~95%)
-  * bfs       : k-hop out-link BFS from seed articles with
-                - per-node out-link sampling cap
-                - mega-hub exclusion: discovered nodes with full-graph in-degree
-                  > max_in_degree are NOT added to the subset (seeds exempt).
-                  Rationale: template/year/infobox hubs act as "intergalactic
-                  medium", not galaxy members; including them collapses the
-                  subset into one blob and explodes boundary traffic.
+戦略(subset_meta.json に記録される):
+  * id_window : page_id 順の連続窓(対照実験用。リーク ~95% =
+                コミュニティ評価には使用不能)
+  * bfs       : シード記事からの k-hop アウトリンク BFS。
+                - ノード毎のアウトリンク・サンプリング上限
+                - メガハブ除外: 発見ノードのうちフルグラフ in 次数が
+                  > max_in_degree のものはサブセットへ追加しない(シードは免除)。
+                  根拠: テンプレート/年記事/infobox のハブは銀河の成員ではなく
+                  「銀河間物質」として振る舞う。含めるとサブセット全体が
+                  一つの塊へ崩壊し、境界トラフィックが爆発する。
 
-Outputs per subset dir:
+サブセットディレクトリ毎の出力:
   nodes.parquet        page_id, idx (compact), title
-  edges_internal.npy   int32 (n,2) compact idx pairs (directed, reciprocals kept)
-  node_stats.npz       ext_out (directed links to outside), ext_in, boundary_any
-  subset_meta.json     counts, params, provenance
+  edges_internal.npy   int32 (n,2) compact idx ペア(有向。相互リンクは両向き保存)
+  node_stats.npz       ext_out(外部への有向リンク数), ext_in, boundary_any
+  subset_meta.json     カウント・パラメータ・来歴
 
-Layout policy: subsets live under <base>/graph/subsets/<name>/.
+配置ポリシー: サブセットは <base>/graph/subsets/<name>/ 配下に置く。
 """
 from __future__ import annotations
 
@@ -69,7 +70,7 @@ def _pid_to_idx(parsed_dir: str, pids: np.ndarray) -> np.ndarray:
 def bfs_nodes(edges_bin: str, seed_pids, max_nodes: int, cap_per_node: int = 40,
               max_hops: int = 4, rng_seed: int = 42, parsed_dir: str | None = None,
               graph_dir: str | None = None, max_in_degree: int | None = 10000):
-    """Out-link BFS with per-node sampling cap and mega-hub exclusion."""
+    """アウトリンク BFS(ノード毎のサンプリング上限 + メガハブ除外付き)。"""
     rng = np.random.default_rng(rng_seed)
     E = load_edges_mmap(edges_bin)
 
@@ -141,7 +142,7 @@ def bfs_nodes(edges_bin: str, seed_pids, max_nodes: int, cap_per_node: int = 40,
 
 def extract_subset(edges_bin: str, node_pids: np.ndarray, out_dir: str, meta: dict,
                    parsed_dir: str | None = None):
-    """One full scan: collect internal edges; count per-node external traffic."""
+    """1 回のフル走査: 内部エッジの収集と、ノード毎の外部トラフィックのカウント。"""
     t0 = time.time()
     os.makedirs(out_dir, exist_ok=True)
     nodes = np.sort(np.unique(node_pids)).astype(np.int64)

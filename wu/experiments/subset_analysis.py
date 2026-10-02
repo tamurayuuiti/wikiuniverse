@@ -30,8 +30,8 @@ from ..paths import Dirs
 
 
 def _pick_primary(sweep_results, target_median=(200, 3000), ideal=800):
-    """Pick the resolution whose median community size is closest to `ideal`
-    (log-scale) inside the band; degenerate results (median<50) are penalized."""
+    """バンド内でコミュニティサイズ中央値が `ideal` に(対数スケールで)最も近い
+    resolution を選ぶ。縮退した結果(median<50)はペナルティを受ける。"""
     best, best_d = None, 1e18
     for s in sweep_results:
         med = s["p50"]

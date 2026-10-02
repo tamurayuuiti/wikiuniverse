@@ -23,8 +23,8 @@ from ..paths import Dirs
 
 def filter_edges_by_hub(E: np.ndarray, nodes: dict, dirs: Dirs,
                         indeg_cap: int | None = None, outdeg_cap: int | None = None):
-    """Drop edges whose endpoint is a mega-hub in the FULL graph (layout-graph
-    style hub suppression). Returns (E_filtered, info)."""
+    """どちらかの端点がフルグラフでのメガハブであるエッジを落とす(レイアウト用
+    グラフ流儀のハブ抑制)。戻り値は (E_filtered, info)。"""
     if indeg_cap is None and outdeg_cap is None:
         return E, {"dropped": 0}
     article_ids = np.load(dirs.article_ids)
@@ -49,15 +49,15 @@ def filter_edges_by_hub(E: np.ndarray, nodes: dict, dirs: Dirs,
 
 def prune_edges_degree_budget(E: np.ndarray, budget: int, seed: int = an.SEED,
                               mode: str = "both"):
-    """Degree-budget pruning of the layout graph.
+    """レイアウト用グラフの次数予算剪定。
 
-    modes:
-      both : keep edge iff random-rank < budget at BOTH endpoints
-             (hard cap per node; fragments star-peripheries -> not recommended)
-      smart: keep edge iff rank<budget at either endpoint OR either endpoint has
-             degree<=budget. Rationale: galaxy structure lives in low-degree
-             (stub<->local-hub) edges; only hub<->hub "intergalactic highways"
-             are thinned. Preserves connectivity of the periphery.
+    モード:
+      both : 両端の双方でランダム順位 < budget の場合のみエッジを残す
+             (ノード毎のハードキャップ。スターの周辺部が破砕する -> 非推奨)
+      smart: どちらかの端点で順位 < budget、またはどちらかの端点の次数 <= budget
+             ならエッジを残す。根拠: 銀河構造を支えているのは低次数の
+             (stub<->ローカルハブ)エッジであり、間引くのはハブ同士の
+             「銀河間高速道路」だけ。周辺部の連結性は保たれる。
     """
     rng = np.random.default_rng(seed)
     E = np.asarray(E)
