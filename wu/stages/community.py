@@ -1,4 +1,4 @@
-# wu/stages/community.py — コミュニティ検出ステージ群(フルグラフ Leiden)
+# wu/stages/community.py - コミュニティ検出ステージ群(フルグラフ Leiden)
 #
 # 責務:
 # - 無向一意化(dedup)→ 一括検出(detect = マクロ)→ 再帰分割(subdivide = 銀河)
@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from ..fullgraph import (cmd_cluster, cmd_dedup, cmd_detect, cmd_export,
+from ..community.fullgraph import (cmd_cluster, cmd_dedup, cmd_detect, cmd_export,
                          cmd_metrics, cmd_prune, cmd_subdivide, _res_tag)
 from ..pipeline.stage import Param, stage
 

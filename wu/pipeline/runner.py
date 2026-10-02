@@ -1,4 +1,4 @@
-# wu/pipeline/runner.py — 実行計画(plan)・実行(execute)・実行台帳(manifest)
+# wu/pipeline/runner.py - 実行計画(plan)・実行(execute)・実行台帳(manifest)
 #
 # 責務:
 # - ターゲット(ステージ名 or "all")を展開し、入出力契約から
@@ -10,7 +10,7 @@
 #
 # 注意:
 # - スキップ判定は「宣言 outputs の存在」のみ(v1)。タイムスタンプ比較による
-#   鮮度判定はしない — 作り直しは --force。存在しても中身の正しさは
+#   鮮度判定はしない - 作り直しは --force。存在しても中身の正しさは
 #   各ステージの契約テスト/監査スクリプトの責務。
 # - 実行は登録順(canonical)か指定順。依存ステージの暗黙実行はしない
 #   (予測可能性優先。足りない入力は fail-fast が案内する)。
@@ -103,15 +103,15 @@ def plan(stages, dirs, cfg, shared: dict, force: bool = False) -> list[dict]:
         p_all = {**shared, **{k: v for k, v in params.items() if v is not None}}
         outs = {k: str(artifacts.resolve(k, dirs, p_all)) for k in st.outputs}
         # 入力の充足 = ディスク上の実体 or プラン内先行ステージの生成予定。
-        # 判定は「解決済みパス」で行う(別キーのエイリアス — 例: subdivide の
-        # membership_out と後段の membership — が同一パスを指す場合があるため)。
+        # 判定は「解決済みパス」で行う(別キーのエイリアス - 例: subdivide の
+        # membership_out と後段の membership - が同一パスを指す場合があるため)。
         missing = [k for k in st.inputs
                    if str(artifacts.resolve(k, dirs, p_all)) not in satisfied
                    and not artifacts.exists(k, dirs, p_all)]
         outputs_exist = bool(outs) and all(os.path.exists(v) for v in outs.values())
         if missing:
             status = "missing-input"
-        elif outputs_exist and not force:
+        elif outputs_exist and not force and not st.always_run:
             status = "skip"
         else:
             status = "run"
@@ -162,12 +162,22 @@ def execute(entries, dirs, cfg, shared: dict, label: str,
                   flush=True)
             records.append(rec)
             continue
-        print(f"[wu] {st.name}: 実行 — {st.title}", flush=True)
+        print(f"[wu] {st.name}: 実行 - {st.title}", flush=True)
         ctx = Ctx(dirs=dirs, params=e["params"], shared=e["shared_used"],
                   force=False)
         t0 = time.time()
         try:
             st.run(ctx)
+        except SystemExit as sx:
+            # 実装本体の fail-fast(sys.exit)も台帳に「失敗」として残す。
+            rec["status"] = "failed"
+            rec["secs"] = round(time.time() - t0, 1)
+            rec["error"] = f"SystemExit: {sx}"
+            records.append(rec)
+            rc = 1
+            print(f"[wu] {st.name}: 失敗({rec['error']})", file=sys.stderr,
+                  flush=True)
+            break
         except Exception as exc:
             rec["status"] = "failed"
             rec["secs"] = round(time.time() - t0, 1)
@@ -218,7 +228,7 @@ def format_plan(entries) -> str:
         st = e["stage"]
         mark = {"run": "実行", "skip": "スキップ(生成物あり)",
                 "missing-input": "入力不足"}[e["status"]]
-        lines.append(f"  {st.name:<16} [{st.group}] {mark} — {st.title}")
+        lines.append(f"  {st.name:<16} [{st.group}] {mark} - {st.title}")
         if e["status"] == "missing-input":
             for key in e["missing"]:
                 lines.append(f"      入力なし: {key}")

@@ -2,7 +2,7 @@
 #
 # 責務: タイル bin/サイドカー json の欠落・サイズ/件数不一致・タイトル欠落を計測し、
 #   `local#NN` 表示の原因がデータ側(A)かビューア側 LRU(B)かを切り分ける。
-# 注意: 旧 scripts/audit_tiles.py から移設(2026-10-02)。scripts 側は互換ラッパ。
+# 注意: 正準実行は python -m wu run audit_tiles(読み取り専用・再計算なし)。
 
 """Audit the published viewer tiles (data/spatial/) — read-only, no recompute.
 
@@ -29,7 +29,7 @@ Also prints the recorded graph totals for comparison (these live in
 results/SUMMARY.md §1 and LOCAL_SETUP.md §3; nothing is recomputed here).
 
 Usage:
-  python scripts/audit_tiles.py --base data [--limit 20]
+  python -m wu run audit_tiles --base data   (--set audit_tiles.limit=N)
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ import struct
 import sys
 
 
-from .paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
+from ..paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 
 # 記録済みの基準値(再計算しない。正は results/SUMMARY.md §1 / LOCAL_SETUP.md §3)。
 RECORDED = {

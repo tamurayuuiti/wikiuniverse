@@ -10,7 +10,7 @@
 #   サイドカー json = タイトル(rank 順)。bin に文字列は入れない(数値のみ)。
 #
 # 注意:
-# - 旧 scripts/export_viewer_tiles.py から移設(2026-10-02)。scripts 側は互換ラッパ。
+# - main(a) は Namespace 注入でステージから呼ばれる(正準実行は python -m wu run publish)。
 # - bootstrap の meta.schema_version がビューア側の許容チェックと対になる
 #   (形式を変える場合は SCHEMA_VERSION を上げ、viewer/src/data/bootstrap.ts の
 #   SUPPORTED_SCHEMA_VERSION と合わせて更新すること)。
@@ -35,10 +35,10 @@ so the universe+galaxy views need a single fetch; article data streams per tile.
 Macro labels default to macros.rep_titles[0][:16]; an optional hand-curated
 final/macro_label_overrides.json ({"macros": [{"macro_id": N, "label": "..."}]})
 takes precedence for non-empty labels. Template generation:
-  python scripts/audit_names.py --base data --dump-macro-labels
+  python -m wu run audit_names --base data  # --set audit_names.dump_macro_labels=true
 
 Usage:
-  python scripts/export_viewer_tiles.py --base data [--galaxy-tag res1_sub]
+  python -m wu run publish --base data  # 既定で正典 run(configs/publish.json)
       [--run <layout run>] [--cross-cap 8]
 (--run default = wu.paths.ACTIVE_LAYOUT_RUN. data/spatial/ is the published,
 run-name-independent viewer contract; the source run is recorded in bootstrap.json.)

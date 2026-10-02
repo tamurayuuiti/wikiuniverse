@@ -1,4 +1,4 @@
-# wu/pipeline/config.py — 設定の読み込み・マージ・検証
+# wu/pipeline/config.py - 設定の読み込み・マージ・検証
 #
 # 責務:
 # - 「ステージの Param 既定 < 設定ファイル defaults < 設定ファイル stages.<name>

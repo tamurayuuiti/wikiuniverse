@@ -3,8 +3,8 @@
 # 責務: ①spill 一覧(超過順・文脈列付き)②マクロ毎の平坦度+重心配置率
 #   (同成員数の等方 null ベースライン対比、真の円盤候補を * 表示)
 #   ③corr(flat, bary_frac) ④layout_meta との突合(不一致は必ず WARN)。
-# 注意: 旧 scripts/audit_layout.py から移設(2026-10-02)。平坦度は layout_global
-#   から import して式・ドメインの同一性を保証する。cp932 コンソール安全
+# 注意: 平坦度は layout_global から import して式・ドメインの同一性を保証する。
+#   正準実行は python -m wu run audit_layout(読み取り専用)。cp932 コンソール安全
 #   (出力文字は cp932 エンコード可能範囲に制限 + errors=replace 保険、テスト済み)。
 
 """Audit a coordinate-layout run (data/layout/<run>/) — read-only, no recompute.
@@ -45,7 +45,7 @@ missing files/columns degrade with a warning, never with a KeyError.
 Writes nothing.
 
 Usage:
-  python scripts/audit_layout.py --base data [--run RUN]
+  python -m wu run audit_layout --base data [--run RUN]
       # --run default = wu.paths.ACTIVE_LAYOUT_RUN
 """
 from __future__ import annotations
@@ -60,9 +60,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))
 sys.path.insert(0, _HERE)
 
-from .layout_global import flatness  # noqa: E402  (指標の単一の真実源)
-from .dumpio import read_json  # noqa: E402
-from .paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
+from ..layout.layout_global import flatness  # noqa: E402  (指標の単一の真実源)
+from ..dumpio import read_json  # noqa: E402
+from ..paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 
 SPILL_TOL = 1.02  # containment tolerance of the layout quality metric
 TOP_IDS = 20      # galaxy_spill_ids cap recorded in layout_meta.json
@@ -114,7 +114,7 @@ def load_run(dirs: Dirs, run: str | None) -> dict:
     if missing:
         raise RunMissing(
             f"run '{lay.name}' に必須ファイルがありません: {', '.join(missing)}"
-            f". 先に生成してください: python scripts/layout_global.py"
+            f". 先に生成してください: python -m wu run layout_global"
             f" --base {dirs.base} --run {lay.name}")
     import pyarrow.parquet as pq
     gpos = pq.read_table(os.path.join(str(lay),

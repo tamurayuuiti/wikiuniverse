@@ -1,4 +1,4 @@
-# wu/pipeline/stage.py — ステージ定義とレジストリ
+# wu/pipeline/stage.py - ステージ定義とレジストリ
 #
 # 責務:
 # - パイプラインの 1 処理 = 1 ステージとして、名前・分類・パラメータ仕様・
@@ -75,6 +75,10 @@ class Stage:
     inputs: tuple[str, ...]   # 必須入力の成果物キー
     outputs: tuple[str, ...]  # 生成を宣言する成果物キー
     run: Callable[[Ctx], None]
+    # True = 「生成物あり → skip」にしない再実行可能ステージ。
+    # 座標・出版は同一 run の作り直し/腕違いの実験/正典の再出版が日常操作で、
+    # skip がそれを阻害する(重い再計算は run 名・内部 checkpoint が管理する)。
+    always_run: bool = False
 
 
 REGISTRY: dict[str, Stage] = {}
@@ -82,7 +86,8 @@ ORDER: list[str] = []  # 登録順 = canonical グループのパイプライン
 
 
 def stage(name: str, title: str, group: str = "canonical",
-          params: tuple = (), inputs: tuple = (), outputs: tuple = ()):
+          params: tuple = (), inputs: tuple = (), outputs: tuple = (),
+          always_run: bool = False):
     """ステージ登録デコレータ(関数を run として Stage をレジストリへ追加)。"""
 
     def deco(fn: Callable[[Ctx], None]):
@@ -90,7 +95,8 @@ def stage(name: str, title: str, group: str = "canonical",
             raise ValueError(f"ステージ名が二重登録されました: {name}")
         REGISTRY[name] = Stage(name=name, title=title, group=group,
                                params=tuple(params), inputs=tuple(inputs),
-                               outputs=tuple(outputs), run=fn)
+                               outputs=tuple(outputs), run=fn,
+                               always_run=always_run)
         ORDER.append(name)
         return fn
 

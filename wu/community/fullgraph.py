@@ -7,13 +7,11 @@
 # - 各段階はディスクへ保存され再開可能(工程別サブコマンド制)。
 #
 # 注意:
-# - 旧 scripts/run_full_leiden.py から移設(2026-10-02、パイプライン再整理)。
-#   関数の挙動は不変(test_subdivide / test_catalog が担保)。scripts 側は互換ラッパ。
-# - 正準実行はステージ経由: python -m wu run dedup|detect|subdivide|metrics|
-#   cluster|export(wu/stages/community.py)。prune は実験腕(experiment 分類)。
+# - cmd_* 関数が処理本体で、ステージ(wu/stages/community.py)が参数付きで委譲する。
+#   正準実行: python -m wu run dedup|detect|subdivide|metrics|cluster|export
+#   (prune はレイアウト用グラフの実験腕 = experiment 分類)。
+# - 挙動は test_subdivide / test_catalog が担保する。
 # - tag 規約: res<R> = 一括マクロ、<tag>_sub(既定 res1_sub)= 2 段階の銀河。
-# - 以下の英語 docstring は移設時のまま保持(サブコマンド仕様として正確。
-#   日本語化は移行計画に従い段階的に実施)。
 
 """Full-graph Leiden pipeline for the complete jawiki ns0 graph.
 
@@ -42,12 +40,9 @@ Memory budget (32GB machine):
   metrics    ~3 GB (2 passes + induced-edge buffer ~0.7 GB)
 
 Usage (typical full sequence):
-  python scripts/run_full_leiden.py --base data dedup
-  python scripts/run_full_leiden.py --base data detect --resolutions 0.5,1.0,2.0
-  python scripts/run_full_leiden.py --base data subdivide --resolution 1.0
-  python scripts/run_full_leiden.py --base data metrics --tag res1_sub
-  python scripts/run_full_leiden.py --base data cluster --tag res1_sub
-  python scripts/run_full_leiden.py --base data export  --tag res1_sub
+  python -m wu run dedup detect subdivide metrics cluster export --base data
+  (各ステージの参数は wu/stages/community.py の Param 宣言。override は
+   --set <stage>.<key>=<value>。tag 規約: res<R> = マクロ / res<R>_sub = 銀河)
 Smoke: detect --max-edges 5000000 --force   (then rerun real detect with --force)
 """
 from __future__ import annotations
@@ -63,9 +58,9 @@ import time
 import numpy as np
 
 
-from .dumpio import now_iso as _now, read_json, write_json  # noqa: E402,F401
-from .paths import Dirs  # noqa: E402
-from .stats import load_edges_mmap, load_titles  # noqa: E402
+from ..dumpio import now_iso as _now, read_json, write_json  # noqa: E402,F401
+from ..paths import Dirs  # noqa: E402
+from ..stats import load_edges_mmap, load_titles  # noqa: E402
 
 from .analysis import SEED  # noqa: E402  # 乱数シードの単一の真実源
 SHIFT = 21  # compact idx < 2^21 = 2,097,152  (jawiki: 1,516,326 articles)
@@ -272,7 +267,7 @@ def cmd_prune(dirs: Dirs, budget: int, mode: str = "smart", seed: int = SEED):
     Output: graph/edges_pruned_<mode><budget>.bin
     RAM peak: ~4-5 GB at 108M edges (full arrays + lexsort workspace).
     """
-    from .hubsup import prune_edges_degree_budget
+    from ..experiments.hubsup import prune_edges_degree_budget
 
     t0 = time.time()
     E_mm = _load_undirected(dirs)

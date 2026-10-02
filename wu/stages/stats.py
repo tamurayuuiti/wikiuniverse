@@ -1,4 +1,4 @@
-# wu/stages/stats.py — ステージ: 全グラフ次数統計・ハブ検出
+# wu/stages/stats.py - ステージ: 全グラフ次数統計・ハブ検出
 #
 # 責務:
 # - graph/edges_ns0.bin(解決済み有向エッジ)から全記事の in/out 次数を

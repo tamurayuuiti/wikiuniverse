@@ -27,8 +27,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .dumpio import write_json
-from .stats import load_edges_mmap
+from ..dumpio import write_json
+from ..stats import load_edges_mmap
 
 
 def _titles_for(parsed_dir: str, pids: np.ndarray):
@@ -51,7 +51,7 @@ def select_id_window(parsed_dir: str, k: int, mode: str = "late"):
 
 
 def title_to_pid(parsed_dir: str, title: str) -> int | None:
-    from .sqlparse import h64
+    from ..sqlparse import h64
 
     z = np.load(os.path.join(parsed_dir, "ns0_all_hashes.npz"))
     hv = np.uint64(h64(title.replace(" ", "_").encode("utf-8")))

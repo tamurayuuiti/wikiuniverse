@@ -24,10 +24,10 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from . import analysis as an
-from .dumpio import read_json, write_json
+from ..community import analysis as an
+from ..dumpio import read_json, write_json
 from .hubsup import filter_edges_by_hub, prune_edges_degree_budget
-from .paths import Dirs
+from ..paths import Dirs
 
 
 def _pick_primary(sweep_results, target_median=(200, 3000), ideal=800):

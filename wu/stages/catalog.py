@@ -1,4 +1,4 @@
-# wu/stages/catalog.py — 純度・銀河カタログのステージ(community → final の橋渡し)
+# wu/stages/catalog.py - 純度・銀河カタログのステージ(community → final の橋渡し)
 #
 # 責務:
 # - purity: カテゴリ純度(purity v2)の計算 = 銀河名の材料づくり。
@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from argparse import Namespace
 
-from .. import catalog as catalog_mod
-from .. import purity as purity_mod
+from ..community import catalog as catalog_mod
+from ..community import purity as purity_mod
 from ..pipeline.stage import Param, stage
 
 

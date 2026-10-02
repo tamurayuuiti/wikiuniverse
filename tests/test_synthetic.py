@@ -65,7 +65,8 @@ def main():
     from wu.stats import full_stats
     full_stats(dirs)
 
-    from wu.subsets import extract_subset, select_id_window, bfs_nodes, title_to_pid
+    from wu.experiments.subsets import (extract_subset, select_id_window,
+                                       bfs_nodes, title_to_pid)
     pids = select_id_window(art, 20, "late")
     assert pids.tolist() == list(range(1040, 1060))
     meta = extract_subset(dirs.edges_bin, pids, dirs.subset("idwin"),
@@ -81,7 +82,7 @@ def main():
                             parsed_dir=art, graph_dir=dirs.graph)
     assert 1001 in set(nodes.tolist())
 
-    from wu.subset_analysis import analyze_subset
+    from wu.experiments.subset_analysis import analyze_subset
     m = analyze_subset(dirs.subset("idwin"), dirs.community_run("idwin"),
                        resolutions=(0.5, 1.0), seed=42, dirs=dirs)
     adir = dirs.community_run("idwin")

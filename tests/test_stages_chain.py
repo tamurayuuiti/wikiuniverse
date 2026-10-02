@@ -114,10 +114,18 @@ def main():
     assert [r["name"] for r in man["stages"]] == list(CHAIN)
     assert all(r["status"] == "ok" for r in man["stages"]), man["stages"]
 
-    # ---- resume 意味論: 全 chain の再 plan = skip(生成物由来)
+    # ---- resume 意味論: 成果物ベースのステージは再 plan で skip(再計算しない)。
+    #      always_run のステージ(layout_global/layout_local/publish)は
+    #      設計上「再実行可能」(同一 run の作り直し・正典の再出版が日常操作)
+    #      なので run のまま。
     ent2 = runner.plan(stages, dirs, cfg, shared)
     got2 = {e["stage"].name: e["status"] for e in ent2}
-    assert all(s == "skip" for s in got2.values()), got2
+    rerunnable = {"layout_global", "layout_local", "publish"}
+    for _n, _st in got2.items():
+        if _n in rerunnable:
+            assert _st == "run", (_n, _st)
+        else:
+            assert _st == "skip", (_n, _st)
 
     # ---- "all" の展開 = canonical 全 chain(download を除く移行済み範囲)
     all_names = [s.name for s in runner.expand_targets(["all"])]

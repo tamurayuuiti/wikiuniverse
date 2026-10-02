@@ -27,10 +27,19 @@ sys.path.insert(0, HERE)
 from fixture import BASE, build_fixtures  # noqa: E402
 
 
-def run_script(name, *args):
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", name),
-                        "--base", BASE, *args], capture_output=True, text=True)
-    assert r.returncode == 0, f"{name} failed:\n{r.stdout}\n{r.stderr}"
+def run_wu(*args):
+    """python -m wu <args>(canonical CLI 経路。--base は呼び出し側で指定)。"""
+    r = subprocess.run([sys.executable, "-m", "wu", *args], capture_output=True,
+                       text=True, cwd=ROOT)
+    assert r.returncode == 0, f"wu failed:\n{r.stdout}\n{r.stderr}"
+    return r.stdout
+
+
+def run_mod(mod, *args):
+    """python -m <mod>(wu.layout.layout_local 等のモジュール CLI 経路)。"""
+    r = subprocess.run([sys.executable, "-m", mod, *args], capture_output=True,
+                       text=True, cwd=ROOT)
+    assert r.returncode == 0, f"{mod} failed:\n{r.stdout}\n{r.stderr}"
     return r.stdout
 
 
@@ -57,11 +66,7 @@ def main():
     build_category_artifacts(dirs.dump_file(FILES["categorylinks"]),
                              dirs.dump_file(FILES["linktarget"]), dirs.parsed, dirs.graph)
 
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "run_full_leiden", os.path.join(ROOT, "scripts", "run_full_leiden.py"))
-    rfl = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(rfl)
+    import wu.community.fullgraph as rfl
 
     rfl.cmd_dedup(dirs)
     rfl.cmd_detect(dirs, [1.0], force=True)                       # membership_res1
@@ -70,9 +75,10 @@ def main():
     rfl.cmd_metrics(dirs, "res1_s")                               # per_community + pairs
     rfl.cmd_cluster(dirs, "res1_s")                               # clusters_node
 
-    run_script("community_purity.py", "--tag", "res1_s", "--max-cat-freq", "20000")
-    out = run_script("build_galaxy_catalog.py", "--galaxy-tag", "res1_s",
-                     "--macro-tag", "res1", "--top-neighbors", "4", "--top-pairs", "100")
+    run_wu("--base", BASE, "run", "purity", "--galaxy-tag", "res1_s")
+    out = run_wu("--base", BASE, "run", "catalog", "--galaxy-tag", "res1_s",
+                 "--macro-tag", "res1", "--set", "catalog.top_neighbors=4",
+                 "--set", "catalog.top_pairs=100")
 
     # ---- assertions
     final = os.path.join(BASE, "final")
@@ -112,10 +118,7 @@ def main():
     assert sum(g["display_class"][i] == "dust" for i in range(G)) == meta["n_dust"]
 
     # ---- 保守サフィックスの語幹正規化(_stem_name 単体)
-    spec_n = importlib.util.spec_from_file_location(
-        "bgc_names", os.path.join(ROOT, "scripts", "build_galaxy_catalog.py"))
-    bgc = importlib.util.module_from_spec(spec_n)
-    spec_n.loader.exec_module(bgc)
+    from wu.community import catalog as bgc
     for _src, _want in [("シングル関連のスタブ項目", "シングル"),
                         ("アイドルに関するスタブ", "アイドル"),
                         ("山岳関連のスタブ項目", "山岳"),
@@ -130,8 +133,8 @@ def main():
 
     # ---- global layout smoke (v1.5 canonical: full 3D, sphere relax,
     #      bary placement for mediums AND unlinked galaxies, no baked lens)
-    out2 = run_script("layout_global.py", "--galaxy-tag", "res1_s",
-                      "--run", "r_main")
+    out2 = run_wu("--base", BASE, "run", "layout_global",
+                  "--galaxy-tag", "res1_s", "--run", "r_main")
 
     # ---- version-skew regression: pre-v2 catalog (macros without is_dust,
     #      galaxies without display_class) must still lay out with a warning
@@ -142,12 +145,16 @@ def main():
     _gpath = os.path.join(final, "galaxies.parquet")
     _gt = pq.read_table(_gpath)
     pq.write_table(_gt.drop(["display_class"]), _gpath)
-    out_skew = run_script("layout_global.py", "--galaxy-tag", "res1_s",
-                          "--run", "r_main")
-    assert "pre-v2" in out_skew, "skew warning not emitted"
-    # restore v2 catalog files (skew block degraded them in place)
-    run_script("build_galaxy_catalog.py", "--galaxy-tag", "res1_s",
-               "--macro-tag", "res1", "--top-neighbors", "4", "--top-pairs", "100")
+    out_skew = run_wu("--base", BASE, "run", "layout_global",
+                      "--galaxy-tag", "res1_s", "--run", "r_main")
+    assert "pre-v2" in out_skew, "skew warning not emitted:\n" + out_skew[-1200:]
+    # restore v2 catalog files (skew block degraded them in place).
+    # --force 必須: catalog は成果物ステージで「生成物あり → skip」のため、
+    # 意図的な作り直し(劣化ファイルの復元)は force で明示する。
+    run_wu("--base", BASE, "run", "catalog", "--force",
+           "--galaxy-tag", "res1_s",
+           "--macro-tag", "res1", "--set", "catalog.top_neighbors=4",
+           "--set", "catalog.top_pairs=100")
 
     lay = os.path.join(BASE, "layout", "r_main")
     for f in ("galaxy_positions.parquet", "macro_positions.parquet",
@@ -202,14 +209,11 @@ def main():
         assert 0.0 <= q["galaxy_flat_p90"] <= 1.0, q
 
     # ---- A6: galaxy_spill_ids recording + read-only layout audit
-    #      (scripts/audit_layout.py). The fixture run is spill-free, so the
+    #      (python -m wu run audit_layout). The fixture run is spill-free, so the
     #      meta/audit cross-check must be silent and the ids list empty.
     assert "galaxy_spill_ids" in q, q.keys()
     assert q["galaxy_spill_ids"] == [] and q["galaxy_spill_count"] == 0, q
-    spec_al = importlib.util.spec_from_file_location(
-        "audit_layout_mod", os.path.join(ROOT, "scripts", "audit_layout.py"))
-    al = importlib.util.module_from_spec(spec_al)
-    spec_al.loader.exec_module(al)
+    import wu.audit.layout as al
 
     # (a) fixture e2e: the audit must reproduce the meta numbers (same galaxy
     #     set, same flatness formula) and emit no cross-check WARN when clean
@@ -296,14 +300,16 @@ def main():
     # CLI: report renders (exit 0); a missing run fails fast with the
     # regeneration command in the message (exit 2)
     r_cli = subprocess.run(
-        [sys.executable, os.path.join(ROOT, "scripts", "audit_layout.py"),
-         "--base", tmpb, "--run", "r_spill"], capture_output=True, text=True)
+        [sys.executable, "-m", "wu", "--base", tmpb, "run", "audit_layout",
+         "--run", "r_spill"], capture_output=True, text=True, cwd=ROOT)
     assert r_cli.returncode == 0 and "spill 一覧" in r_cli.stdout, \
         r_cli.stdout + r_cli.stderr
+    # 存在しない run: 計画段階の入力チェックで rc=2、案内に生成ステージ名が出る
     r_miss = subprocess.run(
-        [sys.executable, os.path.join(ROOT, "scripts", "audit_layout.py"),
-         "--base", tmpb, "--run", "r_nosuch"], capture_output=True, text=True)
-    assert r_miss.returncode == 2 and "layout_global.py" in r_miss.stdout, \
+        [sys.executable, "-m", "wu", "--base", tmpb, "run", "audit_layout",
+         "--run", "r_nosuch"], capture_output=True, text=True, cwd=ROOT)
+    assert r_miss.returncode == 2, r_miss.stdout + r_miss.stderr
+    assert "layout_global" in (r_miss.stdout + r_miss.stderr), \
         r_miss.stdout + r_miss.stderr
 
     # cross-check WARN path: wrong meta numbers must surface, never silent
@@ -328,8 +334,8 @@ def main():
     env932 = {k: v for k, v in os.environ.items() if k != "PYTHONUTF8"}
     env932["PYTHONIOENCODING"] = "cp932"
     r_932 = subprocess.run(
-        [sys.executable, os.path.join(ROOT, "scripts", "audit_layout.py"),
-         "--base", tmpb, "--run", "r_spill"], capture_output=True, env=env932)
+        [sys.executable, "-m", "wu", "--base", tmpb, "run", "audit_layout",
+         "--run", "r_spill"], capture_output=True, env=env932, cwd=ROOT)
     err932 = r_932.stderr.decode("cp932", "replace")
     assert r_932.returncode == 0, err932[-1500:]
     assert "UnicodeEncodeError" not in err932, err932[-1500:]
@@ -390,8 +396,8 @@ def main():
         "w": [10.0],
     }), os.path.join(fx_final, "macro_pairs.parquet"))
     r_fx = subprocess.run(
-        [sys.executable, os.path.join(ROOT, "scripts", "layout_global.py"),
-         "--base", fxb, "--run", "r_fx"], capture_output=True, text=True)
+        [sys.executable, "-m", "wu", "--base", fxb, "run", "layout_global",
+         "--run", "r_fx"], capture_output=True, text=True, cwd=ROOT)
     assert r_fx.returncode == 0, r_fx.stdout[-2000:] + r_fx.stderr[-2000:]
     lm_fx = json.load(open(os.path.join(fxb, "layout", "r_fx",
                                         "layout_meta.json"), encoding="utf-8"))
@@ -445,8 +451,8 @@ def main():
         "w": [5.0],
     }), os.path.join(fxdf, "macro_pairs.parquet"))
     r_fd = subprocess.run(
-        [sys.executable, os.path.join(ROOT, "scripts", "layout_global.py"),
-         "--base", fxd, "--run", "r_dom"], capture_output=True, text=True)
+        [sys.executable, "-m", "wu", "--base", fxd, "run", "layout_global",
+         "--run", "r_dom"], capture_output=True, text=True, cwd=ROOT)
     assert r_fd.returncode == 0, r_fd.stdout[-2000:] + r_fd.stderr[-2000:]
     lm_fd = json.load(open(os.path.join(fxd, "layout", "r_dom",
                                         "layout_meta.json"), encoding="utf-8"))
@@ -470,10 +476,7 @@ def main():
     assert al._null_flat(4)[0] > 0.9 > al._null_flat(40)[0]
 
     # ---- v1.5 helper unit tests (flatness / adjacency / medium_local / fib slots)
-    spec_lg = importlib.util.spec_from_file_location(
-        "layout_global_mod", os.path.join(ROOT, "scripts", "layout_global.py"))
-    lg = importlib.util.module_from_spec(spec_lg)
-    spec_lg.loader.exec_module(lg)
+    import wu.layout.layout_global as lg
 
     rng_t = _np.random.default_rng(7)
     planar = _np.stack([rng_t.normal(size=200), rng_t.normal(size=200),
@@ -545,10 +548,7 @@ def main():
     assert lg._fib_ball_slots(0, 10.0).shape == (0, 3)
 
     # ---- B1 sector anchors: dominant neighbour, top-2 blend, confidence
-    spec_ll = importlib.util.spec_from_file_location(
-        "layout_local_mod", os.path.join(ROOT, "scripts", "layout_local.py"))
-    ll = importlib.util.module_from_spec(spec_ll)
-    spec_ll.loader.exec_module(ll)
+    import wu.layout.layout_local as ll
     prep_t = {"cu": _np.array([0, 0, 1, 1], _np.int32),
               "cg": _np.array([1, 2, 1, 2], _np.int32),
               "cw": _np.array([3, 1, 2, 2], _np.int32),
@@ -606,10 +606,10 @@ def main():
     assert (n2 > 1e-6).all() and (n2 <= 1.0 + 1e-6).all()   # spiral, not origin
 
     # ---- local (intra-galaxy) article layout, batch range + merge
-    run_script("layout_local.py", "--galaxies", "0-11", "--galaxy-tag", "res1_s",
-               "--run", "r_main")
-    run_script("layout_local.py", "--galaxies", "12-9999", "--galaxy-tag", "res1_s",
-               "--run", "r_main", "--preview-galaxy", "0")
+    run_mod("wu.layout.layout_local", "--base", BASE, "--galaxies", "0-11",
+            "--galaxy-tag", "res1_s", "--run", "r_main")
+    run_mod("wu.layout.layout_local", "--base", BASE, "--galaxies", "12-9999",
+            "--galaxy-tag", "res1_s", "--run", "r_main", "--preview-galaxy", "0")
     assert os.path.exists(os.path.join(lay, "preview_galaxy_0.png"))
     apq = os.path.join(lay, "article_positions.parquet")
     assert os.path.exists(apq), "merged article positions missing"
@@ -673,10 +673,7 @@ def main():
         assert got_e == exp_e, f"internal bucket mismatch g={g}"
 
     # ---- B0 anchor equivalence: grouped+bincount == legacy per-edge add.at
-    spec_ll = importlib.util.spec_from_file_location(
-        "layout_local_mod", os.path.join(ROOT, "scripts", "layout_local.py"))
-    ll = importlib.util.module_from_spec(spec_ll)
-    spec_ll.loader.exec_module(ll)
+    import wu.layout.layout_local as ll
     pp = ll._prep_paths(Dirs(BASE), "res1_s")
     prep = ll.load_prep(pp)
     anc_new = ll.build_anchors(prep, memb_s, C3.astype(_np.float64), len(memb_s))
@@ -695,9 +692,10 @@ def main():
     # ---- recompose: new global params -> article positions without re-run
     # NOTE: z_squash has no effect on tiny synthetic graphs (igraph FR init is
     # planar for n<=~6), so we vary --pack to force a radius/scale change.
-    run_script("layout_global.py", "--pack", "0.3",
-               "--run", "r_c2", "--galaxy-tag", "res1_s")
-    run_script("recompose_articles.py", "--from-run", "r_main", "--to-run", "r_c2")
+    run_wu("--base", BASE, "run", "layout_global", "--galaxy-tag", "res1_s",
+           "--run", "r_c2", "--set", "layout_global.pack=0.3")
+    run_wu("--base", BASE, "run", "recompose",
+           "--set", "recompose.from_run=r_main", "--set", "recompose.to_run=r_c2")
     p_old = pq.read_table(os.path.join(lay, "article_positions.parquet")).to_pydict()
     p_new = pq.read_table(os.path.join(BASE, "layout", "r_c2",
                                        "article_positions.parquet")).to_pydict()
@@ -707,15 +705,16 @@ def main():
     assert moved > 0, "recompose produced identical positions"
 
     # ---- parallel launcher: all-done branch -> merge only
-    run_script("run_local_parallel.py", "--jobs", "2", "--galaxy-tag", "res1_s",
-               "--run", "r_main")
+    run_wu("--base", BASE, "run", "layout_local", "--galaxy-tag", "res1_s",
+           "--run", "r_main", "--set", "layout_local.jobs=2")
 
     # ---- B0 invariance: an LPT-split 3-job parallel run must reproduce the
     #      sequential range-split article positions EXACTLY (coordinates are
     #      job-assignment independent by design)
-    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_par")
-    run_script("run_local_parallel.py", "--jobs", "3", "--galaxy-tag", "res1_s",
-               "--run", "r_par")
+    run_wu("--base", BASE, "run", "layout_global", "--galaxy-tag", "res1_s",
+           "--run", "r_par")
+    run_wu("--base", BASE, "run", "layout_local", "--galaxy-tag", "res1_s",
+           "--run", "r_par", "--set", "layout_local.jobs=3")
     p_par = pq.read_table(os.path.join(BASE, "layout", "r_par",
                                        "article_positions.parquet")).to_pydict()
     assert _np.array_equal(p_par["x"], apt["x"]) and \
@@ -737,16 +736,16 @@ def main():
     assert lmeta["mode"] == "merge-only" and "parallel" in lmeta, lmeta
     assert lmeta["parallel"]["per_galaxy_secs"].get("n", 0) > 0, lmeta
 
-    # ---- B0 fail-fast: a run without galaxy_positions must exit at once with
-    #      an actionable message, not spawn jobs that crash (2026-09-30 incident)
-    for scr, extra in (("layout_local.py", []),
-                       ("run_local_parallel.py", ["--jobs", "2"])):
-        r_nf = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", scr),
-                               "--base", BASE, "--galaxy-tag", "res1_s",
-                               "--run", "r_noglobal", *extra],
-                              capture_output=True, text=True)
-        assert r_nf.returncode != 0, f"{scr} should fail on a run without globals"
-        assert "layout_global.py" in (r_nf.stdout + r_nf.stderr), r_nf.stderr[-500:]
+    # ---- fail-fast: galaxy_positions の無い run では、ジョブを spawn する前に
+    #      即座に・実行可能な案内(生成コマンド)付きで失敗しなければならない
+    for cmd in ([sys.executable, "-m", "wu.layout.layout_local",
+                 "--base", BASE, "--galaxy-tag", "res1_s", "--run", "r_noglobal"],
+                [sys.executable, "-m", "wu", "--base", BASE, "run", "layout_local",
+                 "--galaxy-tag", "res1_s", "--run", "r_noglobal",
+                 "--set", "layout_local.jobs=2"]):
+        r_nf = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
+        assert r_nf.returncode != 0, f"{cmd[2]} should fail without globals"
+        assert "layout_global" in (r_nf.stdout + r_nf.stderr), r_nf.stderr[-500:]
 
     # ---- B3 multilevel FR: determinism / validity / quality metrics / gating
     import igraph as _ig
@@ -771,12 +770,14 @@ def main():
     assert q_ch and q_ch["adj_recall"] > 0.9, q_ch
     # gating: below --ml-threshold the default (ml) and flat arms must agree
     # EXACTLY (legacy path untouched = small galaxies never move)
-    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_b3a")
-    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_b3b")
-    run_script("layout_local.py", "--galaxies", "0-5", "--galaxy-tag", "res1_s",
-               "--run", "r_b3a")
-    run_script("layout_local.py", "--galaxies", "0-5", "--galaxy-tag", "res1_s",
-               "--run", "r_b3b", "--fr-mode", "flat")
+    run_wu("--base", BASE, "run", "layout_global", "--galaxy-tag", "res1_s",
+           "--run", "r_b3a")
+    run_wu("--base", BASE, "run", "layout_global", "--galaxy-tag", "res1_s",
+           "--run", "r_b3b")
+    run_mod("wu.layout.layout_local", "--base", BASE, "--galaxies", "0-5",
+            "--galaxy-tag", "res1_s", "--run", "r_b3a")
+    run_mod("wu.layout.layout_local", "--base", BASE, "--galaxies", "0-5",
+            "--galaxy-tag", "res1_s", "--run", "r_b3b", "--fr-mode", "flat")
     for g in range(6):
         sa = os.path.join(BASE, "layout", "r_b3a", "article_shards", f"gal_{g:06d}.npy")
         sb = os.path.join(BASE, "layout", "r_b3b", "article_shards", f"gal_{g:06d}.npy")
@@ -790,9 +791,11 @@ def main():
                                         "edge_len_cv_mean", "n_ml_applied"}
 
     # ---- B1/B2 arms: default (sector+p98) must differ from the legacy arm
-    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_leg")
-    run_script("layout_local.py", "--galaxies", "0-11", "--galaxy-tag", "res1_s",
-               "--run", "r_leg", "--anchor-mode", "sum", "--fr-norm", "max")
+    run_wu("--base", BASE, "run", "layout_global", "--galaxy-tag", "res1_s",
+           "--run", "r_leg")
+    run_mod("wu.layout.layout_local", "--base", BASE, "--galaxies", "0-11",
+            "--galaxy-tag", "res1_s", "--run", "r_leg",
+            "--anchor-mode", "sum", "--fr-norm", "max")
     sh_new = _np.load(os.path.join(lay, "article_shards", "gal_000000.npy"))
     sh_leg = _np.load(os.path.join(BASE, "layout", "r_leg", "article_shards",
                                    "gal_000000.npy"))
@@ -804,9 +807,11 @@ def main():
     assert lm_def["params"]["fr_norm"] == "p98"
 
     # ---- B3 launcher pass-through: --fr-mode must reach every job and the meta
-    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_b3c")
-    run_script("run_local_parallel.py", "--jobs", "2", "--galaxy-tag", "res1_s",
-               "--run", "r_b3c", "--fr-mode", "flat")
+    run_wu("--base", BASE, "run", "layout_global", "--galaxy-tag", "res1_s",
+           "--run", "r_b3c")
+    run_wu("--base", BASE, "run", "layout_local", "--galaxy-tag", "res1_s",
+           "--run", "r_b3c", "--set", "layout_local.jobs=2",
+           "--set", "layout_local.fr_mode=flat")
     pmc = json.load(open(os.path.join(BASE, "layout", "r_b3c",
                                       "parallel_meta.json"), encoding="utf-8"))
     assert pmc["fr_mode"] == "flat" and pmc["failures"] == 0, pmc
@@ -817,10 +822,13 @@ def main():
                                       "n_ml_applied"}, pmc
     assert pmc["fr_quality"]["n_eval"] == 0
     assert pmc["anchor_mode"] == "sector" and pmc["fr_norm"] == "p98"
-    run_script("layout_global.py", "--galaxy-tag", "res1_s", "--run", "r_b3d")
-    run_script("run_local_parallel.py", "--jobs", "2", "--galaxy-tag", "res1_s",
-               "--run", "r_b3d", "--anchor-mode", "sum", "--fr-norm", "max",
-               "--fr-mode", "flat")
+    run_wu("--base", BASE, "run", "layout_global", "--galaxy-tag", "res1_s",
+           "--run", "r_b3d")
+    run_wu("--base", BASE, "run", "layout_local", "--galaxy-tag", "res1_s",
+           "--run", "r_b3d", "--set", "layout_local.jobs=2",
+           "--set", "layout_local.anchor_mode=sum",
+           "--set", "layout_local.fr_norm=max",
+           "--set", "layout_local.fr_mode=flat")
     pmd = json.load(open(os.path.join(BASE, "layout", "r_b3d",
                                       "parallel_meta.json"), encoding="utf-8"))
     assert (pmd["anchor_mode"], pmd["fr_norm"], pmd["fr_mode"]) == \
@@ -828,17 +836,19 @@ def main():
 
     # ---- checkpoint repair: after a parallel run + merge, a single-process
     #      `--galaxies all` must see everything done (2026-09-30 race fix)
-    out_b3c = run_script("layout_local.py", "--galaxies", "all",
-                         "--galaxy-tag", "res1_s", "--run", "r_b3c")
+    out_b3c = run_mod("wu.layout.layout_local", "--base", BASE,
+                      "--galaxies", "all", "--galaxy-tag", "res1_s",
+                      "--run", "r_b3c")
     assert "done: 0 galaxies this run" in out_b3c, out_b3c[-500:]
 
     # ---- no-op invocation (run complete) must not rebuild anchors and must
     #      still serve preview + merge (2026-09-30 lazy-anchor fix)
-    run_script("layout_local.py", "--galaxies", "all", "--galaxy-tag", "res1_s",
-               "--run", "r_par", "--preview-galaxy", "0")
+    run_mod("wu.layout.layout_local", "--base", BASE, "--galaxies", "all",
+            "--galaxy-tag", "res1_s", "--run", "r_par", "--preview-galaxy", "0")
 
     # ---- viewer tiles export
-    run_script("export_viewer_tiles.py", "--galaxy-tag", "res1_s", "--run", "r_main")
+    run_wu("--base", BASE, "run", "publish", "--galaxy-tag", "res1_s",
+           "--run", "r_main")
     sp = os.path.join(BASE, "spatial")
     boot = json.load(open(os.path.join(sp, "bootstrap.json"), encoding="utf-8"))
     assert len(boot["galaxies"]) == G
@@ -875,11 +885,13 @@ def main():
               encoding="utf-8") as f:
         json.dump({"macros": [{"macro_id": 0, "label": "テスト銀河団名"},
                               {"macro_id": 1, "label": ""}]}, f, ensure_ascii=False)
-    run_script("export_viewer_tiles.py", "--galaxy-tag", "res1_s", "--run", "r_main")
+    run_wu("--base", BASE, "run", "publish", "--galaxy-tag", "res1_s",
+           "--run", "r_main")
     boot2 = json.load(open(os.path.join(sp, "bootstrap.json"), encoding="utf-8"))
     assert any(row[5] == "テスト銀河団名" for row in boot2["macros"]), boot2["macros"][:3]
     os.remove(os.path.join(final, "macro_label_overrides.json"))
-    run_script("export_viewer_tiles.py", "--galaxy-tag", "res1_s", "--run", "r_main")
+    run_wu("--base", BASE, "run", "publish", "--galaxy-tag", "res1_s",
+           "--run", "r_main")
     boot3 = json.load(open(os.path.join(sp, "bootstrap.json"), encoding="utf-8"))
     assert all(row[5] != "テスト銀河団名" for row in boot3["macros"])
     # 空 label のオーバーライドは無視される(= 既定導出のまま)

@@ -73,7 +73,7 @@ def cmd_stats(a):
 
 
 def cmd_subset_id(a):
-    from .subsets import extract_subset, select_id_window
+    from .experiments.subsets import extract_subset, select_id_window
     dirs = Dirs(a.base)
     pids = select_id_window(dirs.parsed, a.k, a.mode)
     name = a.name or f"idwin_{a.mode}_{a.k // 1000}k"
@@ -85,7 +85,7 @@ def cmd_subset_id(a):
 
 
 def cmd_subset_bfs(a):
-    from .subsets import bfs_nodes, extract_subset, title_to_pid
+    from .experiments.subsets import bfs_nodes, extract_subset, title_to_pid
     dirs = Dirs(a.base)
     seeds = [s.strip() for s in a.seeds.split(",") if s.strip()]
     seed_pids, missing = [], []
@@ -137,7 +137,7 @@ def cmd_body_edges(a):
 
 
 def cmd_analyze(a):
-    from .subset_analysis import analyze_subset
+    from .experiments.subset_analysis import analyze_subset
     dirs = Dirs(a.base)
     subset_dir = a.subset_dir or dirs.subset(a.subset)
     out_dir = a.out_dir or dirs.community_run(os.path.basename(subset_dir.rstrip("/")))

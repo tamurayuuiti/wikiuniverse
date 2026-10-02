@@ -1,4 +1,4 @@
-# wu/stages/ingest.py — 取得・前処理ステージ(download / parse / edges /
+# wu/stages/ingest.py - 取得・前処理ステージ(download / parse / edges /
 #                        categories / body_edges)
 #
 # 責務:

@@ -60,9 +60,9 @@ def main():
     memb[[2, 3]] = 1       # all Category:テスト2 -> pure
     np.save(os.path.join(full, "membership_test.npy"), memb)
 
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "community_purity.py"),
-                        "--base", BASE, "--tag", "test"],
-                       capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-m", "wu", "--base", BASE,
+                        "run", "purity", "--galaxy-tag", "test"],
+                       capture_output=True, text=True, cwd=ROOT)
     assert r.returncode == 0, r.stdout + r.stderr
     agg = json.load(open(os.path.join(full, "purity_test.json"), encoding="utf-8"))
     assert agg["top1_share_raw"]["node_weighted_mean"] == 1.0, agg

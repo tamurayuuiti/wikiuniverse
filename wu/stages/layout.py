@@ -1,10 +1,10 @@
-# wu/stages/layout.py — 座標ステージ(layout_global / layout_local / recompose)
+# wu/stages/layout.py - 座標ステージ(layout_global / layout_local / recompose)
 #
 # 責務:
 # - layout_global: マクロ+銀河の 3D 配置(銀河カタログ → layout/<run>/)。
 # - layout_local: 銀河内記事座標。**並列ランチャ(wu.layout_parallel)へ委譲する**
 #   (LOCAL_SETUP の推奨経路 = 事前計算共有 + LPT 分割 + 走査なしマージ。
-#   逐次実行・バッチ分割は旧来 CLI(scripts/layout_local.py)で引き続き可能)。
+#   逐次実行・バッチ分割はモジュール CLI(python -m wu.layout.layout_local)が担う)。
 # - recompose: 既存 run の記事座標を新 run へ再構成するユーティリティ。
 #
 # 注意:
@@ -19,9 +19,9 @@ from __future__ import annotations
 import os
 from argparse import Namespace
 
-from .. import layout_global as lg_mod
-from .. import layout_parallel as lp_mod
-from .. import recompose as rc_mod
+from ..layout import layout_global as lg_mod
+from ..layout import parallel as lp_mod
+from ..layout import recompose as rc_mod
 from ..pipeline.stage import Param, stage
 
 
@@ -50,6 +50,7 @@ from ..pipeline.stage import Param, stage
     inputs=("final.galaxies", "final.macros", "final.galaxy_pairs",
             "final.macro_pairs"),
     outputs=("layout.galaxy_positions", "layout.macro_positions", "layout.meta"),
+    always_run=True,
 )
 def run_layout_global(ctx) -> None:
     p = ctx.params
@@ -85,6 +86,7 @@ def run_layout_global(ctx) -> None:
             "graph.edges_undirected"),
     outputs=("layout.article_positions", "layout.local_meta",
              "layout.parallel_meta"),
+    always_run=True,  # 並列再開は内部 checkpoint が担う
 )
 def run_layout_local(ctx) -> None:
     p = ctx.params
@@ -107,6 +109,7 @@ def run_layout_local(ctx) -> None:
     ),
     inputs=(),   # run 名がパラメータ依存のため契約は docstring で明示する
     outputs=(),
+    always_run=True,  # 軽量・冪等
 )
 def run_recompose(ctx) -> None:
     p = ctx.params

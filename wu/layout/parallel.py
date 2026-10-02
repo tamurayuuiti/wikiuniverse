@@ -7,11 +7,10 @@
 #   (parallel_meta.json)→ 走査なしマージ(layout_local --merge-only)。
 #
 # 注意:
-# - 旧 scripts/run_local_parallel.py から移設(2026-10-02)。ジョブの subprocess は
-#   リポジトリルートの scripts/layout_local.py(互換ラッパ)を起動する
-#   (移設前は同一ディレクトリ基準だったため、パス解決をルート基準へ変更した)。
+# - ジョブの subprocess は `python -m wu.layout.layout_local`(PYTHONPATH 付き)で
+#   起動する(実行 cwd に依存しない)。
 # - 完了判定は共有 checkpoint 単独で信頼しない(ジョブ meta + シャード実在の
-#   和集合 = レース修正の原則)。正準実行は python -m wu run layout_local。
+#   和集合 = 並列レース対策の原則)。正準実行は python -m wu run layout_local。
 
 """Run layout_local over all remaining galaxies with N parallel subprocesses
 (Windows-safe; each galaxy shard is independent = the §12 batch model).
@@ -29,7 +28,7 @@ Coordinates are invariant under all of the above (per-galaxy math and seeds
 are untouched); the launcher only changes WHO computes WHAT.
 
 Usage:
-  python scripts/run_local_parallel.py --base data [--jobs N] [--run <RUN>]
+  python -m wu run layout_local --base data [--run <RUN>] [--set layout_local.jobs=N]
 Finishes with a scan-free merge pass (layout_local --merge-only).
 """
 from __future__ import annotations
@@ -43,8 +42,8 @@ import sys
 import time
 
 
-from .dumpio import read_json, write_json  # noqa: E402
-from .paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
+from ..dumpio import read_json, write_json  # noqa: E402
+from ..paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 
 COST_EXP = 1.93  # measured FR scaling (02 §O): t ~ c * n^1.93
 
@@ -78,15 +77,19 @@ def main(a=None):
     dirs = Dirs(a.base)
     lay = str(dirs.layout_run(a.run))
     memb_path = str(dirs.community_full / f"membership_{a.galaxy_tag}.npy")
-    # ジョブの subprocess はリポジトリルートの互換ラッパを起動する
-    # (wu/ への移設後は __file__ 基準の同一ディレクトリ解決が使えないため)
-    script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "scripts", "layout_local.py")
+    # ジョブは layout_local のモジュール CLI を subprocess 起動する。
+    # 実行 cwd に依存せず wu パッケージが解決できるよう PYTHONPATH を渡す。
+    repo_root = os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))))
+    child_env = {**os.environ,
+                 "PYTHONPATH": repo_root + os.pathsep
+                 + os.environ.get("PYTHONPATH", "")}
+    script = [sys.executable, "-m", "wu.layout.layout_local"]
 
     gpos_path = os.path.join(lay, "galaxy_positions.parquet")
     if not os.path.exists(gpos_path):
         sys.exit(f"[parallel] {gpos_path} not found: run "
-                 f"`python scripts/layout_global.py --base {a.base} "
+                 f"`python -m wu run layout_global --base {a.base} "
                  f"--run {a.run}` first (jobs need this run's galaxy "
                  f"centers/radii; failing here instead of spawning jobs "
                  f"that all crash)")
@@ -100,9 +103,9 @@ def main(a=None):
 
     # ---- 1. shared prep, once, before any job (jobs never race on it)
     t0 = time.time()
-    r = subprocess.run([sys.executable, script, "--base", a.base, "--prep",
+    r = subprocess.run(script + ["--base", a.base, "--prep",
                         "--galaxy-tag", a.galaxy_tag],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=child_env)
     if r.returncode != 0:
         sys.exit(f"[parallel] prep failed:\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
     prep_secs = round(time.time() - t0, 1)
@@ -148,7 +151,7 @@ def main(a=None):
             stem = p[:-len(".gids.txt")] if p.endswith(".gids.txt") else p
             log_path = stem + ".log"
             prog_files.append(stem + ".progress")
-            cmd = [sys.executable, script, "--base", a.base,
+            cmd = script + ["--base", a.base,
                    "--galaxy-tag", a.galaxy_tag, "--run", a.run,
                    "--fr-mode", a.fr_mode,
                    "--ml-threshold", str(a.ml_threshold),
@@ -160,7 +163,8 @@ def main(a=None):
             lf = open(log_path, "w", encoding="utf-8")
             procs.append((p, nb, time.time(),
                           subprocess.Popen(cmd, stdout=lf,
-                                           stderr=subprocess.STDOUT), lf))
+                                           stderr=subprocess.STDOUT,
+                                           env=child_env), lf))
             print(f"[parallel] spawned {os.path.basename(p)} ({nb} galaxies, "
                   f"log={os.path.basename(log_path)})")
         last_print = 0.0
@@ -253,9 +257,9 @@ def main(a=None):
             sys.exit("some jobs failed; rerun to resume")
 
     # ---- 4. scan-free merge (also writes layout_local_meta.json + telemetry)
-    subprocess.run([sys.executable, script, "--base", a.base,
+    subprocess.run(script + ["--base", a.base,
                     "--galaxy-tag", a.galaxy_tag, "--run", a.run,
-                    "--merge-only"], check=True)
+                    "--merge-only"], check=True, env=child_env)
 
 
 if __name__ == "__main__":

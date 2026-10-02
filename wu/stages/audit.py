@@ -1,4 +1,4 @@
-# wu/stages/audit.py — 読み取り専用監査ステージ(3 本)
+# wu/stages/audit.py - 読み取り専用監査ステージ(3 本)
 #
 # 責務:
 # - audit_tiles: 公開面(タイル+サイドカー)の整合計測(local#NN の原因切り分け)。
@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from argparse import Namespace
 
-from .. import audit_layout as al_mod
-from .. import audit_names as an_mod
-from .. import audit_tiles as at_mod
+from ..audit import layout as al_mod
+from ..audit import names as an_mod
+from ..audit import tiles as at_mod
 from ..pipeline.stage import Param, stage
 
 

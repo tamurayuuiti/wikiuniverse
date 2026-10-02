@@ -9,35 +9,32 @@
 # - 正準方針 = 完全 3D・焼き込みレンズ無し(地図ビューは視聴時の z 圧縮 = D17)。
 #
 # 注意:
-# - 旧 scripts/layout_global.py から移設(2026-10-02、パイプライン再整理)。
-#   v1.6 の挙動は不変(spill ≡ 0 の構造保証・cone 散布の決定論を含む。
-#   test_catalog の回帰 fixture が担保)。scripts 側は互換ラッパ。
-# - --r-expo は半径則の実験腕(既定 0.5 = 従来と同じ √n でビット同一。
+# - 銀河球の包含は構造保証: 無条件の包含クランプ + 体積キャップ(r <= 0.9 R_M)
+#   により d3 + r <= R_M が常に成立する(spill == 0。非ゼロは実装バグ)。
+#   回帰 fixture(単銀河マクロ)は test_catalog にある。
+# - --r-expo は半径則の実験腕(既定 0.5 = √n でビット同一。
 #   1/3 にすると銀河間で記事の体積密度が均等になる = 3D 正準との整合腕)。
 # - 正準実行は python -m wu run layout_global(wu/stages/layout.py)。
-# - 以下の英語 docstring は移設時のまま保持(アルゴリズム仕様として正確)。
 
 """Global hierarchical layout (Phase 3, step 2): macros + galaxies in 3D.
 
-Design (matches D16 policy "銀河を空間的に分離して配置"; canonical = full 3D, D17).
-Version: v1.6 (2026-10-01; containment clamp unconditional + rim cone spread):
-  - the 3D radial clamp below now applies to EVERY macro. The old
-    `len(P) >= 2` gate skipped single-regular-galaxy macros, where a pairless
-    isolated galaxy on its fibonacci slot could stick out of the macro sphere
-    ((d3+r)/Rm up to 1.114, measured). With the clamp unconditional and the
-    volume cap (r <= 0.9 Rm), d3 + r <= Rm holds by construction:
-    galaxy_spill_count == 0 is now a structural guarantee (nonzero = bug).
-  - cross-macro centroid contributions no longer aim at a SINGLE rim point.
-    Galaxies sharing one dominant neighbour macro all landed on the identical
-    boundary point, which the clamp flattened into a thin cap (a driver of
-    galaxy_flat_p90 ~ 0.95). Each contribution is now spread inside a
-    deterministic cone around the neighbour direction (_cone_spread:
-    half-angle <= 0.75 rad, depth 0.35-0.95 of the rim, seeded per galaxy and
-    per neighbour macro = bit-reproducible, no RNG state). The depth cap 0.95
-    preserves containment. `boundary_frac` is gone (no callers).
-v1.5: canonical is fully three-dimensional with NO baked lens (the old
---z-squash pancake lens and the pre-v1.4 xy disk regime are removed; map/hybrid
-views remain VIEW-TIME z-compression in the viewer/preview, per D17).
+Design: galaxies are placed spatially separated inside their macro sphere.
+Canonical = full 3D with NO baked lens (map/hybrid views are VIEW-TIME
+z-compression in the viewer/preview, not separate layouts).
+
+Structural invariants (both are regression-tested in test_catalog):
+  - the 3D radial clamp applies to EVERY macro. Gating it on `len(P) >= 2`
+    would skip single-regular-galaxy macros, where a pairless isolated galaxy
+    on its fibonacci slot can stick out of the macro sphere (d3+r reached
+    1.114 Rm). With the clamp unconditional and the volume cap (r <= 0.9 Rm),
+    d3 + r <= Rm holds by construction: galaxy_spill_count == 0 (nonzero = bug).
+  - cross-macro centroid contributions aim into a deterministic CONE around
+    the neighbour direction (_cone_spread: half-angle <= 0.75 rad, depth
+    0.35-0.95 of the rim, seeded per galaxy and per neighbour macro =
+    bit-reproducible, no RNG state). A single rim point would collect every
+    galaxy sharing one dominant neighbour and flatten into a thin cap.
+    The depth cap 0.95 preserves containment.
+
 Galaxies that have no intra-macro pair edge ("unlinked": their top-K links all
 leave the macro) are NOT dumped on a plane: they are pinned at the weighted
 centroid of their link targets (same rule as medium galaxies), or on
@@ -60,7 +57,8 @@ deterministic fibonacci-ball slots when they have no usable pairs at all.
 Quality metrics (layout_meta.json "quality"): macro_native_overlap_frac,
 macro_proj_overlap, galaxy_spill_frac/count (3D containment), galaxy_spill_ids
 (the spilling galaxy ids, top 20 by excess, so every run shows WHO without
-waiting for scripts/audit_layout.py), galaxy_overlap_frac
+waiting for the layout audit: python -m wu run audit_layout),
+galaxy_overlap_frac
 (sphere overlap inside macros), galaxy_flat_mean/p90 (PCA anisotropy of each
 macro's galaxy cloud; ~1 = pancake; domain = macros with FLAT_MIN_MEMBERS (8)+
 members — smaller clouds measure near 1 even when isotropic (small-n eigenvalue
@@ -76,10 +74,9 @@ Outputs (data/layout/<run>/ - run name via --run, default wu.paths.ACTIVE_LAYOUT
   preview_<mode>.html       interactive three.js preview (z-compress slider)
 
 Usage:
-  python scripts/layout_global.py --base data --run 20260930_spherize
-      [--pack 0.6] [--seed 42] [--pairs catalog|npz] [--galaxy-tag res1_sub]
-      [--macro-dim 3] [--macro-z-squash 1.0] [--macro-w-power 1.0]
-      [--r-expo 0.5]
+  python -m wu run layout_global --base data --run <RUN>
+      parameters (defaults/descriptions): wu/stages/layout.py の Param 宣言
+      override: --set layout_global.<name>=<value>
 """
 from __future__ import annotations
 
@@ -94,15 +91,15 @@ import time
 import numpy as np
 
 
-from .dumpio import now_iso as _now, write_json  # noqa: E402,F401
-from .paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
+from ..dumpio import now_iso as _now, write_json  # noqa: E402,F401
+from ..paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 
 R_TOTAL = 1000.0  # canvas scale: disk areas sum to pi*R_TOTAL^2
 # Domain of the galaxy_flat_* quality metrics: macros with at least this many
 # members. The PCA eigenvalue ratio behind `flatness` is heavily small-n biased
 # (measured isotropic null: n=4 mean 0.955 / n=6 0.879 / n=8 0.806), so smaller
 # macros would dominate the percentile with measurement artifacts; they are
-# judged against per-n isotropic nulls in scripts/audit_layout.py instead.
+# judged against per-n isotropic nulls in wu/audit/layout.py instead.
 FLAT_MIN_MEMBERS = 8
 
 
@@ -591,7 +588,7 @@ def main(a=None):
         skew.append("galaxies.display_class")
     if skew:
         print(f"[layout][warn] catalog is pre-v2 (missing: {', '.join(skew)}); "
-              f"derived from n_articles. Re-run scripts/build_galaxy_catalog.py "
+              f"derived from n_articles. Re-run: python -m wu run catalog "
               f"(v2) for curated names / display_class (medium galaxies won't be "
               f"flagged in this run).")
 

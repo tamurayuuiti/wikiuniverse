@@ -1,4 +1,4 @@
-# wu/pipeline/artifacts.py — 成果物レジストリ(ステージ間のファイル契約の単一の真実源)
+# wu/pipeline/artifacts.py - 成果物レジストリ(ステージ間のファイル契約の単一の真実源)
 #
 # 責務:
 # - パイプラインが読み書きする成果物にキー(例 "graph.edges_ns0")を割り当て、
@@ -36,30 +36,15 @@ class Artifact:
 
 REGISTRY: dict[str, Artifact] = {}
 
-# 未移行ステージの生成物について、fail-fast メッセージで案内する旧来コマンド。
-# ステージ移行が進んだら producer_of() がステージ名を返すようになり、
-# この表は縮小していく(移行期間専用の橋渡し)。
-LEGACY_HINTS: dict[str, str] = {
-    "parsed.articles": "python -m wu parse",
-    "parsed.article_ids": "python -m wu parse",
-    "graph.edges_ns0": "python -m wu edges",
-    "graph.categories": "python -m wu categories",
-    "graph.article_categories": "python -m wu categories",
-    "graph.edges_body_directed": "python -m wu body-edges",
-    "graph.edges_undirected": "python scripts/run_full_leiden.py dedup",
-    "community.membership": "python scripts/run_full_leiden.py detect / subdivide",
-    "community.per_community": "python scripts/run_full_leiden.py metrics",
-    "community.clusters_node": "python scripts/run_full_leiden.py cluster",
-    "community.purity": "python scripts/community_purity.py --tag <tag>",
-    "final.galaxies": "python scripts/build_galaxy_catalog.py",
-    "final.macros": "python scripts/build_galaxy_catalog.py",
-    "final.galaxy_pairs": "python scripts/build_galaxy_catalog.py",
-    "final.macro_pairs": "python scripts/build_galaxy_catalog.py",
-    "layout.galaxy_positions": "python scripts/layout_global.py --run <run>",
-    "layout.macro_positions": "python scripts/layout_global.py --run <run>",
-    "layout.meta": "python scripts/layout_global.py --run <run>",
-    "layout.article_positions": "python scripts/run_local_parallel.py --run <run>",
-    "graph.local_prep": "python scripts/layout_local.py --prep --galaxy-tag <tag>",
+# 生成コマンドのヒント(producer_of がステージ宣言から生成元を特定できない
+# 入力のみ)。fail-fast メッセージで「どのコマンドで作るか」を案内する。
+# download の outputs は既定4種のみ宣言するため追加ダウンロードの2種と、
+# マクロ tag で生成する membership の別名(membership_macro)がここに残る。
+MAKE_HINTS: dict[str, str] = {
+    "dump.categorylinks": "python -m wu run download --set download.files=categorylinks",
+    "dump.pages_articles": "python -m wu run download --set download.files=pages-articles",
+    "community.membership_macro":
+        "python -m wu run detect(マクロ run: membership_res1 を生成)",
 }
 
 
@@ -93,8 +78,8 @@ def producer_of(key: str, stages) -> str | None:
 
 
 def hint_for(key: str) -> str:
-    """未移行成果物の旧来コマンド案内(無ければ空文字)。"""
-    return LEGACY_HINTS.get(key, "")
+    """生成元ステージから解決できない成果物のコマンド案内(無ければ空文字)。"""
+    return MAKE_HINTS.get(key, "")
 
 
 # ---------------------------------------------------------------------------

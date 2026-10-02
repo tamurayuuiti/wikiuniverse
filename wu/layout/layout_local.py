@@ -10,11 +10,11 @@
 #   checkpoint を修復する(完了の正典はシャード実在 = 並列レース対策)。
 #
 # 注意:
-# - 旧 scripts/layout_local.py から移設(2026-10-02)。座標はジョブ割当・並列度に
-#   依存しない(ビット一致を test_catalog が回帰保証)。scripts 側は互換ラッパで、
-#   並列ランチャ(wu/layout_parallel.py)はこのラッパを subprocess 起動する。
-# - 正準実行は python -m wu run layout_local(= 並列ランチャ経由)。
-# - 以下の英語 docstring は移設時のまま保持。
+# - 座標はジョブ割当・並列度に依存しない(ビット一致を test_catalog が回帰保証)。
+#   並列ランチャ(wu/layout/parallel.py)は本モジュールの CLI を subprocess 起動する。
+# - 正準実行は python -m wu run layout_local(= 並列ランチャ経由)。バッチ分割・
+#   --prep/--merge-only/--preview-galaxy は本モジュールの CLI
+#   (python -m wu.layout.layout_local …)が担う。
 
 """Local (intra-galaxy) article layout — independent-batch jobs (B0 foundation).
 
@@ -73,9 +73,9 @@ Outputs (layout/<run>/):
   article_positions.parquet       merged (page_id, galaxy_id, x, y, z)
   layout_local_meta.json          params/timings (+ parallel telemetry)
 
-Batch usage (the §12 Colab-jobs prototype; LPT-balanced by the launcher):
-  python scripts/run_local_parallel.py --base data --run <RUN> [--jobs N]
-  python scripts/layout_local.py --base data --run <RUN> --galaxies 0-499
+Batch usage (LPT-balanced by the parallel launcher):
+  python -m wu run layout_local --base data --run <RUN>     (parallel, canonical)
+  python -m wu.layout.layout_local --base data --run <RUN> --galaxies 0-499
 """
 from __future__ import annotations
 
@@ -89,9 +89,9 @@ import time
 import numpy as np
 
 
-from .dumpio import now_iso as _now, read_json, write_json  # noqa: E402,F401
-from .paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
-from .stats import load_edges_mmap  # noqa: E402
+from ..dumpio import now_iso as _now, read_json, write_json  # noqa: E402,F401
+from ..paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
+from ..stats import load_edges_mmap  # noqa: E402
 
 PREP_SCHEMA = 2  # v2 adds int_deg.npy (B2 stratification)
 CH = 4_000_000  # edge-scan chunk size
@@ -557,7 +557,7 @@ def main(a=None):
     gpos_path = os.path.join(lay_dir, "galaxy_positions.parquet")
     if not a.prep and not os.path.exists(gpos_path):
         sys.exit(f"[local] {gpos_path} not found: run "
-                 f"`python scripts/layout_global.py --base {a.base} "
+                 f"`python -m wu run layout_global --base {a.base} "
                  f"--run {a.run}` first (the local layout needs this run's "
                  f"galaxy centers/radii)")
     shard_dir = os.path.join(lay_dir, "article_shards")

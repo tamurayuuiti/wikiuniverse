@@ -5,7 +5,7 @@
 #   prune_edges_degree_budget(smart/both 次数予算剪定 = 決定 D8)と
 #   filter_edges_by_hub(フルグラフ次数キャップによるメガハブ端の除外)。
 # - 利用元: サブセット解析(wu/subset_analysis.py)とフルグラフ剪定
-#   (scripts/run_full_leiden.py prune)。
+#   (python -m wu run prune)。
 #
 # 注意:
 # - 旧 wu/pipeline.py からの分割(2026-10-02、パイプライン再整理)。関数実装は
@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import analysis as an
-from .paths import Dirs
+from ..community import analysis as an
+from ..paths import Dirs
 
 
 def filter_edges_by_hub(E: np.ndarray, nodes: dict, dirs: Dirs,

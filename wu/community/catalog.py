@@ -7,8 +7,8 @@
 #   フォールバック)と display_class(galaxy/medium/dust)の分類を含む。
 #
 # 注意:
-# - 旧 scripts/build_galaxy_catalog.py から移設(2026-10-02)。main(a=None) は
-#   Namespace 注入対応(挙動は CLI と同一、test_catalog が _stem_name 含め担保)。
+# - main(a) は Namespace 注入でステージから呼ばれる(test_catalog が _stem_name
+#   含め担保)。正準実行は python -m wu run catalog。
 # - purity/clusters/per_community_<macro> は任意入力(欠けても縮退して動作する)ため、
 #   ステージ契約の inputs には必須分のみ宣言している(wu/stages/catalog.py 参照)。
 
@@ -39,7 +39,7 @@ suffixes such as "...stub items" are stem-normalized -> name_source
 then shows galaxy#<id>).
 
 Usage:
-  python scripts/build_galaxy_catalog.py --base data \
+  python -m wu run catalog --base data   # 参数 override: --set catalog.<key>=<value> \
       --galaxy-tag res1_sub --macro-tag res1 [--top-neighbors 8] [--top-pairs 30000]
 """
 from __future__ import annotations
@@ -52,8 +52,8 @@ import sys
 import numpy as np
 
 
-from .dumpio import write_json  # noqa: E402
-from .paths import Dirs  # noqa: E402
+from ..dumpio import write_json  # noqa: E402
+from ..paths import Dirs  # noqa: E402
 import re  # noqa: E402
 
 # カテゴリ名のブラックリスト(技術・保守系。頻度フィルタをすり抜ける中頻度メタ)

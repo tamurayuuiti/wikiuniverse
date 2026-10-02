@@ -42,8 +42,8 @@ def trim():
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .dumpio import read_json, write_json
-from .stats import hub_flags
+from ..dumpio import read_json, write_json
+from ..stats import hub_flags
 
 SEED = 42
 

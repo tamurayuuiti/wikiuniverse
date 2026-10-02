@@ -5,9 +5,8 @@
 #   銀河名の材料(name 列)を生成する。出力は community/full/purity_<tag>.{parquet,json}。
 #
 # 注意:
-# - 旧 scripts/community_purity.py から移設(2026-10-02)。main(a=None) は
-#   Namespace 注入でステージからも呼べる(挙動は CLI と同一、test_catalog が担保)。
-# - 正準実行は python -m wu run purity(入力は membership + categories 系成果物)。
+# - main(a) は Namespace 注入でステージから呼ばれる(test_catalog が挙動を担保)。
+#   正準実行は python -m wu run purity(入力は membership + categories 系成果物)。
 
 """E4 v2: Category purity of communities with meta-category filtering.
 
@@ -26,7 +25,7 @@ v2 additions:
 Raw (unfiltered) stats are kept for comparability.
 
 Usage:
-  python scripts/community_purity.py --base data --tag res1_sub [--max-cat-freq 20000]
+  python -m wu run purity --base data --galaxy-tag res1_sub
 """
 from __future__ import annotations
 
@@ -39,8 +38,8 @@ import sys
 import numpy as np
 
 
-from .dumpio import write_json  # noqa: E402
-from .paths import Dirs  # noqa: E402
+from ..dumpio import write_json  # noqa: E402
+from ..paths import Dirs  # noqa: E402
 
 
 def main(a=None):

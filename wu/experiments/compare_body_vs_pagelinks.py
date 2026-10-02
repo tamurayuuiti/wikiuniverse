@@ -7,7 +7,7 @@ Also counts "pure template articles" (deg_body == 0 but deg_pagelinks >= 50):
 articles whose entire link footprint comes from transcluded templates.
 
 Usage:
-  python scripts/compare_body_vs_pagelinks.py --base data \
+  python -m wu.experiments.compare_body_vs_pagelinks --base data \
       [--body edges_body_directed.bin] [--max-pid N] [--top 25]
 
 --max-pid restricts to articles with page_id <= N (useful when the body graph
@@ -24,11 +24,10 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wu.dumpio import write_json  # noqa: E402
-from wu.paths import Dirs  # noqa: E402
-from wu.stats import load_edges_mmap, load_titles  # noqa: E402
+from ..dumpio import write_json  # noqa: E402
+from ..paths import Dirs  # noqa: E402
+from ..stats import load_edges_mmap, load_titles  # noqa: E402
 
 
 def out_degree_per_article(edges_bin: str, article_ids: np.ndarray,

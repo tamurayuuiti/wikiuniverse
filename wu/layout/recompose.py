@@ -6,8 +6,8 @@
 #   相対配置は不変 = 高コストな記事レイアウトの再計算を避ける)。
 #
 # 注意:
-# - 旧 scripts/recompose_articles.py から移設(2026-10-02)。挙動不変
-#   (test_catalog の recompose 節が担保)。scripts 側は互換ラッパ。
+# - test_catalog の recompose 節が挙動を担保する。正準実行は
+#   python -m wu run recompose --set recompose.from_run=… --set recompose.to_run=…
 
 """Rigid+scale recomposition of article positions after a global-layout parameter
 change (e.g. --z-squash / --r-spacing). Avoids the ~1h layout_local re-run:
@@ -15,10 +15,10 @@ each galaxy's article cloud is translated to the new center and scaled by the
 new/old radius ratio (internal shape preserved).
 
 Usage (run names follow the <YYYYMMDD>_<slug> convention; see wu/paths.py):
-  python scripts/layout_global.py --base data --macro-dim 3 --run 20260928_newglobal
-  python scripts/recompose_articles.py --base data \
-      --from-run 20260926_baseline --to-run 20260928_newglobal
-  python scripts/export_viewer_tiles.py --base data --run 20260928_newglobal
+  python -m wu run layout_global --base data --run <NEW_RUN>
+  python -m wu run recompose --base data \
+      --set recompose.from_run=<OLD_RUN> --set recompose.to_run=<NEW_RUN>
+  python -m wu run publish --base data --run <NEW_RUN>
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ import time
 import numpy as np
 
 
-from .paths import Dirs  # noqa: E402
+from ..paths import Dirs  # noqa: E402
 
 
 def main(a=None):

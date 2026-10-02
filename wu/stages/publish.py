@@ -1,4 +1,4 @@
-# wu/stages/publish.py — 出版ステージ(Viewer 公開面の生成)
+# wu/stages/publish.py - 出版ステージ(Viewer 公開面の生成)
 #
 # 責務:
 # - 座標 run + カタログ → data/spatial/(bootstrap.json + tiles/)の生成。
@@ -30,6 +30,7 @@ from ..pipeline.stage import Param, stage
             "layout.macro_positions", "final.galaxies", "final.macros",
             "final.galaxy_pairs", "final.macro_pairs", "parsed.articles"),
     outputs=("spatial.bootstrap", "spatial.tiles", "spatial.tiles_meta"),
+    always_run=True,  # 正典の再出版は日常操作(軽量・冪等)
 )
 def run_publish(ctx) -> None:
     p = ctx.params
