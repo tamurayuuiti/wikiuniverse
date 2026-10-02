@@ -22,7 +22,6 @@ Usage (run names follow the <YYYYMMDD>_<slug> convention; see wu/paths.py):
 """
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 import time
@@ -33,17 +32,9 @@ import numpy as np
 from ..paths import Dirs  # noqa: E402
 
 
-def main(a=None):
+def main(a):
     # a=None のときだけ CLI 引数を解析する(ステージからは Namespace を
     # 注入して呼ぶ = 引数解析と処理本体の分離。CLI 挙動は不変)。
-    if a is None:
-        ap = argparse.ArgumentParser()
-        ap.add_argument("--base", default="data")
-        ap.add_argument("--from-run", required=True,
-                        help="source layout run (provides the article positions)")
-        ap.add_argument("--to-run", required=True,
-                        help="target layout run (provides the new galaxy centers/radii)")
-        a = ap.parse_args()
     dirs = Dirs(a.base)
     t0 = time.time()
     import pyarrow as pa
@@ -75,6 +66,3 @@ def main(a=None):
     print(f"[recompose] {len(P):,} articles {a.from_run} -> {a.to_run} "
           f"({time.time()-t0:.0f}s)")
 
-
-if __name__ == "__main__":
-    main()

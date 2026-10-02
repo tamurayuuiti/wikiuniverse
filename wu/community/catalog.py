@@ -44,7 +44,6 @@ Usage:
 """
 from __future__ import annotations
 
-import argparse
 import datetime
 import os
 import sys
@@ -115,17 +114,9 @@ def _parse_top3(s3: str):
     return out
 
 
-def main(a=None):
+def main(a):
     # a=None のときだけ CLI 引数を解析する(ステージからは Namespace を注入
     # して呼ぶ = 引数解析と処理本体の分離。既存の CLI 挙動は不変)。
-    if a is None:
-        ap = argparse.ArgumentParser()
-        ap.add_argument("--base", default="data")
-        ap.add_argument("--galaxy-tag", default="res1_sub")
-        ap.add_argument("--macro-tag", default="res1")
-        ap.add_argument("--top-neighbors", type=int, default=8)
-        ap.add_argument("--top-pairs", type=int, default=30000)
-        a = ap.parse_args()
     dirs = Dirs(a.base)
     full = str(dirs.community_full)
     out_dir = str(dirs.final)
@@ -343,6 +334,3 @@ def main(a=None):
           f"violations={containment_violations}")
     print(f"[catalog] wrote -> {out_dir}")
 
-
-if __name__ == "__main__":
-    main()

@@ -47,7 +47,6 @@ Smoke: detect --max-edges 5000000 --force   (then rerun real detect with --force
 """
 from __future__ import annotations
 
-import argparse
 import datetime
 import json
 import os
@@ -64,13 +63,6 @@ from ..stats import load_edges_mmap, load_titles  # noqa: E402
 
 from .analysis import SEED  # noqa: E402  # 乱数シードの単一の真実源
 SHIFT = 21  # compact idx < 2^21 = 2,097,152  (jawiki: 1,516,326 articles)
-
-
-def _safe_stdout():
-    try:
-        sys.stdout.reconfigure(errors="replace")
-    except Exception:
-        pass
 
 
 def _res_tag(res: float) -> str:
@@ -711,115 +703,3 @@ def cmd_export(dirs: Dirs, tag: str, with_clusters: bool = True):
 
 
 # --------------------------------------------------------------------- all --
-
-def cmd_all(dirs: Dirs, resolutions, primary: float, max_edges: int, seed: int):
-    if not os.path.exists(os.path.join(dirs.graph, "edges_undirected_unique.bin")):
-        cmd_dedup(dirs)
-    else:
-        print("[all] dedup: exists, skip")
-    cmd_detect(dirs, resolutions, max_edges=max_edges, seed=seed)
-    if max_edges:
-        print("[all] smoke mode: skipping subdivide/metrics/cluster/export")
-        return
-    ptag = f"res{_res_tag(primary)}"
-    cmd_subdivide(dirs, ptag)
-    stag = f"{ptag}_sub"
-    cmd_metrics(dirs, stag)
-    cmd_cluster(dirs, stag)
-    cmd_export(dirs, stag)
-
-
-def _tag_from_args(a) -> str:
-    if getattr(a, "tag", None):
-        return a.tag
-    if getattr(a, "resolution", None) is not None:
-        return f"res{_res_tag(a.resolution)}"
-    sys.exit("either --tag or --resolution is required")
-
-
-def main():
-    _safe_stdout()
-    ap = argparse.ArgumentParser(prog="run_full_leiden")
-    ap.add_argument("--base", default="data")
-    sub = ap.add_subparsers(dest="cmd", required=True)
-
-    p = sub.add_parser("dedup"); p.add_argument("--chunk", type=int, default=10_000_000)
-    p.add_argument("--edges-in", default="edges_ns0.bin",
-                   help="directed edge bin in graph/ (e.g. edges_body_directed.bin)")
-    p.add_argument("--out-name", default="edges_undirected_unique.bin")
-    p.add_argument("--meta-name", default="dedup_meta.json")
-
-    p = sub.add_parser("detect")
-    p.add_argument("--resolutions", default="0.5,1.0,2.0")
-    p.add_argument("--objective", default="modularity", choices=["modularity", "CPM"])
-    p.add_argument("--max-edges", type=int, default=0, help="smoke: only first N edges")
-    p.add_argument("--seed", type=int, default=SEED)
-    p.add_argument("--force", action="store_true")
-    p.add_argument("--edges", default=None, help="edge file in graph/ (default: edges_undirected_unique.bin)")
-    p.add_argument("--suffix", default="", help="tag suffix, e.g. _B40 -> membership_res1_B40.npy")
-
-    p = sub.add_parser("prune")
-    p.add_argument("--budget", type=int, required=True)
-    p.add_argument("--mode", default="smart", choices=["smart", "both"])
-    p.add_argument("--seed", type=int, default=SEED)
-
-    p = sub.add_parser("subdivide")
-    p.add_argument("--resolution", type=float, default=None)
-    p.add_argument("--tag", default=None)
-    p.add_argument("--edges", default=None)
-    p.add_argument("--min-size", type=int, default=100)
-    p.add_argument("--max-galaxy", type=int, default=10000,
-                   help="galaxy size cap (canonical operating value; was 20000)")
-    p.add_argument("--sub-resolution", type=float, default=1.0)
-    p.add_argument("--sub-objective", default="modularity", choices=["modularity", "CPM"])
-    p.add_argument("--depth", type=int, default=4)
-    p.add_argument("--seed", type=int, default=SEED)
-    p.add_argument("--out-tag", default=None)
-
-    p = sub.add_parser("metrics")
-    p.add_argument("--resolution", type=float, default=None); p.add_argument("--tag", default=None)
-    p.add_argument("--edges", default=None, help="evaluation graph (default: raw unique edges)")
-    p.add_argument("--label", default=None, help="output file tag (default: same as input tag)")
-
-    p = sub.add_parser("cluster")
-    p.add_argument("--resolution", type=float, default=None); p.add_argument("--tag", default=None)
-    p.add_argument("--cluster-resolution", type=float, default=1.0)
-    p.add_argument("--seed", type=int, default=SEED)
-
-    p = sub.add_parser("export")
-    p.add_argument("--resolution", type=float, default=None); p.add_argument("--tag", default=None)
-
-    p = sub.add_parser("all")
-    p.add_argument("--resolutions", default="0.5,1.0,2.0")
-    p.add_argument("--primary", type=float, default=1.0)
-    p.add_argument("--max-edges", type=int, default=0)
-    p.add_argument("--seed", type=int, default=SEED)
-
-    a = ap.parse_args()
-    dirs = Dirs(a.base)
-    if a.cmd == "dedup":
-        cmd_dedup(dirs, chunk=a.chunk, edges_in=a.edges_in,
-                  out_name=a.out_name, meta_name=a.meta_name)
-    elif a.cmd == "detect":
-        cmd_detect(dirs, [float(x) for x in a.resolutions.split(",")],
-                   max_edges=a.max_edges, seed=a.seed, force=a.force, objective=a.objective,
-                   edges_name=a.edges, suffix=a.suffix)
-    elif a.cmd == "prune":
-        cmd_prune(dirs, budget=a.budget, mode=a.mode, seed=a.seed)
-    elif a.cmd == "subdivide":
-        cmd_subdivide(dirs, _tag_from_args(a), min_size=a.min_size, max_galaxy=a.max_galaxy,
-                      sub_resolution=a.sub_resolution, sub_objective=a.sub_objective,
-                      depth=a.depth, seed=a.seed, out_tag=a.out_tag, edges_name=a.edges)
-    elif a.cmd == "metrics":
-        cmd_metrics(dirs, _tag_from_args(a), edges_name=a.edges, label=a.label)
-    elif a.cmd == "cluster":
-        cmd_cluster(dirs, _tag_from_args(a), cluster_resolution=a.cluster_resolution, seed=a.seed)
-    elif a.cmd == "export":
-        cmd_export(dirs, _tag_from_args(a))
-    elif a.cmd == "all":
-        cmd_all(dirs, [float(x) for x in a.resolutions.split(",")],
-                primary=a.primary, max_edges=a.max_edges, seed=a.seed)
-
-
-if __name__ == "__main__":
-    main()

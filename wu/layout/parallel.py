@@ -33,7 +33,6 @@ Finishes with a scan-free merge pass (layout_local --merge-only).
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import shutil
@@ -48,32 +47,9 @@ from ..paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 COST_EXP = 1.93  # measured FR scaling (02 §O): t ~ c * n^1.93
 
 
-def main(a=None):
+def main(a):
     # a=None のときだけ CLI 引数を解析する(ステージからは Namespace を
     # 注入して呼ぶ = 引数解析と処理本体の分離。CLI 挙動は不変)。
-    if a is None:
-        ap = argparse.ArgumentParser()
-        ap.add_argument("--base", default="data")
-        ap.add_argument("--jobs", type=int, default=os.cpu_count() or 8,
-                        help="parallel job count (default: cpu count; tune down if "
-                             "RAM-bound, each job memory-maps the shared prep)")
-        ap.add_argument("--galaxy-tag", default="res1_sub")
-        ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
-                        help="layout run name (default: wu.paths.ACTIVE_LAYOUT_RUN)")
-        ap.add_argument("--fr-mode", default="ml", choices=["ml", "flat"],
-                        help="B3 arm selection, forwarded to every layout_local job "
-                             "(ml = multilevel-seeded FR, flat = legacy arm)")
-        ap.add_argument("--ml-threshold", type=int, default=2000,
-                        help="forwarded to jobs (article count where multilevel kicks in)")
-        ap.add_argument("--ml-niter", type=int, default=100,
-                        help="forwarded to jobs (FR refine iterations on the seed)")
-        ap.add_argument("--anchor-mode", default="sector", choices=["sector", "sum"],
-                        help="forwarded to jobs (B1 sector vs legacy sum anchors)")
-        ap.add_argument("--fr-norm", default="p98", choices=["p98", "max"],
-                        help="forwarded to jobs (B2-a robust vs legacy max norm)")
-        ap.add_argument("--sector-ratio", type=float, default=0.5,
-                        help="forwarded to jobs (top-2 blend ratio)")
-        a = ap.parse_args()
     dirs = Dirs(a.base)
     lay = str(dirs.layout_run(a.run))
     memb_path = str(dirs.community_full / f"membership_{a.galaxy_tag}.npy")
@@ -261,6 +237,3 @@ def main(a=None):
                     "--galaxy-tag", a.galaxy_tag, "--run", a.run,
                     "--merge-only"], check=True, env=child_env)
 
-
-if __name__ == "__main__":
-    main()

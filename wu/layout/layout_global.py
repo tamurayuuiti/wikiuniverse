@@ -80,7 +80,6 @@ Usage:
 """
 from __future__ import annotations
 
-import argparse
 import datetime
 import json
 import os
@@ -520,38 +519,9 @@ def write_html_preview(path, g_centers, g_radius, gal_colors, dust_mask,
     return path
 
 
-def main(a=None):
+def main(a):
     # a=None のときだけ CLI 引数を解析する(ステージからは Namespace を
     # 注入して呼ぶ = 引数解析と処理本体の分離。CLI 挙動は不変)。
-    if a is None:
-        ap = argparse.ArgumentParser()
-        ap.add_argument("--base", default="data")
-        ap.add_argument("--pack", type=float, default=0.6)
-        ap.add_argument("--r-expo", type=float, default=0.5,
-                        help="galaxy radius exponent on n_g/n_M: 0.5 = legacy "
-                             "sqrt (area-like, bit-identical default); 1/3 = "
-                             "uniform article volume density (3D-consistent arm)")
-        ap.add_argument("--r-spacing", type=float, default=1.5,
-                        help="min article spacing for galaxy radius floor: "
-                             "r_g >= r_spacing * n_g^(1/3)")
-        ap.add_argument("--macro-dim", type=int, default=3, choices=[2, 3],
-                        help="3 = full 3D sphere packing (canonical, default), "
-                             "2 = 2.5D universe map (experimental arm, D17)")
-        ap.add_argument("--macro-z-squash", type=float, default=1.0,
-                        help="with --macro-dim 3: squash macro sphere z (hybrid ellipsoid "
-                             "universe, e.g. 0.5; experimental arm, D17)")
-        ap.add_argument("--macro-w-power", type=float, default=1.0,
-                        help="weight temperature tau for the macro FR attraction "
-                             "(w^tau; 1.0 = neutral, >1 sharpens semantic adjacency)")
-        ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
-                        help="layout run name = output subdir under data/layout "
-                             "(default: wu.paths.ACTIVE_LAYOUT_RUN)")
-        ap.add_argument("--views", type=int, default=24)
-        ap.add_argument("--seed", type=int, default=42)
-        ap.add_argument("--pairs", default="catalog", choices=["catalog", "npz"],
-                        help="galaxy pair source: catalog topK parquet or full pairs npz")
-        ap.add_argument("--galaxy-tag", default="res1_sub")
-        a = ap.parse_args()
     dirs = Dirs(a.base)
     final = str(dirs.final)
     out_dir = str(dirs.layout_run(a.run))
@@ -969,6 +939,3 @@ def main(a=None):
 
     print(f"[layout] done ({meta['secs']}s) -> {out_dir}")
 
-
-if __name__ == "__main__":
-    main()

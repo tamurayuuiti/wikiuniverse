@@ -38,7 +38,6 @@ Usage:
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
@@ -63,16 +62,8 @@ SUSPECT = {
 }
 
 
-def main(a=None) -> int:
+def main(a) -> int:
     # a=None のときだけ CLI 引数を解析する(ステージは Namespace 注入で呼ぶ)。
-    if a is None:
-        ap = argparse.ArgumentParser()
-        ap.add_argument("--base", default="data")
-        ap.add_argument("--top", type=int, default=25)
-        ap.add_argument("--dump-macro-labels", action="store_true",
-                        help="write final/macro_label_overrides.template.json "
-                             "(editable macro-label override template)")
-        a = ap.parse_args()
     dirs = Dirs(a.base)
 
     import pyarrow.parquet as pq
@@ -195,6 +186,3 @@ def main(a=None) -> int:
           "(スタブ系は語幹正規化後は 0 件になっているはず)。")
     return 0
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())

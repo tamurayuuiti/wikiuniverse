@@ -50,7 +50,6 @@ Usage:
 """
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 
@@ -405,7 +404,7 @@ def print_report(res: dict) -> None:
             print(f"  {w}")
 
 
-def main(a=None) -> int:
+def main(a) -> int:
     # Console-encoding guard for Windows: when stdout/stderr is a pipe (the
     # test-suite subprocesses) Python uses the ANSI codepage (cp932), which
     # cannot encode every Unicode char and raises UnicodeEncodeError mid-report.
@@ -415,14 +414,6 @@ def main(a=None) -> int:
         if hasattr(_s, "reconfigure"):
             _s.reconfigure(errors="replace")
     # a=None のときだけ CLI 引数を解析する(ステージは Namespace 注入で呼ぶ)。
-    if a is None:
-        ap = argparse.ArgumentParser(
-            description="read-only layout-run audit (spill context, flatness, "
-                        "centroid-placement share, correlation)")
-        ap.add_argument("--base", default="data")
-        ap.add_argument("--run", default=None,
-                        help=f"layout run name (default: {ACTIVE_LAYOUT_RUN})")
-        a = ap.parse_args()
     try:
         res = audit(Dirs(a.base), a.run)
     except RunMissing as e:
@@ -431,6 +422,3 @@ def main(a=None) -> int:
     print_report(res)
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

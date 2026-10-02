@@ -4,7 +4,7 @@
 # 責務:
 # - Wikipedia ダンプの取得から「解析済み記事表 + 解決済みエッジ」までの前段を
 #   ステージとして登録する(実体は wu.dumpio / sqlparse / buildedges / catparse /
-#   xmlparse 内の既存関数へ委譲 = 挙動は旧 `python -m wu.cli <cmd>` と同一)。
+#   xmlparse 内の既存関数へ委譲する)。
 #
 # 注意:
 # - download 以外のステージはネットワークを必要としない。
@@ -55,7 +55,7 @@ def run_download(ctx) -> None:
              "parsed.ns0_hashes", "parsed.rd_map", "parsed.meta"),
 )
 def run_parse(ctx) -> None:
-    # 旧 wu.cli cmd_parse と同一の手順(チャンク逐次解析・チェックポイント無し)。
+    # チャンク逐次解析(チェックポイント無し)。
     from ..sqlparse import (build_linktarget_artifacts, build_page_artifacts,
                             build_redirect_artifacts)
     dirs = ctx.dirs

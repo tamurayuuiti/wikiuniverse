@@ -33,7 +33,6 @@ Usage:
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import struct
@@ -50,14 +49,8 @@ RECORDED = {
 }
 
 
-def main(a=None) -> int:
+def main(a) -> int:
     # a=None のときだけ CLI 引数を解析する(ステージは Namespace 注入で呼ぶ)。
-    if a is None:
-        ap = argparse.ArgumentParser()
-        ap.add_argument("--base", default="data")
-        ap.add_argument("--limit", type=int, default=20,
-                        help="max problem galaxies to list in detail")
-        a = ap.parse_args()
     dirs = Dirs(a.base)
     tiles = str(dirs.tiles)
     boot_path = os.path.join(str(dirs.spatial), "bootstrap.json")
@@ -172,6 +165,3 @@ def main(a=None) -> int:
     print(f"\n[audit] 判定: {verdict}")
     return 1 if problems else 0
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())

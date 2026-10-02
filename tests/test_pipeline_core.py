@@ -178,10 +178,23 @@ def main():
     assert "graph.edges_ns0" in (r.stdout + r.stderr)
     # 生成元ステージ登録済み(ingest 移行後)→ 旧来コマンドでなくステージへ案内
     assert "wu run edges" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-500:]
-    # 既存コマンドが無傷であること(回帰): --help が新設後も正常
+    # CLI 面 = 研究/実験コマンド + パイプライン(stages/plan/run)。
+    # 取得・解析の旧サブコマンドは廃止済み(run <stage> へ一本化)。
     r = subprocess.run([sys.executable, "-m", "wu.cli", "--help"],
                        capture_output=True, text=True, cwd=ROOT, env=env)
-    assert r.returncode == 0 and "download" in r.stdout
+    assert r.returncode == 0 and "run" in r.stdout and "stages" in r.stdout
+    assert "download" not in r.stdout, r.stdout
+
+    # ---- モジュール CLI とステージ宣言の既定値一致(ドリフト防止):
+    #      layout_local の腕パラメータはモジュール CLI(バッチ/job-spec 起動)と
+    #      ステージ(並列ランチャ経由)の二入口があるため、既定値を照合する。
+    import wu.layout.layout_local as ll
+    _ns = ll._build_parser().parse_args([])
+    _pdefs = {q.name: q.default for q in get("layout_local").params}
+    for _key in ("fr_mode", "ml_threshold", "ml_niter", "anchor_mode",
+                 "fr_norm", "sector_ratio"):
+        assert getattr(_ns, _key) == _pdefs[_key], \
+            (_key, getattr(_ns, _key), _pdefs[_key])
 
     print("\n*** PIPELINE CORE TEST PASSED ***")
     print(f"stages={len(REGISTRY)} manifests={len(os.listdir(mdir))}")

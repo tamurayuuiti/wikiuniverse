@@ -45,7 +45,6 @@ run-name-independent viewer contract; the source run is recorded in bootstrap.js
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import sys
@@ -65,17 +64,8 @@ from .stats import load_edges_mmap, load_titles  # noqa: E402
 SCHEMA_VERSION = 1
 
 
-def main(a=None):
+def main(a):
     # a=None のときだけ CLI 引数を解析する(ステージは Namespace 注入で呼ぶ)。
-    if a is None:
-        ap = argparse.ArgumentParser()
-        ap.add_argument("--base", default="data")
-        ap.add_argument("--galaxy-tag", default="res1_sub")
-        ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
-                        help="source layout run under data/layout "
-                             "(default: wu.paths.ACTIVE_LAYOUT_RUN)")
-        ap.add_argument("--cross-cap", type=int, default=8)
-        a = ap.parse_args()
     dirs = Dirs(a.base)
     t0 = time.time()
     lay = str(dirs.layout_run(a.run))
@@ -286,6 +276,3 @@ def local_idx(rank, pids, gids, starts_arr):
     (order 自体は非単調なので searchsorted は使えない — 2026-09-27 バグの根因)。"""
     return (rank[pids] - starts_arr[gids]).astype(np.uint32)
 
-
-if __name__ == "__main__":
-    main()

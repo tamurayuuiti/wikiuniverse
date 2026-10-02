@@ -29,7 +29,6 @@ Usage:
 """
 from __future__ import annotations
 
-import argparse
 import datetime
 import json
 import os
@@ -42,20 +41,9 @@ from ..dumpio import write_json  # noqa: E402
 from ..paths import Dirs  # noqa: E402
 
 
-def main(a=None):
+def main(a):
     # a=None のときだけ CLI 引数を解析する(ステージからは Namespace を注入
     # して呼ぶ = 引数解析と処理本体の分離。既存の CLI 挙動は不変)。
-    if a is None:
-        ap = argparse.ArgumentParser()
-        ap.add_argument("--base", default="data")
-        ap.add_argument("--tag", required=True)
-        ap.add_argument("--top", type=int, default=15)
-        ap.add_argument("--max-cat-freq", type=int, default=20000,
-                        help="categories with more member articles are treated as meta "
-                             "and excluded from naming/filtered purity")
-        ap.add_argument("--name-th", type=float, default=0.30,
-                        help="top1_share_filt threshold for 'nameable' communities")
-        a = ap.parse_args()
     dirs = Dirs(a.base)
 
     import pyarrow as pa
@@ -217,6 +205,3 @@ def main(a=None):
             break
     print(f"\nwrote {out_pq}")
 
-
-if __name__ == "__main__":
-    main()

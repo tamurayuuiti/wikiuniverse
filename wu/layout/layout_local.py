@@ -505,53 +505,63 @@ def cmd_merge(dirs: Dirs, lay_dir: str, memb: np.ndarray, n: int, G: int):
           f"{os.path.join(lay_dir, 'article_positions.parquet')}")
 
 
+def _build_parser():
+    """モジュール CLI の引数解析器(バッチ分割・preview・job-spec 起動用)。
+
+    既定値は wu/stages/layout.py の Param 宣言と一致させること
+    (test_pipeline_core のドリフト防止検査が照合する)。
+    """
+    ap = argparse.ArgumentParser(prog="python -m wu.layout.layout_local")
+    ap.add_argument("--base", default="data")
+    ap.add_argument("--galaxy-tag", default="res1_sub")
+    ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
+                    help="layout run name under data/layout "
+                         "(default: wu.paths.ACTIVE_LAYOUT_RUN)")
+    ap.add_argument("--galaxies", default="all",
+                    help="'all' or 'A-B' inclusive id range (one batch job)")
+    ap.add_argument("--job-spec", default=None,
+                    help="path to a launcher-written gid list (LPT bin); "
+                         "overrides --galaxies")
+    ap.add_argument("--prep", action="store_true",
+                    help="build/refresh the shared prep artifacts and exit")
+    ap.add_argument("--merge-only", action="store_true",
+                    help="merge existing shards into article_positions.parquet "
+                         "and exit (no edge scans, no anchor computation)")
+    ap.add_argument("--fr-mode", default="ml", choices=["ml", "flat"],
+                    help="ml = multilevel-seeded FR for galaxies with n >= "
+                         "--ml-threshold (default); flat = legacy single-level "
+                         "FR (comparison arm)")
+    ap.add_argument("--ml-threshold", type=int, default=2000,
+                    help="article count where the multilevel FR kicks in "
+                         "(smaller galaxies keep the exact legacy flat path)")
+    ap.add_argument("--ml-niter", type=int, default=100,
+                    help="FR refine iterations on top of the multilevel seed "
+                         "(the flat path keeps igraph's default 500)")
+    ap.add_argument("--anchor-mode", default="sector", choices=["sector", "sum"],
+                    help="sector = B1 dominant-neighbour sector direction with "
+                         "confidence-scaled gain (default); sum = legacy "
+                         "summed-unit-vector anchor (comparison arm)")
+    ap.add_argument("--fr-norm", default="p98", choices=["p98", "max"],
+                    help="p98 = recentred + robust p98 scale with outlier clamp "
+                         "(B2-a, default); max = legacy max-norm (comparison arm)")
+    ap.add_argument("--sector-ratio", type=float, default=0.5,
+                    help="blend the top-2 neighbour direction when w2 >= ratio*w1")
+    ap.add_argument("--iters", type=int, default=40)
+    ap.add_argument("--kappa", type=float, default=0.05, help="anchor pull gain")
+    ap.add_argument("--lam", type=float, default=0.06, help="elastic prior gain")
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--preview-galaxy", type=int, default=None,
+                    help="after the run, render a 3-view scatter of this galaxy's "
+                         "article shard (layout/<run>/preview_galaxy_<id>.png)")
+    return ap
+
+
 def main(a=None):
-    # a=None のときだけ CLI 引数を解析する(ステージからは Namespace を
-    # 注入して呼ぶ = 引数解析と処理本体の分離。CLI 挙動は不変)。
+    # a=None のときだけ CLI 引数を解析する(モジュール CLI 起動 = バッチ/
+    # preview/job-spec)。ステージからは Namespace を注入して呼ぶ
+    # (= 引数解析と処理本体の分離)。
     if a is None:
-        ap = argparse.ArgumentParser()
-        ap.add_argument("--base", default="data")
-        ap.add_argument("--galaxy-tag", default="res1_sub")
-        ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
-                        help="layout run name under data/layout "
-                             "(default: wu.paths.ACTIVE_LAYOUT_RUN)")
-        ap.add_argument("--galaxies", default="all",
-                        help="'all' or 'A-B' inclusive id range (one batch job)")
-        ap.add_argument("--job-spec", default=None,
-                        help="path to a launcher-written gid list (LPT bin); "
-                             "overrides --galaxies")
-        ap.add_argument("--prep", action="store_true",
-                        help="build/refresh the shared prep artifacts and exit")
-        ap.add_argument("--merge-only", action="store_true",
-                        help="merge existing shards into article_positions.parquet "
-                             "and exit (no edge scans, no anchor computation)")
-        ap.add_argument("--fr-mode", default="ml", choices=["ml", "flat"],
-                        help="ml = multilevel-seeded FR for galaxies with n >= "
-                             "--ml-threshold (default); flat = legacy single-level "
-                             "FR (comparison arm)")
-        ap.add_argument("--ml-threshold", type=int, default=2000,
-                        help="article count where the multilevel FR kicks in "
-                             "(smaller galaxies keep the exact legacy flat path)")
-        ap.add_argument("--ml-niter", type=int, default=100,
-                        help="FR refine iterations on top of the multilevel seed "
-                             "(the flat path keeps igraph's default 500)")
-        ap.add_argument("--anchor-mode", default="sector", choices=["sector", "sum"],
-                        help="sector = B1 dominant-neighbour sector direction with "
-                             "confidence-scaled gain (default); sum = legacy "
-                             "summed-unit-vector anchor (comparison arm)")
-        ap.add_argument("--fr-norm", default="p98", choices=["p98", "max"],
-                        help="p98 = recentred + robust p98 scale with outlier clamp "
-                             "(B2-a, default); max = legacy max-norm (comparison arm)")
-        ap.add_argument("--sector-ratio", type=float, default=0.5,
-                        help="blend the top-2 neighbour direction when w2 >= ratio*w1")
-        ap.add_argument("--iters", type=int, default=40)
-        ap.add_argument("--kappa", type=float, default=0.05, help="anchor pull gain")
-        ap.add_argument("--lam", type=float, default=0.06, help="elastic prior gain")
-        ap.add_argument("--seed", type=int, default=42)
-        ap.add_argument("--preview-galaxy", type=int, default=None,
-                        help="after the run, render a 3-view scatter of this galaxy's "
-                             "article shard (layout/<run>/preview_galaxy_<id>.png)")
-        a = ap.parse_args()
+        a = _build_parser().parse_args()
     dirs = Dirs(a.base)
     lay_dir = str(dirs.layout_run(a.run))
     gpos_path = os.path.join(lay_dir, "galaxy_positions.parquet")
