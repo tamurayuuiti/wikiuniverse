@@ -97,14 +97,15 @@ export class ViewerCore {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.05
     this.scene.fog = new THREE.FogExp2(0x03040a, 0.00016)
-    this.camera = new THREE.PerspectiveCamera(55, w / Math.max(h, 1), 0.1, 600000)
+    this.camera = new THREE.PerspectiveCamera(55, w / Math.max(h, 1), 0.02, 600000)
     this.camera.position.copy(HOME_POS)
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.075
     this.controls.rotateSpeed = 0.55
     this.controls.zoomSpeed = 0.9
-    this.controls.minDistance = 1.5
+    // 星への深接近を許す(対数深度のため near は小さくても深度精度は保たれる)。
+    this.controls.minDistance = 0.2
     this.controls.maxDistance = 12000
     this.controls.target.copy(HOME_TARGET)
     // bloom(星コア専業: threshold はエッジ飽和輝度より上、強度は控えめ)。

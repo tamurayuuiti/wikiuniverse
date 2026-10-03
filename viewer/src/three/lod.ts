@@ -146,3 +146,13 @@ export function macroLabelAlpha(px: number): number {
 
 // 星の px サイズ倍率(親 px 比例=自己相似)。
 export const STAR_PX_FACTOR = 0.071
+
+// 星の px サイズ上限(自己相似の成長を許す距離連動キャップ)。
+// 旧実装の固定 9px は接近しても星が大きくならず「近づけない」体感の主因だった。
+// cap = clamp(tilePx * k, min, max): 自然サイズ(aSize*uPx ~ 0.172*tilePx)を常に上回り、
+// 近接時は gl_PointSize の実装上限(通常 255+px)に対し安全な 120px まで成長する。
+export const STAR_PX_CAP = {
+  min: 9,
+  max: 120,
+  k: 0.22,
+} as const

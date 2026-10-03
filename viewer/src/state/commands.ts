@@ -69,7 +69,7 @@ export class Commands {
         if (!tile || tile.n === 0) return
         const local = Math.floor(Math.random() * tile.n)
         const pos = tile.pos ? [tile.pos[local * 3], tile.pos[local * 3 + 1], tile.pos[local * 3 + 2]] as [number, number, number] : null
-        if (pos) useStore.getState().requestJump(pos, Math.max(g.r * 0.06, 1.5))
+        if (pos) useStore.getState().requestJump(pos, Math.max(g.r * 0.06, 0.6))
         useStore.setState({
           selection: { kind: 'article', gid: g.gid, local },
           panel: {

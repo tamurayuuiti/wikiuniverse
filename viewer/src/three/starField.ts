@@ -29,7 +29,7 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import type { TileData, TileIndex } from '@/types/catalog'
 import { peekTile, fetchTile, pinTiles } from '@/data/tileCache'
-import { LOD, STAR_PX_FACTOR, EXPOSURE, emergeAlpha, edgesAlpha, crossAlpha, edgeExposure, crossExposure, edgeInk } from './lod'
+import { LOD, STAR_PX_FACTOR, STAR_PX_CAP, EXPOSURE, emergeAlpha, edgesAlpha, crossAlpha, edgeExposure, crossExposure, edgeInk } from './lod'
 import { dimOf, galaxyMember } from './focus'
 import type { FocusState } from './focus'
 import { packHit, unpackG, unpackLocal } from './hit'
@@ -196,6 +196,8 @@ export class StarField {
       // ego 網(太線+リング)を際立たせる。
       const egoHere = this.egoKey >= 0 && unpackG(this.egoKey) === e.g
       mat.uniforms.uPx.value = px * STAR_PX_FACTOR
+      // 点サイズ上限は距離連動(接近に伴い自己相似的に星が大きくなる)。
+      mat.uniforms.uPxMax.value = Math.min(STAR_PX_CAP.max, Math.max(STAR_PX_CAP.min, px * STAR_PX_CAP.k))
       mat.uniforms.uTime.value = this.time
       mat.uniforms.uOpacity.value = e.shown * e.dim * (egoHere ? EXPOSURE.egoDimStars : 1)
       mat.opacity = e.shown * e.dim
