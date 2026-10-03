@@ -1,10 +1,12 @@
 // src/three/universeLayer.ts
-// 連続宇宙の骨格層: 銀河クラスタ(塊スプライト二層+球殻)、銀河団バンドル、
-// 銀河(クラスタ+球殻+内部ハブ星+名ラベル)、銀河間バンドルを描画する。
+// 連続宇宙の骨格層: 銀河クラスタ(手続き的銀河テクスチャのスプライト+球殻)、
+// 銀河団バンドル、銀河(クラスタ+内部ハブ星+名ラベル)、銀河間バンドルを描画する。
 //
 // 責務:
 // - 自己相似 LOD の親側: 塊スプライトの px clamp(遠景で一点化)と
 //   距離フェード、子出現時の α 減光(受け渡し)
+// - 銀河の遠景ビジュアル: galaxyTextures の変奏(渦巻/もや/グロー)を
+//   display_class(galaxy/medium/dust)と gid ハッシュ(回転・扁平=傾き表現)で割り当て
 // - 潜入フォーカス測光: 非フォーカス実体のディミング(dim)と
 //   焦点/包含実体の自塊ベール消灯(veil)
 // - エッジ tier の α(マクロ/銀河バンドル)を距離帯から設定
@@ -24,6 +26,7 @@ import type { BootstrapData, TileIndex } from '@/types/catalog'
 import { LOD, EXPOSURE, screenPx, clumpAlpha, galaxyLabelAlpha, macroLabelAlpha, edgeInk } from './lod'
 import { FOCUS, containVeil, dimOf, galaxyMember } from './focus'
 import type { FocusState } from './focus'
+import type { GalaxyTextureSet } from './galaxyTextures'
 
 // ラベルプール上限。
 const LABEL_POOL = 42
@@ -64,6 +67,11 @@ export class UniverseLayer {
   private galClumps: THREE.Sprite[] = []
   private galShells: THREE.LineSegments[] = []
   private galHubs: THREE.Points[] = []
+  // 銀河毎の視覚変奏(構築時に決定、update では参照のみ)。
+  private galFlat: number[] = []
+  private galSizeK: number[] = []
+  private galOpK: number[] = []
+  private gset: GalaxyTextureSet
   private galLabelPool: THREE.Sprite[] = []
   private labelTexCache = new Map<number, THREE.Texture>()
   private labelLru: number[] = []
@@ -74,9 +82,10 @@ export class UniverseLayer {
   private macroPickMeshes: THREE.Object3D[] = []
 
   // bootstrap + index からレイヤを構築する。
-  constructor(boot: BootstrapData, index: TileIndex, clumpTex: THREE.Texture, labelFont: string) {
+  constructor(boot: BootstrapData, index: TileIndex, clumpTex: THREE.Texture, gset: GalaxyTextureSet, labelFont: string) {
     this.boot = boot
     this.index = index
+    this.gset = gset
     // マクロ: クラスタ(高不透明度)+広域グロー(淡)+球殻+ラベル。
     for (let i = 0; i < boot.macros.length; i++) {
       const m = boot.macros[i]
@@ -197,26 +206,69 @@ export class UniverseLayer {
       this.macroBundleLines.renderOrder = 1
       this.group.add(this.macroBundleLines)
     }
-    // 銀河: クラスタ+球殻+ハブ星。
+    // 銀河: クラスタ(手続き的銀河テクスチャ、display_class 別の変奏)+球殻+ハブ星。
     for (const g of boot.galaxies) {
       const meta = this.index.galaxies.get(g.gid)
       if (!meta) continue
-      tmpColor.setHSL(meta.hue, 0.5, 0.6)
+      // 銀河毎の視覚変奏(決定的ハッシュ): 変奏選択・傾き(扁平)・画面内回転。
+      const h1 = this.ghash(g.gid, 1)
+      const h2 = this.ghash(g.gid, 2)
+      const h3 = this.ghash(g.gid, 3)
+      const cls = meta.display_class
+      let map: THREE.Texture
+      let sat: number
+      let light: number
+      let flat: number
+      let sizeK: number
+      let opK: number
+      let rot = 0
+      if (cls === 2) {
+        // dust(孤立記事群): 構造のない淡いグロー。
+        map = gset.glow
+        sat = 0.35
+        light = 0.58
+        flat = 1
+        sizeK = 0.85
+        opK = 0.55
+      } else if (cls === 1) {
+        // medium(媒介銀河 = 銀河間物質): 構造の乏しい薄いもやで「橋渡し」の質感。
+        map = gset.haze
+        sat = 0.28
+        light = 0.64
+        flat = 0.55 + 0.45 * h2
+        sizeK = 1.0
+        opK = 0.62
+        rot = h3 * Math.PI * 2
+      } else {
+        // 通常銀河: 渦巻変奏 + 傾き表現(扁平 0.36–1.0 × 画面内回転)。
+        map = gset.spirals[Math.floor(h1 * gset.spirals.length) % gset.spirals.length]
+        sat = 0.5
+        light = 0.6
+        flat = 0.36 + 0.64 * h2
+        sizeK = 1.12
+        opK = 1
+        rot = h3 * Math.PI * 2
+      }
+      tmpColor.setHSL(meta.hue, sat, light)
       const mat = new THREE.SpriteMaterial({
-        map: clumpTex,
+        map,
         color: tmpColor,
         transparent: true,
         opacity: 0.85,
         depthWrite: false,
         blending: THREE.NormalBlending,
+        rotation: rot,
       })
       const s = new THREE.Sprite(mat)
       s.position.set(g.x, g.y, g.z)
-      s.scale.setScalar(g.r * 2.05)
+      s.scale.set(g.r * 2.05 * sizeK, g.r * 2.05 * sizeK * flat, 1)
       s.renderOrder = 4
       s.userData = { galaxy: g.gid }
       this.group.add(s)
       this.galClumps.push(s)
+      this.galFlat.push(flat)
+      this.galSizeK.push(sizeK)
+      this.galOpK.push(opK)
       const shell = this.makeShell(g.x, g.y, g.z, g.r, meta.hue, 0.75, 0.26, 2)
       shell.visible = false
       this.group.add(shell)
@@ -347,8 +399,9 @@ export class UniverseLayer {
       const alpha = (emerge === 1 ? clumpAlpha(tilePx) : fade) * dim * (1 - veil)
       const clumpPx = Math.max(effPx, 3.2)
       const worldSize = (clumpPx * d) / this.proj
-      s.scale.setScalar(worldSize * 1.45)
-      ;(s.material as THREE.SpriteMaterial).opacity = 0.9 * alpha
+      const ws = worldSize * 1.45 * this.galSizeK[i]
+      s.scale.set(ws, ws * this.galFlat[i], 1)
+      ;(s.material as THREE.SpriteMaterial).opacity = 0.9 * alpha * this.galOpK[i]
       s.visible = alpha > 0.02
       const gshMat = this.galShells[i].material as THREE.LineBasicMaterial
       gshMat.opacity = 0.16 * dim * (1 - veil)
@@ -393,6 +446,12 @@ export class UniverseLayer {
       if (!best || h.distance < best.dist) best = { mid, dist: h.distance }
     }
     return best
+  }
+
+  // 銀河毎の決定的ハッシュ [0,1)(視覚変奏用。bootstrap の黄金比ハッシュと同系)。
+  private ghash(gid: number, salt: number): number {
+    const x = Math.sin((gid + 1) * 12.9898 + salt * 78.233) * 43758.5453
+    return x - Math.floor(x)
   }
 
   // 銀河ハブ星を構築する(次数上位)。
@@ -605,6 +664,7 @@ void main() {
       if (Array.isArray(m)) m.forEach(x => x.dispose())
       else m?.dispose?.()
     })
+    this.gset.dispose()
     for (const tex of this.labelTexCache.values()) tex.dispose()
     this.labelTexCache.clear()
   }

@@ -33,6 +33,7 @@ import { makeStarSprite } from './textures'
 import { macroBundleAlpha, galaxyBundleAlpha } from './lod'
 import { FocusTracker, focusZoomLabel } from './focus'
 import type { FocusState } from './focus'
+import { makeGalaxyTextureSet } from './galaxyTextures'
 
 // display_class コードを日本語名へ変換する。
 function displayClassName(code: number): string {
@@ -114,7 +115,8 @@ export class ViewerCore {
     this.composer.addPass(new OutputPass())
     // レイヤ。
     const clumpTex = makeStarSprite(256, 1.9, 3.4)
-    this.uni = new UniverseLayer(boot, index, clumpTex, '600 34px system-ui, sans-serif')
+    const gset = makeGalaxyTextureSet()
+    this.uni = new UniverseLayer(boot, index, clumpTex, gset, '600 34px system-ui, sans-serif')
     this.scene.add(this.uni.group)
     this.stars = new StarField(index)
     this.scene.add(this.stars.group)
