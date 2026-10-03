@@ -145,11 +145,14 @@ export class ViewerCore {
     canvas.addEventListener('pointermove', this.onPointerMoveBound)
     canvas.addEventListener('pointerup', this.onPointerUpBound)
     window.addEventListener('keydown', this.onKeyDownBound)
-    // store 購読(z スライダ・ジャンプ要求)。
+    // store 購読(z スライダ・ジャンプ要求・記事選択要求)。
     this.unsub = useStore.subscribe((s, prev) => {
       if (s.zSquash !== prev.zSquash) this.applyZ(s.zSquash)
       if (s.jumpRequest && s.jumpRequest.seq !== prev.jumpRequest?.seq) {
         this.flyTo(new THREE.Vector3(...s.jumpRequest.pos), s.jumpRequest.dist)
+      }
+      if (s.selectRequest && s.selectRequest.seq !== prev.selectRequest?.seq) {
+        this.selectArticleFromCommand(s.selectRequest.gid, s.selectRequest.local)
       }
     })
     this.loop()
@@ -271,7 +274,7 @@ export class ViewerCore {
     const gal = this.uni.pickGalaxy(this.ndc, this.camera)
     if (gal) {
       const meta = this.index.galaxies.get(gal.gid)
-      const bootG = this.boot.galaxies.find(x => x.gid === gal.gid)
+      const bootG = this.boot.galaxies[gal.gid]
       if (meta && bootG) {
         useStore.setState({
           hover: {
@@ -321,7 +324,7 @@ export class ViewerCore {
     const gal = this.uni.pickGalaxy(this.ndc, this.camera)
     if (gal) {
       const meta = this.index.galaxies.get(gal.gid)
-      const g = this.boot.galaxies.find(x => x.gid === gal.gid)
+      const g = this.boot.galaxies[gal.gid]
       if (meta && g) {
         this.stars.clearEgo()
         useStore.setState({ selection: { kind: 'galaxy', gid: gal.gid } })
@@ -345,11 +348,25 @@ export class ViewerCore {
     })
   }
 
+  // UI 起点(検索/ランダム)の記事選択: タイル到着を待って fly-to + ego + パネル。
+  private selectArticleFromCommand(gid: number, local: number): void {
+    const g = this.boot.galaxies[gid]
+    fetchTile(gid)
+      .then(tile => {
+        if (!tile || local >= tile.n) return
+        const pos = new THREE.Vector3(tile.pos[local * 3], tile.pos[local * 3 + 1], tile.pos[local * 3 + 2])
+        this.flyTo(pos, Math.max((g?.r ?? 10) * 0.06, 0.6))
+        this.selectArticle(gid, local, tile.titles[local] ?? `local#${local}`)
+      })
+      .catch(() => {})
+  }
+
   // 記事を選択する(ego 網+パネル)。
   private selectArticle(g: number, local: number, title: string): void {
     this.stars.showEgo(g, local)
     const meta = this.index.galaxies.get(g)
-    const bootG = this.boot.galaxies.find(x => x.gid === g)
+    // gid = boot.galaxies の添字(bootstrap.ts の規約)。
+    const bootG = this.boot.galaxies[g]
     const tile = peekTile(g)
     let deg = 0
     const targets: { gid: number; title: string }[] = []
@@ -363,7 +380,7 @@ export class ViewerCore {
         const og = tile.cross[i + 1]
         if (seen.has(og)) continue
         seen.add(og)
-        const ob = this.boot.galaxies.find(x => x.gid === og)
+        const ob = this.boot.galaxies[og]
         const ometa = this.index.galaxies.get(og)
         targets.push({ gid: og, title: ob?.label ?? (ometa ? `galaxy#${og}` : `?${og}`) })
       }
@@ -386,7 +403,7 @@ export class ViewerCore {
   // 銀河パネルを表示する(ハブ記事はタイル到着後に非同期で補充)。
   private showGalaxyPanel(gid: number): void {
     const meta = this.index.galaxies.get(gid)
-    const g = this.boot.galaxies.find(x => x.gid === gid)
+    const g = this.boot.galaxies[gid]
     if (!meta || !g) return
     const macro = this.boot.macros[meta.mid]
     const base = {
@@ -397,7 +414,7 @@ export class ViewerCore {
       n: meta.n,
       nCross: meta.n_cross,
       displayClass: displayClassName(meta.display_class),
-      hubTitles: [] as string[],
+      hubTitles: [] as { local: number; title: string }[],
     }
     useStore.setState({ panel: base })
     fetchTile(gid)
@@ -406,7 +423,7 @@ export class ViewerCore {
         const st = useStore.getState()
         if (st.panel.kind !== 'galaxy' || st.panel.gid !== gid) return
         const order = [...Array(tile.n).keys()].sort((a, b) => tile.deg[b] - tile.deg[a]).slice(0, 14)
-        useStore.setState({ panel: { ...base, hubTitles: order.map(i => tile.titles[i] ?? `local#${i}`) } })
+        useStore.setState({ panel: { ...base, hubTitles: order.map(i => ({ local: i, title: tile.titles[i] ?? `local#${i}` })) } })
       })
       .catch(() => {})
   }

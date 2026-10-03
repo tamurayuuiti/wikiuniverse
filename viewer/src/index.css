@@ -1,13 +1,28 @@
-/* src/index.css — v6 連続宇宙ビューアのグローバルスタイル */
+/* src/index.css — 連続宇宙ビューア(v6)の没入型グローバルスタイル。
+ *
+ * 設計方針(2026-10-03 の UI 刷新):
+ * - 没入優先: 視界を占有しないガラス調の最小クローム、アイドリングで自動非表示
+ *   (html[data-ui='idle'] → フェードアウト。App.tsx が計測)
+ * - デザイントークンは :root に集約(色・半径・ぼかし・階層)
+ * - 操作系は下部ドックへ集約(統合検索・クイック・レイヤ popover)
+ */
 
 :root {
   --bg: #03040a;
-  --panel: rgba(8, 12, 26, 0.78);
-  --line: rgba(120, 160, 255, 0.16);
-  --text: #dbe6ff;
-  --text-dim: #8fa0c4;
-  --accent: #7fb4ff;
-  --accent-2: #ffd28f;
+  --glass: rgba(10, 14, 26, 0.58);
+  --glass-strong: rgba(10, 14, 26, 0.82);
+  --line: rgba(140, 170, 255, 0.14);
+  --line-strong: rgba(140, 170, 255, 0.28);
+  --text: #e2ebff;
+  --text-dim: #93a3c6;
+  --text-faint: #64748f;
+  --accent: #8ab6ff;
+  --accent-warm: #ffd28f;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --blur: blur(14px) saturate(1.2);
+  --shadow: 0 6px 28px rgba(0, 0, 0, 0.42);
+  --ui-fade: opacity 0.55s ease, transform 0.55s ease;
   color-scheme: dark;
 }
 
@@ -25,7 +40,7 @@ body,
   overflow: hidden;
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-family: system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans', 'Noto Sans JP', sans-serif;
 }
 
 .app {
@@ -46,6 +61,7 @@ body,
 }
 
 /* ── ローディング ── */
+
 .loading-overlay {
   position: absolute;
   inset: 0;
@@ -75,16 +91,26 @@ body,
   color: var(--text);
 }
 
-/* ── HUD(上部) ── */
+/* ── 没入: アイドリング時の UI 自動非表示 ── */
+
+html[data-ui='idle'] .hud,
+html[data-ui='idle'] .dock,
+html[data-ui='idle'] .info-panel {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+}
+
+.hud,
+.dock,
+.info-panel {
+  transition: var(--ui-fade);
+}
+
+/* ── 上部チップ(左上: ブランド+文脈 / 右上: 統計) ── */
+
 .hud {
   position: absolute;
-  top: 10px;
-  left: 12px;
-  right: 12px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
   z-index: 20;
   pointer-events: none;
 }
@@ -93,205 +119,377 @@ body,
   pointer-events: auto;
 }
 
-.hud-group {
+.hud-tl {
+  top: 14px;
+  left: 16px;
+}
+
+.hud-tr {
+  top: 14px;
+  right: 16px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--glass);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 14px;
+  backdrop-filter: var(--blur);
+  box-shadow: var(--shadow);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.brand-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #cfe3ff, var(--accent) 60%, transparent);
+  box-shadow: 0 0 8px rgba(138, 182, 255, 0.8);
+}
+
+.brand-name {
+  font-weight: 700;
+  font-size: 11.5px;
+  letter-spacing: 0.18em;
+  color: var(--text);
+}
+
+.chip-sep {
+  color: var(--text-faint);
+  opacity: 0.6;
+}
+
+.brand-zoom {
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.brand-focus {
+  color: var(--accent-warm);
+}
+
+.chip.stats {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+/* ── 下部ドック(検索・クイック・レイヤ) ── */
+
+.dock {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+html[data-ui='idle'] .dock {
+  transform: translateX(-50%) translateY(4px);
+}
+
+.dock-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--glass-strong);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 8px;
+  backdrop-filter: var(--blur);
+  box-shadow: var(--shadow);
+}
+
+.dock-search {
   display: flex;
   align-items: center;
   gap: 7px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  padding: 5px 10px;
-  backdrop-filter: blur(6px);
+  padding: 0 10px 0 12px;
 }
 
-.hud-title {
-  font-weight: 700;
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--accent);
+.dock-search-icon {
+  color: var(--text-faint);
+  flex: none;
 }
 
-.hud-stat {
-  font-size: 10.5px;
-  color: var(--text-dim);
-  border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 2px 6px;
-  white-space: nowrap;
-}
-
-.hud-stat.zoom {
-  color: var(--accent-2);
-  border-color: color-mix(in srgb, var(--accent-2) 40%, transparent);
-  background: color-mix(in srgb, var(--accent-2) 8%, transparent);
-}
-
-.hud-check {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--text-dim);
-  cursor: pointer;
-  user-select: none;
-}
-
-.hud-check input {
-  accent-color: var(--accent);
-}
-
-.hud-slider {
-  width: 90px;
-  accent-color: var(--accent);
-}
-
-.hud-btn {
-  background: rgba(120, 170, 255, 0.1);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  color: var(--text);
-  padding: 4px 9px;
-  font-size: 11px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.hud-btn:hover {
-  border-color: var(--accent);
-  background: rgba(120, 170, 255, 0.2);
-}
-
-/* ── 検索 ── */
-.search-wrap {
-  position: relative;
-}
-
-.hud-search {
-  background: rgba(10, 16, 32, 0.75);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  color: var(--text);
-  padding: 4px 10px;
-  font-size: 11px;
-  width: 140px;
+.dock-search input {
+  width: 220px;
+  background: transparent;
+  border: none;
   outline: none;
+  color: var(--text);
+  font-size: 12.5px;
+  padding: 6px 0;
 }
 
-.hud-search:focus {
-  border-color: var(--accent);
+.dock-search input::placeholder {
+  color: var(--text-faint);
 }
 
+.dock-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
+}
+
+.dock-btn:hover {
+  color: var(--text);
+  background: rgba(140, 170, 255, 0.1);
+  border-color: var(--line);
+}
+
+.dock-btn.active {
+  color: var(--accent);
+  background: rgba(138, 182, 255, 0.14);
+  border-color: var(--line-strong);
+}
+
+.dock-btn.icon {
+  font-size: 15px;
+  padding: 4px 11px;
+  line-height: 1;
+}
+
+/* 検索結果 popover */
 .search-results {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  width: 260px;
-  max-height: 320px;
+  width: min(430px, 86vw);
+  max-height: 46vh;
   overflow-y: auto;
-  background: rgba(8, 12, 26, 0.96);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--glass-strong);
   border: 1px solid var(--line);
-  border-radius: 9px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
-  z-index: 40;
+  border-radius: var(--radius);
+  padding: 6px;
+  backdrop-filter: var(--blur);
+  box-shadow: var(--shadow);
 }
 
 .search-item {
   display: flex;
-  width: 100%;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px 10px;
-  background: none;
-  border: 0;
-  border-bottom: 1px solid rgba(120, 160, 255, 0.06);
-  color: var(--text);
-  font-size: 11px;
-  text-align: left;
+  align-items: center;
+  gap: 9px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
   cursor: pointer;
+  text-align: left;
+  color: var(--text);
 }
 
 .search-item:hover {
-  background: rgba(120, 170, 255, 0.1);
+  background: rgba(140, 170, 255, 0.12);
+}
+
+.search-kind {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2.5px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+}
+
+.search-kind.galaxy {
+  color: var(--accent);
+}
+
+.search-kind.article {
+  color: var(--accent-warm);
 }
 
 .search-label {
+  flex: 1 1 auto;
+  font-size: 12.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.search-n {
-  color: var(--text-dim);
+.search-sub {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  max-width: 34%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* レイヤ popover */
+.layers-pop {
+  width: 240px;
+  background: var(--glass-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  backdrop-filter: var(--blur);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.layers-title {
   font-size: 10px;
-  flex-shrink: 0;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.layer-row input[type='checkbox'] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.z-row {
+  cursor: default;
+  margin-top: 2px;
+}
+
+.z-row .z-label {
+  flex: none;
+}
+
+.z-row input[type='range'] {
+  flex: 1 1 auto;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.z-val {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--text-faint);
+  width: 30px;
+  text-align: right;
+}
+
+.layers-note {
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--text-faint);
 }
 
 /* ── 情報パネル(左下) ── */
+
 .panel {
-  position: absolute;
-  background: var(--panel);
+  background: var(--glass);
   border: 1px solid var(--line);
-  border-radius: 11px;
-  padding: 12px 14px;
-  backdrop-filter: blur(8px);
-  z-index: 20;
+  border-radius: var(--radius);
+  backdrop-filter: var(--blur);
+  box-shadow: var(--shadow);
 }
 
 .info-panel {
-  left: 12px;
-  bottom: 12px;
-  width: 320px;
-  max-height: 46vh;
+  position: absolute;
+  left: 16px;
+  bottom: 18px;
+  z-index: 20;
+  width: min(330px, calc(100vw - 32px));
+  max-height: min(56vh, 480px);
   overflow-y: auto;
+  padding: 16px 18px;
 }
 
 .info-panel h2 {
-  margin: 2px 0 8px;
-  font-size: 16px;
+  margin: 2px 0 10px;
+  font-size: 17px;
   font-weight: 700;
-  color: var(--text);
   line-height: 1.35;
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
 
 .panel-eyebrow {
   font-size: 10px;
-  letter-spacing: 0.1em;
-  color: var(--text-dim);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+  margin: 12px 0 5px;
   text-transform: uppercase;
-  margin-top: 8px;
+}
+
+.panel-eyebrow:first-child {
+  margin-top: 0;
 }
 
 .panel-stats {
   display: flex;
-  gap: 14px;
-  margin: 6px 0;
+  gap: 18px;
+  margin: 2px 0 4px;
+}
+
+.panel-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .panel-stats .k {
-  display: block;
-  font-size: 9.5px;
-  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
 }
 
 .panel-stats .v {
-  display: block;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 650;
   color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 
 .panel-hint {
-  font-size: 10.5px;
+  font-size: 11px;
+  line-height: 1.7;
   color: var(--text-dim);
-  line-height: 1.65;
-  margin-top: 8px;
+  margin-top: 10px;
+}
+
+.panel-hint kbd {
+  background: rgba(140, 170, 255, 0.12);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  font-family: inherit;
+  color: var(--text);
 }
 
 .panel-list {
-  margin: 4px 0 0;
-  padding-left: 16px;
-  font-size: 11px;
-  color: var(--text);
+  margin: 4px 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-dim);
   line-height: 1.7;
 }
 
@@ -299,17 +497,18 @@ body,
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
-  margin-top: 4px;
+  margin: 4px 0;
 }
 
 .link-chip {
-  background: rgba(120, 170, 255, 0.1);
+  background: rgba(140, 170, 255, 0.08);
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--text);
-  padding: 3px 9px;
-  font-size: 10px;
+  font-size: 11px;
+  padding: 3.5px 10px;
   cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -317,42 +516,107 @@ body,
 }
 
 .link-chip:hover {
-  border-color: var(--accent);
-  background: rgba(120, 170, 255, 0.2);
+  background: rgba(140, 170, 255, 0.18);
+  border-color: var(--line-strong);
 }
 
-/* ── ツールチップ ── */
+.wiki-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 2px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: rgba(138, 182, 255, 0.12);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.15s ease;
+}
+
+.wiki-link:hover {
+  background: rgba(138, 182, 255, 0.24);
+}
+
+/* ── ホバーチップ ── */
+
 .tooltip {
   position: absolute;
   z-index: 30;
   pointer-events: none;
-  background: rgba(6, 10, 22, 0.92);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 4px 9px;
   display: flex;
-  gap: 7px;
   align-items: baseline;
-  max-width: 340px;
+  gap: 8px;
+  background: var(--glass-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 6px 11px;
+  backdrop-filter: var(--blur);
+  box-shadow: var(--shadow);
+  max-width: 320px;
 }
 
 .tooltip-kind {
-  font-size: 9px;
-  color: var(--accent-2);
-  letter-spacing: 0.08em;
-  flex-shrink: 0;
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--accent);
 }
 
 .tooltip-title {
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--text);
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tooltip-info {
-  font-size: 9.5px;
-  color: var(--text-dim);
-  white-space: nowrap;
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── スクロールバー(パネル/検索結果) ── */
+
+.info-panel::-webkit-scrollbar,
+.search-results::-webkit-scrollbar {
+  width: 8px;
+}
+
+.info-panel::-webkit-scrollbar-thumb,
+.search-results::-webkit-scrollbar-thumb {
+  background: rgba(140, 170, 255, 0.2);
+  border-radius: 4px;
+}
+
+.info-panel::-webkit-scrollbar-track,
+.search-results::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ── 狭視界(モバイル)対応 ── */
+
+@media (max-width: 720px) {
+  .hud-tr {
+    display: none;
+  }
+
+  .dock-search input {
+    width: 130px;
+  }
+
+  .dock-btn {
+    padding: 6px 9px;
+    font-size: 11px;
+  }
+
+  .info-panel {
+    bottom: 84px;
+    max-height: 34vh;
+  }
 }
