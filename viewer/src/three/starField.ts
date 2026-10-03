@@ -29,7 +29,7 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import type { TileData, TileIndex } from '@/types/catalog'
 import { peekTile, fetchTile, pinTiles } from '@/data/tileCache'
-import { LOD, STAR_PX_FACTOR, STAR_PX_CAP, EXPOSURE, emergeAlpha, edgesAlpha, crossAlpha, edgeExposure, crossExposure, edgeInk } from './lod'
+import { LOD, STAR_PX_FACTOR, STAR_PX_CAP, EXPOSURE, EDGE_LUMA_TARGET, equalizeLuma, emergeAlpha, edgesAlpha, crossAlpha, edgeExposure, crossExposure, edgeInk } from './lod'
 import { dimOf, galaxyMember } from './focus'
 import type { FocusState } from './focus'
 import { packHit, unpackG, unpackLocal } from './hit'
@@ -408,7 +408,9 @@ export class StarField {
     const pos = new Float32Array(cap * 6)
     const col = new Float32Array(cap * 6)
     const med = medianDeg(tile.deg)
+    // 基本色は銀河色相から作り、知覚輝度を色相間で均す(黄色系の突出防止)。
     tmpColor.setHSL(meta.hue, 0.35, 0.52)
+    equalizeLuma(tmpColor)
     const br = tmpColor.r
     const bg = tmpColor.g
     const bb = tmpColor.b
@@ -481,7 +483,9 @@ export class StarField {
     const col: number[] = []
     const med = medianDeg(tile.deg)
     const otherMed = new Map<number, number>()
+    // クロスアークは補色寄り+わずかに高い目標輝度(銀河間の識別性を保つ)。
     tmpColor.setHSL((meta.hue + 0.5) % 1, 0.5, 0.6)
+    equalizeLuma(tmpColor, EDGE_LUMA_TARGET * 1.16)
     const br = tmpColor.r
     const bg = tmpColor.g
     const bb = tmpColor.b
