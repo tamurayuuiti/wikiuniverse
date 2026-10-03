@@ -1,13 +1,14 @@
 // src/ui/InfoPanel.tsx
-// 左下情報パネル(v6): コンテキスト依存(overview / galaxy / article)。
+// 左下情報パネル(没入型): コンテキスト依存(overview / galaxy / article)。
 //
 // 責務:
-// - 選択なし: 全体統計と操作ガイド
-// - 銀河選択: 銀河情報+代表ハブ記事
-// - 記事選択: 記事情報+実クロスリンク先(クリックで対象銀河へ fly-to)
+// - 選択なし: compact な概況と操作ヒント
+// - 銀河選択: 統計 + 代表記事(クリックで記事へ = gotoArticle)
+// - 記事選択: 統計 + Wikipedia 外部リンク + 実クロスリンク先(クリックで fly-to)
 //
 // 注意:
 // - パネルは表示専用コンテキスト。描画・カメラは distance/px 駆動(core 側)。
+// - Wikipedia リンクは local#NN(タイトル未解決のフォールバック)では表示しない。
 
 import { useStore } from '@/state/store'
 import type { Commands } from '@/state/commands'
@@ -15,6 +16,11 @@ import type { Commands } from '@/state/commands'
 // InfoPanel の props。
 interface Props {
   commands: Commands | null
+}
+
+// 記事タイトルから Wikipedia(ja)の URL を作る(空白はアンダースコア化)。
+function wikiUrl(title: string): string {
+  return `https://ja.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`
 }
 
 // 左下の情報パネル。
@@ -37,15 +43,17 @@ export function InfoPanel({ commands }: Props) {
             </div>
           </div>
           <div className="panel-hint">
-            wheel: ズーム(連続) / drag: 回転 / 銀河クリック: 接近(星が湧く) /
-            星クリック: 記事選択+実リンク表示 / Esc: 一段上昇 / 検索・ランダムは右上
+            wheel ズーム(連続)· 銀河クリックで接近 · 星クリックで記事選択 · Esc で一段上昇 ·{' '}
+            <kbd>/</kbd> 検索
           </div>
         </>
       )}
       {panel.kind === 'loading' && <div className="panel-hint">{panel.label}…</div>}
       {panel.kind === 'galaxy' && (
         <>
-          <div className="panel-eyebrow">銀河{panel.displayClass === 'medium' ? '(媒体)' : panel.displayClass === 'dust' ? '(塵)' : ''}</div>
+          <div className="panel-eyebrow">
+            銀河{panel.displayClass === 'medium' ? '(媒介)' : panel.displayClass === 'dust' ? '(塵)' : ''}
+          </div>
           <h2>{panel.title}</h2>
           <div className="panel-stats">
             <div>
@@ -60,12 +68,19 @@ export function InfoPanel({ commands }: Props) {
           <div className="panel-eyebrow">所属: {panel.macroTitle}</div>
           {panel.hubTitles.length > 0 && (
             <>
-              <div className="panel-eyebrow">代表記事(ハブ)</div>
-              <ul className="panel-list">
-                {panel.hubTitles.map((t, i) => (
-                  <li key={i}>{t}</li>
+              <div className="panel-eyebrow">代表記事(ハブ)— クリックで記事へ</div>
+              <div className="link-row">
+                {panel.hubTitles.map(h => (
+                  <button
+                    key={h.local}
+                    className="link-chip"
+                    onClick={() => commands?.gotoArticle(panel.gid, h.local)}
+                    title={`${h.title} へ fly-to + 選択`}
+                  >
+                    {h.title}
+                  </button>
                 ))}
-              </ul>
+              </div>
             </>
           )}
           <div className="panel-hint">さらにズームインすると星(記事)が湧き、内部リンクと実クロスリンクが立ち上がります。</div>
@@ -87,6 +102,11 @@ export function InfoPanel({ commands }: Props) {
               </div>
             )}
           </div>
+          {!panel.title.startsWith('local#') && (
+            <a className="wiki-link" href={wikiUrl(panel.title)} target="_blank" rel="noopener noreferrer">
+              Wikipedia で開く <span aria-hidden="true">↗</span>
+            </a>
+          )}
           {panel.crossTargets.length > 0 && (
             <>
               <div className="panel-eyebrow">実リンク先(他銀河)</div>
@@ -99,7 +119,7 @@ export function InfoPanel({ commands }: Props) {
               </div>
             </>
           )}
-          <div className="panel-hint">明るいラインがこの記事の実リンク網(ego)です。Esc で選択解除。</div>
+          <div className="panel-hint">明るい太線がこの記事の実リンク網(ego)です。Esc で選択解除。</div>
         </>
       )}
     </div>

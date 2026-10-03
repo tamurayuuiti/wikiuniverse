@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:unit": "tsc tests/hit.test.ts --ignoreConfig --outDir node_modules/.tmp/unit --module esnext --target es2022 --moduleResolution bundler --skipLibCheck && node node_modules/.tmp/unit/tests/hit.test.js"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.0",

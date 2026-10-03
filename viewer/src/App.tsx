@@ -30,6 +30,24 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const ready = useStore(s => s.ready)
 
+  // 没入モード: アイドリング計測(html[data-ui] を CSS が参照して UI をフェード)。
+  useEffect(() => {
+    const root = document.documentElement
+    let timer = window.setTimeout(() => root.setAttribute('data-ui', 'idle'), 3600)
+    const wake = (): void => {
+      root.setAttribute('data-ui', 'awake')
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => root.setAttribute('data-ui', 'idle'), 3600)
+    }
+    root.setAttribute('data-ui', 'awake')
+    const events = ['pointermove', 'pointerdown', 'keydown', 'wheel'] as const
+    for (const ev of events) window.addEventListener(ev, wake, { passive: true })
+    return () => {
+      window.clearTimeout(timer)
+      for (const ev of events) window.removeEventListener(ev, wake)
+    }
+  }, [])
+
   // bootstrap をロードし、core を生成する。
   useEffect(() => {
     let cancelled = false

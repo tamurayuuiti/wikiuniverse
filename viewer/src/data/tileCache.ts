@@ -95,6 +95,11 @@ export function cacheCount(): number {
   return _cache.size
 }
 
+// キャッシュ済みタイルの反復子(記事検索用。LRU 順不同・読み取り専用)。
+export function cachedTiles(): IterableIterator<[number, TileData]> {
+  return _cache.entries()
+}
+
 // LRU を更新する。
 function touch(gid: number): void {
   _lru = _lru.filter(x => x !== gid)

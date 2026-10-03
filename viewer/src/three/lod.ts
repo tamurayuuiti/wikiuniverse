@@ -41,7 +41,8 @@ export const LOD = {
 // 測光定数(ライティング制御の単一情報源)。
 export const EXPOSURE = {
   // 内部エッジ露出の基準本数(α = edgeRef / drawn)。
-  edgeRef: 2200,
+  // 2800: 通常時のインク量を旧値 2200 から ~2割減(選択強調との対比も狙い)。
+  edgeRef: 2800,
   // 内部エッジ露出の下限(極小銀河が消えないように)。
   edgeFloor: 0.12,
   // クロスアーク露出の基準本数。
@@ -61,6 +62,12 @@ export const EXPOSURE = {
   // ハブ飾り星の輝度乗数(ベース+コア)。
   hubBase: 0.26,
   hubCore: 0.68,
+  // 選択強調(ego 網): 線幅 px・輝度と、選択中の自銀河の相対減光
+  // (ego の対象星と接続エッジを際立たせるため、背景側を落とす)。
+  egoWidthPx: 2.4,
+  egoOpacity: 0.92,
+  egoDimEdges: 0.4,
+  egoDimStars: 0.72,
 } as const
 
 // 描画本数から内部エッジの露出(α 乗数)を返す(1/n 法則)。
@@ -140,3 +147,29 @@ export function macroLabelAlpha(px: number): number {
 
 // 星の px サイズ倍率(親 px 比例=自己相似)。
 export const STAR_PX_FACTOR = 0.071
+
+// エッジ色の知覚輝度の目標値(sRGB 相対輝度の近似 0.2126R+0.7152G+0.0722B)。
+// HSL の同一 lightness は色相によって知覚輝度が大きく異なる(黄緑は明るく
+// 青は暗い)= 「黄色い銀河のエッジだけ目立つ」の根因。目標輝度へスケーリング
+// して色相間の見え方を均す。目標 0.50 ≈ 基準色相 0.6(青系, Y≈0.47)と
+// 黄色(Y≈0.64)の中間。
+export const EDGE_LUMA_TARGET = 0.5
+
+// エッジ色(生成後の THREE.Color)を知覚輝度 target へ均す(sRGB 値上の近似補正)。
+export function equalizeLuma(color: THREE.Color, target = EDGE_LUMA_TARGET, floor = 0.6, ceil = 1.5): THREE.Color {
+  const y = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
+  if (y <= 1e-4) return color
+  const k = Math.min(ceil, Math.max(floor, target / y))
+  color.multiplyScalar(k)
+  return color
+}
+
+// 星の px サイズ上限(自己相似の成長を許す距離連動キャップ)。
+// 旧実装の固定 9px は接近しても星が大きくならず「近づけない」体感の主因だった。
+// cap = clamp(tilePx * k, min, max): 自然サイズ(aSize*uPx ~ 0.172*tilePx)を常に上回り、
+// 近接時は gl_PointSize の実装上限(通常 255+px)に対し安全な 120px まで成長する。
+export const STAR_PX_CAP = {
+  min: 9,
+  max: 120,
+  k: 0.22,
+} as const

@@ -24,11 +24,16 @@
 //   titles の参照を持って hover 名をキャッシュ状態から独立させる。
 
 import * as THREE from 'three'
-import type { TileIndex } from '@/types/catalog'
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
+import type { TileData, TileIndex } from '@/types/catalog'
 import { peekTile, fetchTile, pinTiles } from '@/data/tileCache'
-import { LOD, STAR_PX_FACTOR, EXPOSURE, emergeAlpha, edgesAlpha, crossAlpha, edgeExposure, crossExposure, edgeInk } from './lod'
+import { LOD, STAR_PX_FACTOR, STAR_PX_CAP, EXPOSURE, EDGE_LUMA_TARGET, equalizeLuma, emergeAlpha, edgesAlpha, crossAlpha, edgeExposure, crossExposure, edgeInk } from './lod'
 import { dimOf, galaxyMember } from './focus'
 import type { FocusState } from './focus'
+import { packHit, unpackG, unpackLocal } from './hit'
+import { makeRingSprite } from './textures'
 
 // 1 銀河あたりクロスアークの描画上限(サンプリング)。
 const CROSS_ARC_CAP = 700
@@ -114,7 +119,17 @@ export class StarField {
   private time = 0
   private hoverKey = -1
   private egoKey = -1
-  private egoLines: THREE.LineSegments | null = null
+  // ego 網の描画体と再構築キャッシュ(毎フレーム再構築しない —
+  // 選択・タイル実体・z 再構成・クロス隣接の到着が変わったときだけ作り直す)。
+  private egoLines: LineSegments2 | null = null
+  private egoMat: LineMaterial | null = null
+  private egoRing: THREE.Sprite | null = null
+  private builtEgoKey = -1
+  private builtTile: TileData | null = null
+  private builtCrossSig = ''
+  private builtPosRev = -1
+  private posRev = 0
+  private cam: THREE.PerspectiveCamera | null = null
   private pickRay = new THREE.Raycaster()
   onHover: (hit: { g: number; local: number; title: string } | null) => void = () => {}
   onClick: (hit: { g: number; local: number; title: string }) => void = () => {}
@@ -125,8 +140,9 @@ export class StarField {
   }
 
   // 出現集合をタイル px から再計算する(フォーカス減光を適用)。
-  sync(tiles: Map<number, number>, dt: number, crossOn: boolean, focus: FocusState): void {
+  sync(camera: THREE.PerspectiveCamera, tiles: Map<number, number>, dt: number, crossOn: boolean, focus: FocusState): void {
     this.time += dt
+    this.cam = camera
     const cand: number[] = []
     for (const g of tiles.keys()) cand.push(g)
     cand.sort((a, b) => (tiles.get(b) ?? 0) - (tiles.get(a) ?? 0))
@@ -138,7 +154,7 @@ export class StarField {
     // 追い出し(hover 中は除外、平滑 α が消えてから)。
     for (const [g, e] of this.entries) {
       if (!emerged.has(g)) {
-        const held = this.hoverKey >> 24 === g || this.egoKey >> 24 === g
+        const held = unpackG(this.hoverKey) === g || unpackG(this.egoKey) === g
         if (!held) e.alpha = 0
         if (!held && e.shown < 0.02) this.remove(g)
       } else {
@@ -176,9 +192,14 @@ export class StarField {
         continue
       }
       const mat = e.points.material as THREE.ShaderMaterial
+      // 選択強調: ego の対象銀河は背景(星・エッジ)を相対減光し、
+      // ego 網(太線+リング)を際立たせる。
+      const egoHere = this.egoKey >= 0 && unpackG(this.egoKey) === e.g
       mat.uniforms.uPx.value = px * STAR_PX_FACTOR
+      // 点サイズ上限は距離連動(接近に伴い自己相似的に星が大きくなる)。
+      mat.uniforms.uPxMax.value = Math.min(STAR_PX_CAP.max, Math.max(STAR_PX_CAP.min, px * STAR_PX_CAP.k))
       mat.uniforms.uTime.value = this.time
-      mat.uniforms.uOpacity.value = e.shown * e.dim
+      mat.uniforms.uOpacity.value = e.shown * e.dim * (egoHere ? EXPOSURE.egoDimStars : 1)
       mat.opacity = e.shown * e.dim
       // 内部エッジ(px 則×露出 1/n: 本数に依らず画面インクを一定化)。
       const tile = peekTile(e.g)
@@ -189,7 +210,7 @@ export class StarField {
         fetchTile(e.g).catch(() => {})
       }
       const drawn = tile ? Math.min(tile.eSrc.length, INTERNAL_CAP) : INTERNAL_CAP
-      const ea = edgesAlpha(px) * e.shown * e.dim * edgeExposure(drawn)
+      const ea = edgesAlpha(px) * e.shown * e.dim * edgeExposure(drawn) * (egoHere ? EXPOSURE.egoDimEdges : 1)
       if (ea > 0.004) {
         if (!e.edges) e.edges = this.buildEdges(e)
         if (e.edges) {
@@ -200,7 +221,7 @@ export class StarField {
         e.edges.visible = false
       }
       // 実クロスアーク(隣接タイルを要求しつつ進歩的に構築、露出 1/n)。
-      const ca = crossOn ? crossAlpha(px) * e.shown * e.dim * crossExposure(e.drawnCross || CROSS_ARC_CAP) : 0
+      const ca = crossOn ? crossAlpha(px) * e.shown * e.dim * crossExposure(e.drawnCross || CROSS_ARC_CAP) * (egoHere ? EXPOSURE.egoDimEdges : 1) : 0
       if (ca > 0.008) {
         this.buildCross(e, ca, crossAlpha(px) * e.shown > 0.1)
       } else if (e.cross) {
@@ -238,7 +259,7 @@ export class StarField {
     // 理由: タイルが LRU 追い出しされても星は描画され続けるため、
     // キャッシュ経由にすると「見えるのに名前だけ local#NN」に劣化する。
     const title = (h.index < e.n ? e.titles[h.index] : undefined) ?? `local#${h.index}`
-    const key = (e.g << 24) | (h.index >>> 0)
+    const key = packHit(e.g, h.index)
     if (kind === 'hover') {
       if (this.hoverKey !== key) {
         this.hoverKey = key
@@ -249,24 +270,38 @@ export class StarField {
     }
   }
 
-  // ego 網(記事ハイライト+実リンク)を表示する(local<0 で解除)。
+  // ego 網(選択記事のハイライト+実リンク)を表示する(local<0 で解除)。
   showEgo(g: number, local: number): void {
-    this.egoKey = local >= 0 ? (g << 24) | (local >>> 0) : -1
+    this.egoKey = local >= 0 ? packHit(g, local) : -1
     this.syncEgo()
   }
 
   // ego 網をクリアする。
   clearEgo(): void {
     this.egoKey = -1
+    this.builtEgoKey = -1
+    this.builtTile = null
+    this.builtCrossSig = ''
+    this.builtPosRev = -1
     if (this.egoLines) {
       this.group.remove(this.egoLines)
       this.egoLines.geometry.dispose()
       this.egoLines = null
     }
+    this.egoMat?.dispose()
+    this.egoMat = null
+    if (this.egoRing) {
+      this.group.remove(this.egoRing)
+      const m = this.egoRing.material as THREE.SpriteMaterial
+      m.map?.dispose()
+      m.dispose()
+      this.egoRing = null
+    }
   }
 
   // z 再構成後に position を更新し、派生ラインを再構築させる。
   refreshPositions(): void {
+    this.posRev++
     for (const e of this.entries.values()) {
       const attr = e.points.geometry.getAttribute('position') as THREE.BufferAttribute
       attr.needsUpdate = true
@@ -373,7 +408,9 @@ export class StarField {
     const pos = new Float32Array(cap * 6)
     const col = new Float32Array(cap * 6)
     const med = medianDeg(tile.deg)
+    // 基本色は銀河色相から作り、知覚輝度を色相間で均す(黄色系の突出防止)。
     tmpColor.setHSL(meta.hue, 0.35, 0.52)
+    equalizeLuma(tmpColor)
     const br = tmpColor.r
     const bg = tmpColor.g
     const bb = tmpColor.b
@@ -446,7 +483,9 @@ export class StarField {
     const col: number[] = []
     const med = medianDeg(tile.deg)
     const otherMed = new Map<number, number>()
+    // クロスアークは補色寄り+わずかに高い目標輝度(銀河間の識別性を保つ)。
     tmpColor.setHSL((meta.hue + 0.5) % 1, 0.5, 0.6)
+    equalizeLuma(tmpColor, EDGE_LUMA_TARGET * 1.16)
     const br = tmpColor.r
     const bg = tmpColor.g
     const bb = tmpColor.b
@@ -496,18 +535,54 @@ export class StarField {
     this.group.add(e.cross)
   }
 
-  // ego 網を同期する(選択記事のハイライトリング+実リンク)。
+  // ego 網を同期する(キャッシュ: 選択・タイル実体・z 再構成・クロス隣接の
+  // 到着が変わったときだけ再構築。リングと解像度は毎フレーム追随)。
   private syncEgo(): void {
     const key = this.egoKey
     if (key < 0) return
-    const g = key >> 24
-    const local = key & 0xffffff
+    const g = unpackG(key)
+    const local = unpackLocal(key)
     const e = this.entries.get(g)
     const tile = peekTile(g)
     if (!e || !tile?.pos || local >= tile.n) {
       this.clearEgo()
       return
     }
+    const crossSig = this.egoCrossSig(tile, local)
+    if (this.builtEgoKey !== key || this.builtTile !== tile ||
+        this.builtCrossSig !== crossSig || this.builtPosRev !== this.posRev) {
+      this.rebuildEgo(local, tile)
+      this.builtEgoKey = key
+      this.builtTile = tile
+      this.builtCrossSig = crossSig
+      this.builtPosRev = this.posRev
+    }
+    if (this.egoMat) {
+      const vp = this.viewport()
+      this.egoMat.resolution.set(vp.w, vp.h)
+    }
+    this.updateEgoRing(tile, local)
+  }
+
+  // ビューポートサイズを返す(universeLayer と同じ viewer-root 基準)。
+  private viewport(): { w: number; h: number } {
+    const el = document.getElementById('viewer-root')
+    return { w: el?.clientWidth || window.innerWidth, h: el?.clientHeight || window.innerHeight }
+  }
+
+  // 選択記事のクロス隣接タイルの到着署名を返す(到着で ego を昇格再構築する)。
+  private egoCrossSig(tile: TileData, local: number): string {
+    let sig = ''
+    for (let i = 0; i < tile.cross.length; i += 3) {
+      if (tile.cross[i] !== local) continue
+      sig += peekTile(tile.cross[i + 1]) ? '1' : '0'
+    }
+    return sig
+  }
+
+  // ego 網(太線)を再構築する: 選択記事の実リンク(内部+クロス)を
+  // LineSegments2(px 幅指定)で描く。本数有界(EGO_CAP)なので加算ブレンド維持。
+  private rebuildEgo(local: number, tile: TileData): void {
     if (this.egoLines) {
       this.group.remove(this.egoLines)
       this.egoLines.geometry.dispose()
@@ -542,14 +617,51 @@ export class StarField {
       }
     }
     if (pos.length === 0) return
-    const geo = new THREE.BufferGeometry()
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
-    // ego は本数有界(EGO_CAP)のため加算を維持しつつ、輝度は抑える。
-    const mat = new THREE.LineBasicMaterial({ color: 0xfff3b0, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending })
-    this.egoLines = new THREE.LineSegments(geo, mat)
+    if (!this.egoMat) {
+      this.egoMat = new LineMaterial({
+        color: 0xffe9a8,
+        linewidth: EXPOSURE.egoWidthPx,
+        transparent: true,
+        opacity: EXPOSURE.egoOpacity,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+      this.egoMat.worldUnits = false
+    }
+    const vp = this.viewport()
+    this.egoMat.resolution.set(vp.w, vp.h)
+    const geo = new LineSegmentsGeometry()
+    geo.setPositions(pos)
+    this.egoLines = new LineSegments2(geo, this.egoMat)
     this.egoLines.frustumCulled = false
     this.egoLines.renderOrder = 8
     this.group.add(this.egoLines)
+  }
+
+  // 選択記事のハイライトリングを追従させる(大きさは画面 px 一定)。
+  private updateEgoRing(tile: TileData, local: number): void {
+    if (!this.egoRing) {
+      const mat = new THREE.SpriteMaterial({
+        map: makeRingSprite(128),
+        color: 0xffe9a8,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+      this.egoRing = new THREE.Sprite(mat)
+      this.egoRing.renderOrder = 9
+      this.group.add(this.egoRing)
+    }
+    this.egoRing.position.set(tile.pos[local * 3], tile.pos[local * 3 + 1], tile.pos[local * 3 + 2])
+    const cam = this.cam
+    if (cam) {
+      const d = Math.max(cam.position.distanceTo(this.egoRing.position), 1e-3)
+      const vp = this.viewport()
+      const proj = vp.h / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)))
+      const w = (34 * d) / proj
+      this.egoRing.scale.set(w, w, 1)
+    }
   }
 
   // 現在の保持エントリ数を返す。

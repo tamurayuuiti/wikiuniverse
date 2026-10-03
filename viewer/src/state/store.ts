@@ -42,7 +42,7 @@ export type PanelModel =
       n: number
       nCross: number
       displayClass: string
-      hubTitles: string[]
+      hubTitles: { local: number; title: string }[]
     }
   | {
       kind: 'article'
@@ -61,8 +61,6 @@ export interface Toggles {
   edges: boolean
   cross: boolean
   labels: boolean
-  shells: boolean
-  dust: boolean
 }
 
 // 潜入フォーカスの読み取り値(HUD 表示用)。
@@ -95,6 +93,8 @@ export interface ViewerState {
   zoomLabel: string
   focusInfo: FocusInfo | null
   jumpRequest: { pos: [number, number, number]; dist: number; seq: number } | null
+  /** UI 起点の記事選択要求(core が購読し fly-to + ego + パネルを一括駆動する)。 */
+  selectRequest: { gid: number; local: number; seq: number } | null
   stats: Stats
 }
 
@@ -105,9 +105,11 @@ interface ViewerActions {
   setToggle: (k: keyof Toggles, v: boolean) => void
   setZSquash: (k: number) => void
   requestJump: (pos: [number, number, number], dist: number) => void
+  requestSelectArticle: (gid: number, local: number) => void
 }
 
 let jumpSeq = 0
+let selectSeq = 0
 
 // アプリ全体のストア。
 export const useStore = create<ViewerState & ViewerActions>((set, get) => ({
@@ -115,15 +117,17 @@ export const useStore = create<ViewerState & ViewerActions>((set, get) => ({
   selection: { kind: 'none' },
   hover: null,
   panel: { kind: 'overview', galaxies: 0, macros: 0 },
-  toggles: { stars: true, edges: true, cross: true, labels: true, shells: true, dust: true },
+  toggles: { stars: true, edges: true, cross: true, labels: true },
   zSquash: 1,
   zoomLabel: 'universe',
   focusInfo: null,
   jumpRequest: null,
+  selectRequest: null,
   stats: { fps: 0, emerged: 0, tiles: 0, zK: 1 },
   setHover: (h) => set({ hover: h }),
   setPanel: (p) => set({ panel: p }),
   setToggle: (k, v) => set({ toggles: { ...get().toggles, [k]: v } }),
   setZSquash: (k) => set({ zSquash: k }),
   requestJump: (pos, dist) => set({ jumpRequest: { pos, dist, seq: ++jumpSeq } }),
+  requestSelectArticle: (gid, local) => set({ selectRequest: { gid, local, seq: ++selectSeq } }),
 }))

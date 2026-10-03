@@ -33,6 +33,7 @@ import { makeStarSprite } from './textures'
 import { macroBundleAlpha, galaxyBundleAlpha } from './lod'
 import { FocusTracker, focusZoomLabel } from './focus'
 import type { FocusState } from './focus'
+import { makeGalaxyTextureSet } from './galaxyTextures'
 
 // display_class コードを日本語名へ変換する。
 function displayClassName(code: number): string {
@@ -96,14 +97,15 @@ export class ViewerCore {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.05
     this.scene.fog = new THREE.FogExp2(0x03040a, 0.00016)
-    this.camera = new THREE.PerspectiveCamera(55, w / Math.max(h, 1), 0.1, 600000)
+    this.camera = new THREE.PerspectiveCamera(55, w / Math.max(h, 1), 0.02, 600000)
     this.camera.position.copy(HOME_POS)
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.075
     this.controls.rotateSpeed = 0.55
     this.controls.zoomSpeed = 0.9
-    this.controls.minDistance = 1.5
+    // 星への深接近を許す(対数深度のため near は小さくても深度精度は保たれる)。
+    this.controls.minDistance = 0.2
     this.controls.maxDistance = 12000
     this.controls.target.copy(HOME_TARGET)
     // bloom(星コア専業: threshold はエッジ飽和輝度より上、強度は控えめ)。
@@ -114,7 +116,8 @@ export class ViewerCore {
     this.composer.addPass(new OutputPass())
     // レイヤ。
     const clumpTex = makeStarSprite(256, 1.9, 3.4)
-    this.uni = new UniverseLayer(boot, index, clumpTex, '600 34px system-ui, sans-serif')
+    const gset = makeGalaxyTextureSet()
+    this.uni = new UniverseLayer(boot, index, clumpTex, gset, '600 34px system-ui, sans-serif')
     this.scene.add(this.uni.group)
     this.stars = new StarField(index)
     this.scene.add(this.stars.group)
@@ -142,11 +145,14 @@ export class ViewerCore {
     canvas.addEventListener('pointermove', this.onPointerMoveBound)
     canvas.addEventListener('pointerup', this.onPointerUpBound)
     window.addEventListener('keydown', this.onKeyDownBound)
-    // store 購読(z スライダ・ジャンプ要求)。
+    // store 購読(z スライダ・ジャンプ要求・記事選択要求)。
     this.unsub = useStore.subscribe((s, prev) => {
       if (s.zSquash !== prev.zSquash) this.applyZ(s.zSquash)
       if (s.jumpRequest && s.jumpRequest.seq !== prev.jumpRequest?.seq) {
         this.flyTo(new THREE.Vector3(...s.jumpRequest.pos), s.jumpRequest.dist)
+      }
+      if (s.selectRequest && s.selectRequest.seq !== prev.selectRequest?.seq) {
+        this.selectArticleFromCommand(s.selectRequest.gid, s.selectRequest.local)
       }
     })
     this.loop()
@@ -184,9 +190,10 @@ export class ViewerCore {
     }
     // StarField 同期(星・内部エッジ・クロスアーク・ego、フォーカス減光込み)。
     this.stars.group.visible = s.toggles.stars
-    if (s.toggles.stars) this.stars.sync(tiles, dt, s.toggles.cross, focus)
-    // 骨格更新(塊 px・ラベル・フェード・フォーカス測光)。
-    this.uni.update(this.camera, tiles, s.toggles.shells, s.toggles.labels, focus)
+    if (s.toggles.stars) this.stars.sync(this.camera, tiles, dt, s.toggles.cross, focus)
+    // 骨格更新(塊 px・ラベル・フェード・フォーカス測光・選択球殻)。
+    const selGid = s.selection.kind === 'none' ? -1 : s.selection.gid
+    this.uni.update(this.camera, tiles, selGid, s.toggles.labels, focus)
     this.uni.tick(this.time)
     // エッジ tier α(距離帯 × 潜入フェード: 焦点内では飾り線が実アークに主役を譲る)。
     this.uni.setBundleAlphas(
@@ -267,7 +274,7 @@ export class ViewerCore {
     const gal = this.uni.pickGalaxy(this.ndc, this.camera)
     if (gal) {
       const meta = this.index.galaxies.get(gal.gid)
-      const bootG = this.boot.galaxies.find(x => x.gid === gal.gid)
+      const bootG = this.boot.galaxies[gal.gid]
       if (meta && bootG) {
         useStore.setState({
           hover: {
@@ -317,7 +324,7 @@ export class ViewerCore {
     const gal = this.uni.pickGalaxy(this.ndc, this.camera)
     if (gal) {
       const meta = this.index.galaxies.get(gal.gid)
-      const g = this.boot.galaxies.find(x => x.gid === gal.gid)
+      const g = this.boot.galaxies[gal.gid]
       if (meta && g) {
         this.stars.clearEgo()
         useStore.setState({ selection: { kind: 'galaxy', gid: gal.gid } })
@@ -341,11 +348,25 @@ export class ViewerCore {
     })
   }
 
+  // UI 起点(検索/ランダム)の記事選択: タイル到着を待って fly-to + ego + パネル。
+  private selectArticleFromCommand(gid: number, local: number): void {
+    const g = this.boot.galaxies[gid]
+    fetchTile(gid)
+      .then(tile => {
+        if (!tile || local >= tile.n) return
+        const pos = new THREE.Vector3(tile.pos[local * 3], tile.pos[local * 3 + 1], tile.pos[local * 3 + 2])
+        this.flyTo(pos, Math.max((g?.r ?? 10) * 0.06, 0.6))
+        this.selectArticle(gid, local, tile.titles[local] ?? `local#${local}`)
+      })
+      .catch(() => {})
+  }
+
   // 記事を選択する(ego 網+パネル)。
   private selectArticle(g: number, local: number, title: string): void {
     this.stars.showEgo(g, local)
     const meta = this.index.galaxies.get(g)
-    const bootG = this.boot.galaxies.find(x => x.gid === g)
+    // gid = boot.galaxies の添字(bootstrap.ts の規約)。
+    const bootG = this.boot.galaxies[g]
     const tile = peekTile(g)
     let deg = 0
     const targets: { gid: number; title: string }[] = []
@@ -359,7 +380,7 @@ export class ViewerCore {
         const og = tile.cross[i + 1]
         if (seen.has(og)) continue
         seen.add(og)
-        const ob = this.boot.galaxies.find(x => x.gid === og)
+        const ob = this.boot.galaxies[og]
         const ometa = this.index.galaxies.get(og)
         targets.push({ gid: og, title: ob?.label ?? (ometa ? `galaxy#${og}` : `?${og}`) })
       }
@@ -382,7 +403,7 @@ export class ViewerCore {
   // 銀河パネルを表示する(ハブ記事はタイル到着後に非同期で補充)。
   private showGalaxyPanel(gid: number): void {
     const meta = this.index.galaxies.get(gid)
-    const g = this.boot.galaxies.find(x => x.gid === gid)
+    const g = this.boot.galaxies[gid]
     if (!meta || !g) return
     const macro = this.boot.macros[meta.mid]
     const base = {
@@ -393,7 +414,7 @@ export class ViewerCore {
       n: meta.n,
       nCross: meta.n_cross,
       displayClass: displayClassName(meta.display_class),
-      hubTitles: [] as string[],
+      hubTitles: [] as { local: number; title: string }[],
     }
     useStore.setState({ panel: base })
     fetchTile(gid)
@@ -402,7 +423,7 @@ export class ViewerCore {
         const st = useStore.getState()
         if (st.panel.kind !== 'galaxy' || st.panel.gid !== gid) return
         const order = [...Array(tile.n).keys()].sort((a, b) => tile.deg[b] - tile.deg[a]).slice(0, 14)
-        useStore.setState({ panel: { ...base, hubTitles: order.map(i => tile.titles[i] ?? `local#${i}`) } })
+        useStore.setState({ panel: { ...base, hubTitles: order.map(i => ({ local: i, title: tile.titles[i] ?? `local#${i}` })) } })
       })
       .catch(() => {})
   }
