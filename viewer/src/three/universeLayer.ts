@@ -286,8 +286,10 @@ export class UniverseLayer {
         col.push(base.r * ink, base.g * ink, base.b * ink, base.r * ink, base.g * ink, base.b * ink)
       }
       for (const b of boot.galaxyBundles) {
-        const ga = boot.galaxies.find(x => x.gid === b.a)
-        const gb = boot.galaxies.find(x => x.gid === b.b)
+        // gid = boot.galaxies の添字(bootstrap.ts の規約)= 直接参照で O(1)
+        // (旧実装の .find はペア毎の線形検索で初期ロードのボトルネックだった)。
+        const ga = boot.galaxies[b.a]
+        const gb = boot.galaxies[b.b]
         if (!ga || !gb) continue
         const ink = edgeInk((deg.get(b.a) ?? 1) / med, (deg.get(b.b) ?? 1) / med, EXPOSURE.galaxyBundleInk)
         const a = new THREE.Vector3(ga.x, ga.y, ga.z)
