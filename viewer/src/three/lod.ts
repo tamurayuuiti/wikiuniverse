@@ -61,6 +61,12 @@ export const EXPOSURE = {
   // ハブ飾り星の輝度乗数(ベース+コア)。
   hubBase: 0.26,
   hubCore: 0.68,
+  // 選択強調(ego 網): 線幅 px・輝度と、選択中の自銀河の相対減光
+  // (ego の対象星と接続エッジを際立たせるため、背景側を落とす)。
+  egoWidthPx: 2.4,
+  egoOpacity: 0.92,
+  egoDimEdges: 0.4,
+  egoDimStars: 0.72,
 } as const
 
 // 描画本数から内部エッジの露出(α 乗数)を返す(1/n 法則)。

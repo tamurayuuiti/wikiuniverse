@@ -184,7 +184,7 @@ export class ViewerCore {
     }
     // StarField 同期(星・内部エッジ・クロスアーク・ego、フォーカス減光込み)。
     this.stars.group.visible = s.toggles.stars
-    if (s.toggles.stars) this.stars.sync(tiles, dt, s.toggles.cross, focus)
+    if (s.toggles.stars) this.stars.sync(this.camera, tiles, dt, s.toggles.cross, focus)
     // 骨格更新(塊 px・ラベル・フェード・フォーカス測光)。
     this.uni.update(this.camera, tiles, s.toggles.shells, s.toggles.labels, focus)
     this.uni.tick(this.time)
