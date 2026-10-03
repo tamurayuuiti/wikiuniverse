@@ -1,23 +1,22 @@
-"""E3: Body-text link extraction from pages-articles XML dumps.
+"""pages-articles XML ダンプからの本文リンク抽出。
 
-A "body link" is a [[wikilink]] present in the article's OWN wikitext source.
-Links contributed by transcluded templates/navboxes (which inflate the
-pagelinks table to avg degree ~94) are NOT part of the source and are
-therefore excluded automatically. The result is the "true article graph"
-(expected avg degree ~30-50).
+「本文リンク」= 記事自身の wikitext ソース内に現れる [[wikilink]]。
+トランスクルードされたテンプレート/ナビボックス由来のリンク(pagelinks 表が
+平均次数 ~94 へ水増しされる主因)はソースに存在しないため自動的に除外される。
+結果は「真の記事グラフ」(想定平均次数 ~30-50)である。
 
-Pipeline per <page>:
-  skip ns != 0 / redirect pages
-  clean text: strip <!--comments-->, <nowiki>, <includeonly>
-  extract [[Target|alias]] -> Target, drop #anchor, spaces->_, collapse _+,
-    ucfirst ASCII first letter, drop known namespace/interwiki prefixes
-  blake2b64 hash -> searchsorted join against parsed/ns0_all_hashes.npz
-    (miss = red link), redirect resolution via rd_map, drop self loops,
-    dedupe per article
-  append int32 (src_page_id, dst_page_id) pairs -> graph/edges_body_directed.bin
+<page> 毎の処理:
+  ns != 0 / リダイレクトページは skip
+  テキストのクリーニング: <!--コメント-->、<nowiki>、<includeonly> を除去
+  [[Target|alias]] -> Target を抽出、#アンカー除去、空白->_、_+ の圧縮、
+    ASCII 先頭文字の ucfirst、既知の namespace/interwiki プレフィックスを除去
+  blake2b64 ハッシュ -> parsed/ns0_all_hashes.npz との searchsorted join
+    (miss = 赤リンク)、rd_map によるリダイレクト解決、セルフループ除去、
+    記事単位の重複排除
+  int32 (src_page_id, dst_page_id) ペアを追記 -> graph/edges_body_directed.bin
 
-Checkpoint/resume: records processed <page> count; on resume the stream is
-fast-forwarded (skipped pages are still decompressed, not processed).
+チェックポイント/resume: 処理済み <page> 数を記録する。再開時はストリームを
+高速送りする(skip されたページも解凍はされるが処理はされない)。
 """
 from __future__ import annotations
 
@@ -63,7 +62,7 @@ UNDERSCORES_RE = re.compile(rb"_+")
 
 
 class CountingReader:
-    """Counts decompressed bytes read (progress reporting)."""
+    """読んだ解凍後バイト数をカウントする(進捗報告用)。"""
 
     def __init__(self, f):
         self.f = f

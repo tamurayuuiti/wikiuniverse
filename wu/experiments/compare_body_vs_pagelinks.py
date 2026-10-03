@@ -1,18 +1,18 @@
-"""Compare pagelinks-derived vs body-text-derived out-degrees for the same articles.
+"""同一記事に対する pagelinks 由来と本文由来の out 次数を比較する。
 
-Quantifies the template/transclusion inflation of the pagelinks table:
+pagelinks 表のテンプレート/トランスクルージョン由来の水増しを定量化する:
   inflation_ratio(article) = deg_pagelinks / max(1, deg_body)
 
-Also counts "pure template articles" (deg_body == 0 but deg_pagelinks >= 50):
-articles whose entire link footprint comes from transcluded templates.
+「純テンプレート記事」(deg_body == 0 かつ deg_pagelinks >= 50)も数える:
+リンク痕跡のすべてがトランスクルードされたテンプレート由来の記事である。
 
-Usage:
-  python scripts/compare_body_vs_pagelinks.py --base data \
+使い方:
+  python -m wu.experiments.compare_body_vs_pagelinks --base data \
       [--body edges_body_directed.bin] [--max-pid N] [--top 25]
 
---max-pid restricts to articles with page_id <= N (useful when the body graph
-was built from a partial dump, e.g. pages-articles1 covers p1..p114794).
-Output: graph/body_vs_pagelinks.json + console table.
+--max-pid は page_id <= N の記事へ制限する(本文グラフを部分ダンプから
+構築した場合に有用。例: pages-articles1 は p1..p114794 をカバー)。
+出力: graph/body_vs_pagelinks.json + コンソール表。
 """
 from __future__ import annotations
 
@@ -24,11 +24,10 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wu.dumpio import write_json  # noqa: E402
-from wu.paths import Dirs  # noqa: E402
-from wu.stats import load_edges_mmap, load_titles  # noqa: E402
+from ..dumpio import write_json  # noqa: E402
+from ..paths import Dirs  # noqa: E402
+from ..stats import load_edges_mmap, load_titles  # noqa: E402
 
 
 def out_degree_per_article(edges_bin: str, article_ids: np.ndarray,

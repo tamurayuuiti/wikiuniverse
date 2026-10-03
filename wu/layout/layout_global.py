@@ -1,69 +1,79 @@
-"""Global hierarchical layout (Phase 3, step 2): macros + galaxies in 3D.
+# wu/layout/layout_global.py — グローバル階層レイアウト(マクロ=銀河団 + 銀河の 3D 配置)
+#
+# 責務:
+# - 銀河カタログ(data/final/)から宇宙の空間配置を生成する:
+#   ①マクロ配置(3D 球パッキング + 重み付き FR + 球分離緩和)
+#   ②マクロ内銀河配置(連結=重み付き FR / 孤立・媒介=リンク先の重み付き重心 +
+#     隣接マクロ方向の決定的な円錐内散布 / 球緩和 + 無条件の包含クランプ)
+#   ③dust 遠方シェル ④品質指標(layout_meta.json の quality)⑤プレビュー出力。
+# - 正準方針 = 完全 3D・焼き込みレンズ無し(地図ビューは視聴時の z 圧縮)。
+#
+# 注意:
+# - 銀河球の包含は構造保証: 無条件の包含クランプ + 体積キャップ(r <= 0.9 R_M)
+#   により d3 + r <= R_M が常に成立する(spill == 0。非ゼロは実装バグ)。
+#   回帰 fixture(単銀河マクロ)は test_catalog にある。
+# - --r-expo は半径則の実験腕(既定 0.5 = √n でビット同一。
+#   1/3 にすると銀河間で記事の体積密度が均等になる = 3D 正準との整合腕)。
+# - 正準実行は python -m wu run layout_global(wu/stages/layout.py)。
 
-Design (matches D16 policy "銀河を空間的に分離して配置"; canonical = full 3D, D17).
-Version: v1.6 (2026-10-01; containment clamp unconditional + rim cone spread):
-  - the 3D radial clamp below now applies to EVERY macro. The old
-    `len(P) >= 2` gate skipped single-regular-galaxy macros, where a pairless
-    isolated galaxy on its fibonacci slot could stick out of the macro sphere
-    ((d3+r)/Rm up to 1.114, measured). With the clamp unconditional and the
-    volume cap (r <= 0.9 Rm), d3 + r <= Rm holds by construction:
-    galaxy_spill_count == 0 is now a structural guarantee (nonzero = bug).
-  - cross-macro centroid contributions no longer aim at a SINGLE rim point.
-    Galaxies sharing one dominant neighbour macro all landed on the identical
-    boundary point, which the clamp flattened into a thin cap (a driver of
-    galaxy_flat_p90 ~ 0.95). Each contribution is now spread inside a
-    deterministic cone around the neighbour direction (_cone_spread:
-    half-angle <= 0.75 rad, depth 0.35-0.95 of the rim, seeded per galaxy and
-    per neighbour macro = bit-reproducible, no RNG state). The depth cap 0.95
-    preserves containment. `boundary_frac` is gone (no callers).
-v1.5: canonical is fully three-dimensional with NO baked lens (the old
---z-squash pancake lens and the pre-v1.4 xy disk regime are removed; map/hybrid
-views remain VIEW-TIME z-compression in the viewer/preview, per D17).
-Galaxies that have no intra-macro pair edge ("unlinked": their top-K links all
-leave the macro) are NOT dumped on a plane: they are pinned at the weighted
-centroid of their link targets (same rule as medium galaxies), or on
-deterministic fibonacci-ball slots when they have no usable pairs at all.
+"""グローバル階層レイアウト: マクロ + 銀河の 3D 配置。
 
-  1. Macro level: weighted FR (--macro-dim, default 3 = canonical) over
-     effective macros using macro_pairs -> centers; radius R_M ∝ sqrt(n_M).
-     --macro-w-power applies a weight temperature w^tau to the FR attraction
-     (tau=1 neutral; tau>1 sharpens semantic adjacency).
-  2. Macro-macro relaxation + expansion loop until native overlap <= 2%.
-  3. Galaxy level: weighted FR (dim 3) over the LINKED intra-macro galaxies;
-     radius r_g = max(pack * R_M * sqrt(n_g/n_M), r_spacing * n_g^(1/3));
-     volume cap (sum r^3)^(1/3) <= 0.9 * R_M; sphere relaxation + 3D radial
-     clamp (|center| + r <= R_M). Unlinked galaxies: bary centroid of link
-     targets (cross-macro links pull toward the macro rim) or fib-ball slots.
-  4. Medium galaxies (display_class=medium, the "intergalactic medium" of D16)
-     use the same bary rule, then a push pass keeps them out of regulars.
-  5. Dust galaxies (n=1) get positions on a far shell (cosmic dust ring).
+設計: 銀河は所属マクロ球の内側に、互いに空間分離して配置する。
+正準 = 完全 3D・焼き込みレンズ無し(地図/hybrid ビューはビューア/プレビューの
+視聴時 z 圧縮であって、別レイアウトではない)。
 
-Quality metrics (layout_meta.json "quality"): macro_native_overlap_frac,
-macro_proj_overlap, galaxy_spill_frac/count (3D containment), galaxy_spill_ids
-(the spilling galaxy ids, top 20 by excess, so every run shows WHO without
-waiting for scripts/audit_layout.py), galaxy_overlap_frac
-(sphere overlap inside macros), galaxy_flat_mean/p90 (PCA anisotropy of each
-macro's galaxy cloud; ~1 = pancake; domain = macros with FLAT_MIN_MEMBERS (8)+
-members — smaller clouds measure near 1 even when isotropic (small-n eigenvalue
-bias), audit_layout.py judges those against per-n isotropic nulls),
-macro_adj_recall_top5 and
-macro_adj_spearman (semantic adjacency preservation of the macro layout).
+構造不変条件(いずれも test_catalog が回帰テストする):
+  - 3D 放射クランプは全マクロへ無条件に適用する。`len(P) >= 2` でゲートすると
+    単一通常銀河のマクロがスキップされ、ペアの無い孤立銀河がフィボナッチスロット上で
+    マクロ球から突き出せる(d3+r は 1.114 Rm に達した)。無条件クランプ +
+    体積キャップ(r <= 0.9 Rm)により d3 + r <= Rm が構造的に成立する:
+    galaxy_spill_count == 0(非ゼロはバグ)。
+  - マクロ間 centroid 寄与は、隣接マクロ方向を軸とする決定的な円錐内へ散布する
+    (_cone_spread: 半開角 <= 0.75 rad・径深 0.35-0.95、銀河×隣接マクロ毎の
+    シード = ビット再現、RNG 状態を消費しない)。境界の単一点を狙わせると、
+    同じ優勢隣接を共有する銀河が全て集まって薄いキャップへ潰れる。
+    径深上限 0.95 は包含を保つ。
 
-Outputs (data/layout/<run>/ - run name via --run, default wu.paths.ACTIVE_LAYOUT_RUN):
+マクロ内ペアエッジを持たない銀河("unlinked": top-K リンクが全てマクロ外)は
+平面へ潰さない: リンク先の重み付き重心へ固定する(medium 銀河と同じ規則)。
+使えるペアが全く無い場合は決定的なフィボナッチ球スロットへ置く。
+
+  1. マクロ層: 実効マクロへの重み付き FR(macro_dim、既定 3 = 正準)が
+     macro_pairs から中心を決める; 半径 R_M ∝ sqrt(n_M)。macro_w_power は
+     FR 引力の重み温度 w^tau(tau=1 中立; tau>1 で強いリンクの近接を強調)。
+  2. マクロ間緩和 + 拡大ループ(native overlap <= 2% まで)。
+  3. 銀河層: マクロ内の連結(リンクを持つ)銀河への重み付き FR(dim 3);
+     半径 r_g = max(pack * R_M * sqrt(n_g/n_M), r_spacing * n_g^(1/3));
+     体積キャップ (sum r^3)^(1/3) <= 0.9 * R_M; 球緩和 + 3D 放射クランプ
+     (|center| + r <= R_M)。unlinked 銀河: リンク先の bary 重心
+     (マクロ間リンクはマクロ境界方向へ引く)または fib-ball スロット。
+  4. medium 銀河(display_class=medium、「銀河間物質」概念)も同じ bary 規則を
+     使い、その後の押し出しパスで通常銀河との重なりを解く。
+  5. dust 銀河(n=1)は遠方シェル(宇宙塵リング)へ置く。
+
+品質指標(layout_meta.json "quality"): macro_native_overlap_frac、
+macro_proj_overlap、galaxy_spill_frac/count(3D 包含)、galaxy_spill_ids
+(はみ出した銀河 id の超過順 top 20 = 監査を待たずに毎 run「誰が」見える:
+python -m wu run audit_layout)、galaxy_overlap_frac(マクロ内の銀河球の重なり)、
+galaxy_flat_mean/p90(マクロ毎の銀河点群の PCA 異方性; ~1 = 円盤状。ドメインは
+成員数 >= FLAT_MIN_MEMBERS (8) のマクロ — それ以下は等方配置でも固有値比が 1 近くに
+出る小nバイアスがあるため、wu/audit/layout.py が成員数別の等方 null と対比する)、
+macro_adj_recall_top5 / macro_adj_spearman(マクロ配置の意味的近接の保持度)。
+
+出力(data/layout/<run>/。run 名は共有パラメータ run、既定は正典 run):
   galaxy_positions.parquet  galaxy_id, macro_id, x, y, z, radius, display_class, n_articles
   macro_positions.parquet   macro_id, x, y, z, radius, n_articles, n_galaxies
-  layout_meta.json          params/seed/timings + run name
-  preview.png               2D projection (xy)
-  preview_<mode>.html       interactive three.js preview (z-compress slider)
+  layout_meta.json          パラメータ/seed/所要時間 + run 名
+  preview.png               2D 射影(xy)
+  preview_<mode>.html       インタラクティブ three.js プレビュー(z-compress スライダー)
 
 Usage:
-  python scripts/layout_global.py --base data --run 20260930_spherize
-      [--pack 0.6] [--seed 42] [--pairs catalog|npz] [--galaxy-tag res1_sub]
-      [--macro-dim 3] [--macro-z-squash 1.0] [--macro-w-power 1.0]
+  python -m wu run layout_global --base data --run <RUN>
+      parameters (defaults/descriptions): wu/stages/layout.py の Param 宣言
+      override: --set layout_global.<name>=<value>
 """
 from __future__ import annotations
 
-import argparse
 import datetime
 import json
 import os
@@ -73,29 +83,24 @@ import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wu.dumpio import write_json  # noqa: E402
-from wu.paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
+from ..dumpio import now_iso as _now, write_json  # noqa: E402,F401
+from ..paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
 
 R_TOTAL = 1000.0  # canvas scale: disk areas sum to pi*R_TOTAL^2
-# Domain of the galaxy_flat_* quality metrics: macros with at least this many
-# members. The PCA eigenvalue ratio behind `flatness` is heavily small-n biased
-# (measured isotropic null: n=4 mean 0.955 / n=6 0.879 / n=8 0.806), so smaller
-# macros would dominate the percentile with measurement artifacts; they are
-# judged against per-n isotropic nulls in scripts/audit_layout.py instead.
+# galaxy_flat_* 品質指標のドメイン: この成員数以上のマクロだけが対象。
+# `flatness` の背後の PCA 固有値比は小nバイアスが強い(等方 null の実測:
+# n=4 mean 0.955 / n=6 0.879 / n=8 0.806)ため、小さいマクロは測定アーティファクトで
+# パーセンタイルを支配してしまう。小マクロは wu/audit/layout.py が成員数別の
+# 等方 null 対比で判定する。
 FLAT_MIN_MEMBERS = 8
 
 
-def _now():
-    return datetime.datetime.now().isoformat(timespec="seconds")
-
-
 def _fib_ball_slots(count: int, radius: float, seed_off: int = 0) -> np.ndarray:
-    """Deterministic volume-uniform ball slots (fibonacci sphere directions,
-    cbrt-spaced radii). Replaces the old PLANAR golden spiral: isolated nodes
-    must fill a BALL in the 3D regime, otherwise macros dominated by unlinked
-    members collapse into visible pancakes (2026-09-29, user screenshot)."""
+    """決定的な体積一様の球内スロット(フィボナッチ球面方向 + cbrt 間隔の半径)。
+
+    孤立ノードは 3D 配置で「球内」を満たす必要がある: 平面スパイラルだと
+    unlinked 成員が支配的なマクロが目に見えるパンケーキへ潰れる。"""
     k = np.arange(count, dtype=np.float64)
     n = max(1, count)
     y = 1 - 2 * (k + 0.5) / n
@@ -108,12 +113,12 @@ def _fib_ball_slots(count: int, radius: float, seed_off: int = 0) -> np.ndarray:
                     axis=1)
 
 
-_CONE_MAX = 0.75  # rad (~43 deg): half-angle of the rim cone spread (v1.6)
+_CONE_MAX = 0.75  # rad (~43 deg): half-angle of the rim cone spread
 
 
 def _fib_dir(k: int) -> np.ndarray:
-    """Deterministic unit direction #k (fibonacci sphere over 997 slots).
-    Used only to build a stable perpendicular frame for _cone_spread."""
+    """決定的な単位方向 #k(997 スロットのフィボナッチ球)。
+    _cone_spread の安定な垂直フレーム構築にのみ使う。"""
     y = 1 - 2 * (k + 0.5) / 997.0
     rr = np.sqrt(max(0.0, 1 - y * y))
     phi = k * 2.399963229728653
@@ -121,13 +126,13 @@ def _fib_dir(k: int) -> np.ndarray:
 
 
 def _cone_spread(d_unit: np.ndarray, seed_key: int):
-    """(unit vector, depth factor 0.35-0.95): deterministic sample inside the
-    cone around `d_unit` (v1.6, rim-point de-concentration).
+    """(単位ベクトル, 径深係数 0.35-0.95): `d_unit` を軸とする円錐内の
+    決定的サンプル(境界単一点への集中の解消)。
 
-    Uniform-on-disk cone sampling (sqrt for the half-angle) x azimuth x
-    radial depth, all derived from `seed_key` by irrational multipliers —
-    NO RNG state, so parallel/resume runs stay bit-reproducible. The depth
-    cap 0.95 preserves containment: 0.95*(Rm-r)+r <= Rm.
+    円盤一様な円錐サンプリング(半開角は sqrt)× 方位角 × 径深を、
+    `seed_key` から無理数乗算だけで導出する — RNG 状態を使わないので
+    並列/resume でもビット再現する。径深上限 0.95 は包含を保つ:
+    0.95*(Rm-r)+r <= Rm。
     """
     u1 = (seed_key * 0.6180339887498949) % 1.0
     u2 = (seed_key * 0.7548776662466927) % 1.0
@@ -151,10 +156,10 @@ def _cone_spread(d_unit: np.ndarray, seed_key: int):
 
 def fr_layout(n_nodes: int, edges, weights, dim: int, seed: int,
               w_power: float = 1.0):
-    """Weighted Fruchterman-Reingold via igraph; returns (n,dim) float array
-    normalized to unit disk. Isolated nodes get deterministic spiral slots.
-    w_power is a weight temperature: attraction uses (w/w_max)^w_power
-    (1.0 = neutral; >1 sharpens strong links, <1 flattens)."""
+    """igraph による重み付き Fruchterman-Reingold。(n,dim) float 配列を
+    単位円盤へ正規化して返す。孤立ノードは決定的なスパイラルスロットを得る。
+    w_power は重み温度: 引力に (w/w_max)^w_power を使う
+    (1.0 = 中立; >1 で強いリンクを強調、<1 で平坦化)。"""
     import igraph as ig
     random.seed(seed)
     np.random.seed(seed)
@@ -195,7 +200,7 @@ def fr_layout(n_nodes: int, edges, weights, dim: int, seed: int,
 
 
 def disk_overlap_fraction(centers: np.ndarray, radii: np.ndarray) -> float:
-    """Pairwise circle-circle intersection area / total disk area (2D projection)."""
+    """円-円の交差面積の総和 / 全円盤面積(2D 射影の重なり率)。"""
     k = len(centers)
     if k < 2:
         return 0.0
@@ -216,7 +221,7 @@ def disk_overlap_fraction(centers: np.ndarray, radii: np.ndarray) -> float:
 
 
 def sphere_overlap_fraction(centers: np.ndarray, radii: np.ndarray) -> float:
-    """Pairwise sphere-sphere intersection volume / total volume (3D)."""
+    """球-球の交差体積の総和 / 全体積(3D の重なり率)。"""
     k = len(centers)
     if k < 2:
         return 0.0
@@ -233,8 +238,8 @@ def sphere_overlap_fraction(centers: np.ndarray, radii: np.ndarray) -> float:
 
 def projection_overlap_stats(centers: np.ndarray, radii: np.ndarray,
                              n_views: int = 24, seed: int = 7) -> dict:
-    """Disk-overlap fraction of projected circles over canonical axes + random
-    view directions. Quantifies 'how map-like' the layout is from each view."""
+    """正準軸 + ランダム視点方向へ射影した円の重なり率。
+    「各視点から見てどれだけ地図らしいか」を定量する。"""
     rng = np.random.default_rng(seed)
     dirs3 = [np.array([0, 0, 1.0]), np.array([1, 0, 0.0]), np.array([0, 1, 0.0])]
     extra = rng.normal(size=(n_views, 3))
@@ -261,11 +266,10 @@ def projection_overlap_stats(centers: np.ndarray, radii: np.ndarray,
 
 
 def relax_disks(centers: np.ndarray, radii: np.ndarray, iters: int = 40) -> np.ndarray:
-    """Push overlapping bodies apart (vectorized O(k^2), k small; dimension
-    agnostic: works on 2D disks and 3D spheres). Exactly-coincident bodies get
-    a deterministic separation direction: a zero vector cannot be pushed, so
-    without this, stacks of identical positions never resolve (found via the
-    unlinked-galaxy boundary stacks, 2026-09-29)."""
+    """重なる天体を押し離す(ベクトル化 O(k^2)、k は小さい; 次元非依存 =
+    2D 円盤にも 3D 球にも働く)。完全一致の天体には決定的な分離方向を与える:
+    ゼロベクトルは押せないため、これが無いと同一位置の重なりは永久に解けない
+    (unlinked 銀河の境界集中で顕在化した)。"""
     c = centers.astype(np.float64).copy()
     k = len(c)
     if k < 2:
@@ -297,11 +301,11 @@ def relax_disks(centers: np.ndarray, radii: np.ndarray, iters: int = 40) -> np.n
 
 
 def flatness(P: np.ndarray) -> float:
-    """PCA anisotropy of a point cloud: 1 - lam3/lam1 in [0, 1].
+    """点群の PCA 異方性: 1 - lam3/lam1、値域 [0, 1]。
 
-    ~1.0 = pancake (disk-like), ~2/3 = isotropic sphere. Used per macro to
-    quantify the "clusters look like disks" problem objectively. Needs >= 3
-    points; returns 0.0 for degenerate clouds.
+    ~1.0 = パンケーキ(円盤状)、~2/3 = 等方球。マクロ毎に
+    「塊が円盤に見える」問題を客観的に定量するための指標。
+    3 点以上が必要; 縮退した点群には 0.0 を返す。
     """
     P = np.asarray(P, np.float64)
     if len(P) < 3:
@@ -315,13 +319,13 @@ def flatness(P: np.ndarray) -> float:
 
 
 def macro_adjacency(centers: np.ndarray, edges, weights, k: int = 5) -> dict:
-    """Semantic-adjacency preservation of the macro layout.
+    """マクロ配置の意味的近接の保持度。
 
-    recall  = mean over macros of |graph top-K neighbours ∩ spatial top-K| / K
-    spearman = rank correlation between pair weight and spatial distance over
-              linked pairs (negative = strongly linked macros sit close).
-    Returns {"recall": float|None, "spearman": float|None}; None when the
-    macro graph is too small to be meaningful (< 3 macros or no edges).
+    recall  = マクロ毎の |グラフ top-K 隣接 ∩ 空間 top-K| / K の平均
+    spearman = リンクを持つペアについての重みと空間距離の順位相関
+              (負 = 強いリンクほど近くに配置されている)
+    {"recall": float|None, "spearman": float|None} を返す; マクログラフが
+    意味を持つには小さすぎる場合(マクロ < 3 またはエッジ無し)は None。
     """
     n = len(centers)
     edges = [(int(u), int(v)) for u, v in edges]
@@ -358,23 +362,21 @@ def macro_adjacency(centers: np.ndarray, edges, weights, k: int = 5) -> dict:
 def medium_local(reg_local: dict, pairs, macro_centers: np.ndarray,
                  macro_of, midx: dict, m_own, Rm: float, r_med: float,
                  fallback_seed: int, fallback=None) -> np.ndarray:
-    """Local position of one medium galaxy = weighted centroid of link targets.
+    """1 つの medium 銀河のローカル位置 = リンク先の重み付き重心。
 
-    reg_local: dict gid -> local 3D vec of PLACED regular galaxies (this macro).
-    pairs: iterable of (other_gid, weight) for the medium galaxy.
-    Intra-macro neighbours contribute their placed local positions; cross-macro
-    neighbours contribute a CONE-SPREAD point (v1.6) inside the macro sphere
-    around the direction of THEIR macro center (so mediums bridging other
-    clusters sit near the rim facing them): every galaxy sharing the same
-    dominant neighbour used to land on ONE identical rim point, which the
-    containment clamp then flattened into a thin cap (the pancake driver).
-    The cone sample is deterministic per (galaxy, neighbour macro) via
-    seed_key = fallback_seed + 7 * neighbour_macro_id — no RNG state, so
-    results are independent of job assignment / resume order. Neighbours
-    without a placed position (e.g. other mediums) are ignored; medium-medium
-    separation is resolved by a later push pass. With no usable pairs,
-    returns `fallback` when given (e.g. a fibonacci-ball slot for unlinked
-    regular galaxies), else a deterministic golden-angle slot.
+    reg_local: dict gid -> 配置済み通常銀河(このマクロ)のローカル 3D ベクトル。
+    pairs: この medium 銀河の (other_gid, weight) の反復可能オブジェクト。
+    マクロ内の隣接は配置済みローカル位置を寄与する; マクロ外の隣接は
+    「相手のマクロ中心」の方向を軸に、マクロ球内の円錐散布点(CONE-SPREAD)を
+    寄与する(他クラスタを橋渡しする medium は、その相手に向き合う境界近くに
+    来る)。同一の優勢隣接を共有する銀河を境界の単一点へ集めると、包含クランプが
+    それを薄いキャップへ潰す(パンケーキ化の主因)ため、寄与は必ず円錐内へ
+    散布する。円錐サンプルは seed_key = fallback_seed + 7 * neighbour_macro_id
+    により (銀河, 隣接マクロ) 毎に決定的 — RNG 状態を使わないので、結果は
+    ジョブ割当/resume 順に依存しない。配置済み位置を持たない隣接(他の medium 等)
+    は無視する; medium 同士の分離は後段の押し出しパスが解く。使えるペアが
+    全く無い場合は `fallback`(例: unlinked 通常銀河のフィボナッチ球スロット)を
+    返し、それも無ければ決定的な黄金角スロットを返す。
     """
     num = np.zeros(3)
     wsum = 0.0
@@ -483,7 +485,7 @@ addEventListener('resize', () => {
 
 def write_html_preview(path, g_centers, g_radius, gal_colors, dust_mask,
                        m_centers, R_m, eff_m, labels, mode_tag, info):
-    """gal_colors: hex color per galaxy index (already curated)."""
+    """gal_colors: 銀河 index 毎の hex 色(キュレーション済み)。"""
     garr = []
     for i in np.flatnonzero(~dust_mask):
         garr.append([round(float(g_centers[i, 0]), 2), round(float(g_centers[i, 1]), 2),
@@ -508,31 +510,9 @@ def write_html_preview(path, g_centers, g_radius, gal_colors, dust_mask,
     return path
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default="data")
-    ap.add_argument("--pack", type=float, default=0.6)
-    ap.add_argument("--r-spacing", type=float, default=1.5,
-                    help="min article spacing for galaxy radius floor: "
-                         "r_g >= r_spacing * n_g^(1/3)")
-    ap.add_argument("--macro-dim", type=int, default=3, choices=[2, 3],
-                    help="3 = full 3D sphere packing (canonical, default), "
-                         "2 = 2.5D universe map (experimental arm, D17)")
-    ap.add_argument("--macro-z-squash", type=float, default=1.0,
-                    help="with --macro-dim 3: squash macro sphere z (hybrid ellipsoid "
-                         "universe, e.g. 0.5; experimental arm, D17)")
-    ap.add_argument("--macro-w-power", type=float, default=1.0,
-                    help="weight temperature tau for the macro FR attraction "
-                         "(w^tau; 1.0 = neutral, >1 sharpens semantic adjacency)")
-    ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
-                    help="layout run name = output subdir under data/layout "
-                         "(default: wu.paths.ACTIVE_LAYOUT_RUN)")
-    ap.add_argument("--views", type=int, default=24)
-    ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--pairs", default="catalog", choices=["catalog", "npz"],
-                    help="galaxy pair source: catalog topK parquet or full pairs npz")
-    ap.add_argument("--galaxy-tag", default="res1_sub")
-    a = ap.parse_args()
+def main(a):
+    # a=None のときだけ CLI 引数を解析する(ステージからは Namespace を
+    # 注入して呼ぶ = 引数解析と処理本体の分離。CLI 挙動は不変)。
     dirs = Dirs(a.base)
     final = str(dirs.final)
     out_dir = str(dirs.layout_run(a.run))
@@ -569,7 +549,7 @@ def main():
         skew.append("galaxies.display_class")
     if skew:
         print(f"[layout][warn] catalog is pre-v2 (missing: {', '.join(skew)}); "
-              f"derived from n_articles. Re-run scripts/build_galaxy_catalog.py "
+              f"derived from n_articles. Re-run: python -m wu run catalog "
               f"(v2) for curated names / display_class (medium galaxies won't be "
               f"flagged in this run).")
 
@@ -648,7 +628,12 @@ def main():
             continue
         Rm = R_m[m_i]
         n_m = n_art_m[m]
-        r_form = a.pack * Rm * np.sqrt(n_art_g[members] / max(1, n_m))
+        frac = n_art_g[members] / max(1, n_m)
+        # 半径則の指数は実験腕(--r-expo)。既定 0.5 では従来の np.sqrt を
+        # そのまま使いビット同一を保証する(frac**0.5 へ書き換えないこと —
+        # 冪乗と sqrt はビット一致が保証されない)。
+        r_form = a.pack * Rm * (np.sqrt(frac) if a.r_expo == 0.5
+                                else frac ** a.r_expo)
         r_floor = a.r_spacing * np.maximum(1, n_art_g[members]) ** (1.0 / 3.0)
         r_g = np.maximum(r_form, r_floor)
         # volume cap: summed galaxy spheres fit inside the macro sphere
@@ -699,8 +684,8 @@ def main():
             else np.zeros((0, 3))
         if len(P) >= 2:
             P = relax_disks(P, g_radius[reg_all], iters=120)
-        # 3D radial clamp, applied UNCONDITIONALLY (v1.6): the old
-        # `len(P) >= 2` gate skipped single-regular-galaxy macros, where a
+        # 3D radial clamp, applied UNCONDITIONALLY: a `len(P) >= 2` gate
+        # would skip single-regular-galaxy macros, where a
         # pairless isolated galaxy on its fibonacci slot could stick out of
         # the macro sphere (measured (d3+r)/Rm up to 1.114). With the volume
         # cap (r <= 0.9 Rm) and lim = max(Rm-r, 0.05Rm), d3 + r <= Rm now
@@ -845,17 +830,18 @@ def main():
     }), os.path.join(out_dir, "macro_positions.parquet"), compression="zstd")
 
     meta = {"generated_at": _now(), "run": a.run, "pack": a.pack,
-            "r_spacing": a.r_spacing, "seed": a.seed,
+            "r_spacing": a.r_spacing, "r_expo": a.r_expo,
+            "seed": a.seed,
             "macro_w_power": a.macro_w_power,
             "pairs_source": a.pairs, "galaxy_tag": a.galaxy_tag,
             "n_galaxies": G, "n_macros_effective": int(len(eff_m)),
             "n_dust_shell": int(len(dust_idx)), "R_TOTAL": R_TOTAL,
             "mode": {"macro_dim": a.macro_dim, "macro_z_squash": a.macro_z_squash,
                      "canonical": a.macro_dim == 3 and a.macro_z_squash == 1.0,
-                     "note": ("canonical policy (v1.6): full 3D, macro-dim 3 "
+                     "note": ("canonical policy: full 3D, macro-dim 3 "
                               "unsquashed, sphere-relaxed galaxies, NO baked lens "
                               "(map/hybrid views are VIEW-TIME z-compression in "
-                              "the viewer, D17); unlinked galaxies are bary-placed "
+                              "the viewer); unlinked galaxies are bary-placed "
                               "(rim contributions cone-spread); containment clamp "
                               "is unconditional => spill == 0 by construction")
                      if (a.macro_dim == 3 and a.macro_z_squash == 1.0) else
@@ -944,6 +930,3 @@ def main():
 
     print(f"[layout] done ({meta['secs']}s) -> {out_dir}")
 
-
-if __name__ == "__main__":
-    main()

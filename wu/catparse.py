@@ -1,17 +1,17 @@
-"""E4: categorylinks parsing -> article->category membership arrays.
+"""categorylinks の解析 -> 記事->カテゴリの所属配列。
 
-Schema (2026 dumps):
+スキーマ(2026 ダンプ):
   categorylinks(cl_from, cl_sortkey, cl_timestamp, cl_sortkey_prefix,
                 cl_type enum('page','subcat','file'), cl_collation_id, cl_target_id)
   cl_target_id -> linktarget(lt_id, lt_namespace=14, lt_title)
 
-Outputs (graph/):
+出力(graph/):
   categories.parquet      cat_id(int32), lt_id(int64), title(str)
-  article_categories.bin  int32 pairs (article_compact_idx, cat_id), sorted by idx
-  catlinks_meta.json      counters/provenance
+  article_categories.bin  int32 ペア (article_compact_idx, cat_id)、idx 順ソート
+  catlinks_meta.json      カウンタ/来歴
 
-cl_type='subcat' rows (category hierarchy) are counted but not stored yet
-(future: category tree for naming/zoom levels).
+cl_type='subcat' の行(カテゴリ階層)はカウントするがまだ保存しない
+(将来: 命名/ズームレベル用のカテゴリツリー)。
 """
 from __future__ import annotations
 

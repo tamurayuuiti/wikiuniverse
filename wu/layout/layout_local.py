@@ -1,63 +1,77 @@
-"""Local (intra-galaxy) article layout — independent-batch jobs (B0 foundation).
+# wu/layout/layout_local.py — 銀河内部のローカルレイアウト(記事座標)
+#
+# 責務:
+# - 銀河ごとに独立したジョブとして記事座標を計算する(バッチ分割・並列・resume 可能):
+#   力モデル = igraph FR(3D)の形状 + セクタアンカーバネ(優勢隣接銀河方向、確信度
+#   ゲイン)+ rank 成層(外部次数分位で半径目標、内部ハブはコアへ)+ 弾性 prior +
+#   ボール内クランプ。FR 正規化はロバスト(重心引き算 + p98 スケール)。
+# - run 非依存の重計算は tag 毎に 1 度だけ事前計算して mmap 共有する(local_prep)。
+# - 全銀河完了時にシャードから article_positions.parquet へ自動マージし、
+#   checkpoint を修復する(完了の正典はシャード実在 = 並列レース対策)。
+#
+# 注意:
+# - 座標はジョブ割当・並列度に依存しない(ビット一致を test_catalog が回帰保証)。
+#   並列ランチャ(wu/layout/parallel.py)は本モジュールの CLI を subprocess 起動する。
+# - 正準実行は python -m wu run layout_local(= 並列ランチャ経由)。バッチ分割・
+#   --prep/--merge-only/--preview-galaxy は本モジュールの CLI
+#   (python -m wu.layout.layout_local …)が担う。
 
-B0 foundation (2026-09-30): the run-INDEPENDENT heavy work is precomputed ONCE
-per galaxy tag into data/graph/local_prep/<tag>/ and memory-mapped by every job
-and every layout run:
+"""銀河内(ローカル)記事レイアウト - 独立バッチのジョブ群。
 
-  internal_offs.npy / internal_buf.npy  bucketed intra-galaxy edges (old pass2)
-  cross_u.npy / cross_g.npy / cross_w.npy  grouped cross-galaxy endpoint pairs
-                                        (article, neighbour galaxy, edge count),
-                                        sorted by (article, galaxy); also the
-                                        input for the planned sector anchors (B1)
-  ext_deg.npy                           per-article cross-edge degree
-  prep_meta.json                        provenance (schema, input size+mtime)
+共有事前計算: run 非依存の重い処理は galaxy tag 毎に1回だけ
+data/graph/local_prep/<tag>/ へ事前計算し、全ジョブ・全 run が mmap 共有する:
 
-The run-DEPENDENT anchor directions are rebuilt from cross_* in seconds with
-bincount accumulation; this is mathematically identical to the old per-edge
-np.add.at accumulation (only fp summation order differs, ~1e-16).
-COORDINATES ARE INVARIANT under B0: the per-galaxy math (FR shape, anchor pull,
-elastic prior, ball clamp) and all seeds are untouched, and job assignment
-(ranges or LPT bins) does not enter any formula.
+  internal_offs.npy / internal_buf.npy  銀河内エッジのバケット(走査 pass2 相当)
+  cross_u.npy / cross_g.npy / cross_w.npy  グループ済みクロスペア
+                                        (記事, 隣接銀河, エッジ数)、
+                                        (記事, 銀河) 順にソート。セクタアンカーの
+                                        入力でもある
+  ext_deg.npy                           記事毎のクロスエッジ次数
+  prep_meta.json                        来歴(スキーマ、入力のサイズ+mtime)
 
-Each galaxy remains a fully independent job:
-  internal edges  -> igraph FR (3D) shape, scaled into the galaxy ball
-                     (B3: multilevel seed for n >= --ml-threshold;
-                      B2-a: recentred + robust p98 normalization, --fr-norm)
-  sector anchors  -> (B1) articles with cross-galaxy links are pulled toward
-                     the ball boundary facing their DOMINANT neighbour galaxy
-                     (top-1, blended with top-2 when comparable); the pull gain
-                     scales with the confidence = weight share of the blended
-                     neighbours, so diffuse articles stay interior
-  radial strata   -> (B2) target radius follows the within-galaxy rank
-                     quantile of external degree (scale-free), and internal
-                     hubs with few external links are pulled toward the core
-  elastic prior   -> keeps the FR internal structure while anchors bend it
+run 依存のアンカー方向だけ cross_* から bincount 蓄積で数秒で再構築する;
+per-edge の参照実装(np.add.at)と数学的に同一(浮動小数点の加算順のみ違い、
+~1e-16)。座標はバッチ分割に対して不変: 銀河毎の数式(FR 形状、アンカーバネ、
+弾性 prior、球内クランプ)と全 seed は分割の影響を受けず、ジョブ割当
+(id 範囲でも LPT ビンでも)はどの数式にも入らない。
 
-Modes:
-  --prep              build/refresh the prep artifacts only (launcher does this
-                      once before spawning jobs; single-process runs auto-prep)
-  --galaxies A-B      process a contiguous id range (one batch job)
-  --job-spec FILE     process an explicit gid list (LPT bins from the launcher)
-  --galaxies all      process everything remaining; merge when all are done
-  --merge-only        merge shards into article_positions.parquet (no scans,
-                      no anchor computation)
+各銀河は完全に独立したジョブであり続ける:
+  内部エッジ     -> igraph FR(3D)の形状を銀河球へスケール
+                    (n >= --ml-threshold はマルチレベル初期化;
+                     重心引き + ロバスト p98 正規化 = --fr-norm)
+  セクタアンカー -> 銀河間リンクを持つ記事は、優勢隣接銀河(top-1、2位が
+                    遜色なければブレンド)に向き合う球境界側へ引かれる。
+                    バネの強さは確信度 = ブレンド隣接への重量シェアに比例し、
+                    リンクが分散した記事は内部に留まる
+  半径成層       -> 目標半径は外部次数の銀河内ランク分位に追随(スケールフリー)、
+                    外部リンクの少ない内部ハブはコア側へ引かれる
+  弾性 prior     -> アンカーが形状を曲げる間、FR の内部構造を保つ
 
-Inputs:
+モード:
+  --prep              事前計算成果物の構築/更新のみ(ランチャがジョブ spawn 前に
+                      1回実行; 単一プロセス実行は自動で prep する)
+  --galaxies A-B      連続 id 範囲の処理(1バッチジョブ)
+  --job-spec FILE     明示的な gid リストの処理(ランチャの LPT ビン)
+  --galaxies all      残りの全銀河を処理; 全完了時にマージ
+  --merge-only        シャードを article_positions.parquet へマージのみ
+                      (走査なし・アンカー計算なし)
+
+入力:
   community/full/membership_<galaxy-tag>.npy
   graph/edges_undirected_unique.bin
-  graph/local_prep/<galaxy-tag>/            (auto-created when missing/stale)
-  layout/<run>/galaxy_positions.parquet     (canonical centers + radii)
+  graph/local_prep/<galaxy-tag>/            (欠落/陈旧時は自動作成)
+  layout/<run>/galaxy_positions.parquet     (正準の中心 + 半径)
 
-Outputs (layout/<run>/):
-  article_shards/gal_XXXXXX.npy   per-galaxy positions (cache, deletable)
-  layout_local_checkpoint.json    done-galaxy list (resume / batch boundary)
-  parallel_jobs/job_<k>.gids.txt  launcher-written LPT bins (cache, deletable)
-  article_positions.parquet       merged (page_id, galaxy_id, x, y, z)
-  layout_local_meta.json          params/timings (+ parallel telemetry)
+出力(layout/<run>/):
+  article_shards/gal_XXXXXX.npy   銀河毎の座標(キャッシュ、削除可)
+  layout_local_checkpoint.json    完了銀河リスト(resume / バッチ境界)
+  parallel_jobs/job_<k>.gids.txt  ランチャが書く LPT ビン(キャッシュ、削除可)
+  article_positions.parquet       マージ済み(page_id, galaxy_id, x, y, z)
+  layout_local_meta.json          パラメータ/所要時間(+ 並列テレメトリ)
 
-Batch usage (the §12 Colab-jobs prototype; LPT-balanced by the launcher):
-  python scripts/run_local_parallel.py --base data --run <RUN> [--jobs N]
-  python scripts/layout_local.py --base data --run <RUN> --galaxies 0-499
+バッチ実行(並列ランチャが LPT で負荷均衡する):
+  python -m wu run layout_local --base data --run <RUN>     (並列、正準)
+  python -m wu.layout.layout_local --base data --run <RUN> --galaxies 0-499
 """
 from __future__ import annotations
 
@@ -70,13 +84,12 @@ import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wu.dumpio import read_json, write_json  # noqa: E402
-from wu.paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
-from wu.stats import load_edges_mmap  # noqa: E402
+from ..dumpio import now_iso as _now, read_json, write_json  # noqa: E402,F401
+from ..paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
+from ..stats import load_edges_mmap  # noqa: E402
 
-PREP_SCHEMA = 2  # v2 adds int_deg.npy (B2 stratification)
+PREP_SCHEMA = 2  # v2 adds int_deg.npy (core/hub stratification input)
 CH = 4_000_000  # edge-scan chunk size
 
 
@@ -84,16 +97,15 @@ def _fr_unit(n: int, edges_local: np.ndarray, dim: int, seed: int,
              fr_mode: str = "ml", ml_threshold: int = 2000,
              ml_niter: int = 100, stats: dict | None = None,
              fr_norm: str = "p98") -> np.ndarray:
-    """FR layout normalized to unit ball (deterministic via random.seed).
+    """単位球へ正規化した FR レイアウト(random.seed により決定的)。
 
-    B3: for n >= ml_threshold the flat force-directed anneal is replaced by a
-    MULTILEVEL seed: Louvain contraction -> weighted FR on the cluster graph ->
-    member expansion with deterministic jitter -> FR refine from those initial
-    coordinates (igraph `seed` param) with ml_niter iterations. igraph FR cost
-    grows ~n^1.93 and linearly in niter (02 §O), so spending iterations on a
-    good initial state is both faster and better-conditioned than flat
-    annealing. Galaxies below the threshold keep the exact legacy flat path
-    (blast radius limited; median galaxy is 279 articles = 0.18 s).
+    マルチレベル FR: n >= ml_threshold の銀河は平坦なフォースアニーリングの
+    代わりにマルチレベル初期座標を使う: Louvain 縮約 → クラスタ図の重み付き FR
+    → 決定的 jitter での成員展開 → その初期座標(igraph `seed` パラメータ)から
+    ml_niter 回の FR refine。igraph FR のコストは ~n^1.93 かつ niter に線形なので、
+    良初期座標に反復を費やす方が平坦アニールより速く、条件も良い。
+    閾値未満の銀河は単一レベルの flat パスに完全一致のまま
+    (影響範囲を限定; 銀河の中央値は 279 記事 = 0.18 s)。
     """
     import igraph as ig
     random.seed(seed)
@@ -131,9 +143,9 @@ def _fr_unit(n: int, edges_local: np.ndarray, dim: int, seed: int,
         coords = np.asarray(lay.coords, np.float64)
     c = coords
     if fr_norm == "p98":
-        # B2-a: recentre + robust scale. The legacy max-norm let a single
+        # Recentre + robust scale: the plain max-norm lets a single
         # isolated outlier article set the scale (cloud shrank to ~half the
-        # ball, off-centre; 02 §O-6). p98 -> 1.0 with outliers clamped onto
+        # ball, off-centre). p98 -> 1.0 with outliers clamped onto
         # the unit ball keeps the body filling the galaxy sphere.
         c = c - c.mean(axis=0)
         r = np.linalg.norm(c, axis=1)
@@ -158,12 +170,11 @@ def _fr_unit(n: int, edges_local: np.ndarray, dim: int, seed: int,
 
 def galaxy_layout_quality(pos: np.ndarray, edges_local: np.ndarray,
                           k: int = 8, n_samples: int = 24, seed: int = 0):
-    """Intra-galaxy layout quality: graph-vs-space neighbour recall and edge
-    length dispersion. recall = mean over sampled articles of
-    |spatial top-k ∩ graph neighbours| / min(k, deg); edge_len_cv = std/mean of
-    embedded edge lengths (lower = more uniform springs). Returns None when
-    the graph is too small to measure. Sampled-article masks keep the cost at
-    O(n_samples * E) instead of an O(n^2) distance matrix.
+    """銀河内レイアウトの品質: グラフ近傍の空間再現率とエッジ長の分散。
+    recall = サンプル記事毎の |空間 top-k ∩ グラフ近傍| / min(k, deg) の平均;
+    edge_len_cv = 埋め込みエッジ長の std/mean(低いほどバネ長が均一)。
+    測定にはグラフが小さすぎる場合に None を返す。サンプル記事のマスクにより
+    コストを O(n^2) の距離行列でなく O(n_samples * E) に保つ。
     """
     n = len(pos)
     if n < 2 * k + 2 or len(edges_local) == 0:
@@ -215,7 +226,7 @@ def _source_stamp(memb_path: str, edges_path: str) -> dict:
 
 
 def prep_is_fresh(pp: dict, memb_path: str, edges_path: str) -> bool:
-    """Prep artifacts exist and their recorded inputs match the current ones."""
+    """事前計算成果物が存在し、記録された入力が現在の入力と一致するか。"""
     if not pp["meta"].exists():
         return False
     for k in ("offs", "buf", "cu", "cg", "cw", "ext", "int"):
@@ -227,11 +238,11 @@ def prep_is_fresh(pp: dict, memb_path: str, edges_path: str) -> bool:
 
 
 def cmd_prep(dirs: Dirs, tag: str, memb_path: str, edges_path: str) -> dict:
-    """Bucket internal edges and group cross-galaxy endpoint pairs, once per tag.
+    """内部エッジのバケット化と銀河間エンドポイントペアのグループ化を
+    tag 毎に1回だけ行う。
 
-    Grouped cross pairs carry the FULL multiplicity (edge count) of each
-    (article, neighbour-galaxy) relation, so anchors and the planned sector
-    anchors (B1) need no further scan of the 108M-edge file.
+    グループ済みクロスペアは (記事, 隣接銀河) 関係の完全な多重度(エッジ数)を
+    保持するため、セクタアンカーは 108M エッジファイルを再走査しない。
     """
     t0 = time.time()
     pp = _prep_paths(dirs, tag)
@@ -279,8 +290,8 @@ def cmd_prep(dirs: Dirs, tag: str, memb_path: str, edges_path: str) -> dict:
                       minlength=n)
     ext = np.rint(ext).astype(np.int32)
 
-    # ---- pass 2: bucket internal edges (order identical to the pre-B0 code:
-    #      per-chunk stable sort by community + rank scatter; the F7 asserts stay)
+    # ---- pass 2: bucket internal edges (order identical to the per-edge
+    #      reference impl: per-chunk stable sort by community + rank scatter)
     offs = np.zeros(G + 1, np.int64)
     offs[1:] = np.cumsum(cnt)
     buf = np.empty((int(cnt.sum()), 2), np.int32)
@@ -308,7 +319,7 @@ def cmd_prep(dirs: Dirs, tag: str, memb_path: str, edges_path: str) -> dict:
                   f"({100.0 * (i + len(blk)) / max(1, len(E)):.0f}%, "
                   f"{time.time() - t0:.0f}s)", flush=True)
     assert np.array_equal(fill, offs[1:])
-    # per-article internal degree (B2 core/hub stratification input)
+    # per-article internal degree (core/hub stratification input)
     int_deg = (np.bincount(buf[:, 0].astype(np.int64), minlength=n)
                + np.bincount(buf[:, 1].astype(np.int64), minlength=n))
     int_deg = int_deg.astype(np.int32)
@@ -334,7 +345,7 @@ def cmd_prep(dirs: Dirs, tag: str, memb_path: str, edges_path: str) -> dict:
 
 def ensure_prep(dirs: Dirs, tag: str, memb_path: str, edges_path: str,
                 auto: bool = True) -> dict:
-    """Return prep paths; build them when missing/stale if auto (single process)."""
+    """prep のパスを返す。auto(単一プロセス)時は欠落/陈旧なら構築する。"""
     pp = _prep_paths(dirs, tag)
     if not prep_is_fresh(pp, memb_path, edges_path):
         if not auto:
@@ -347,7 +358,7 @@ def ensure_prep(dirs: Dirs, tag: str, memb_path: str, edges_path: str,
 
 
 def load_prep(pp: dict) -> dict:
-    """Memory-map the shared prep artifacts (read-only, zero-copy across jobs)."""
+    """共有 prep 成果物をメモリマップする(読み取り専用、ジョブ間ゼロコピー)。"""
     return {
         "offs": np.load(pp["offs"], mmap_mode="r"),
         "buf": np.load(pp["buf"], mmap_mode="r"),
@@ -361,9 +372,9 @@ def load_prep(pp: dict) -> dict:
 
 def build_anchors(prep: dict, memb: np.ndarray, centers: np.ndarray,
                   n: int) -> np.ndarray:
-    """Per-article anchor vector = sum over grouped cross pairs of
-    w * unit(centre[neighbour] - centre[own]); chunked, bincount accumulation
-    (mathematically identical to the pre-B0 per-edge np.add.at, ~4x faster)."""
+    """記事毎のアンカーベクトル = グループ済みクロスペアの
+    w * unit(centre[隣接] - centre[自銀河]) の総和。チャンク処理 +
+    bincount 蓄積(per-edge の np.add.at と数学的に同一で ~4倍速い)。"""
     cu, cg, cw = prep["cu"], prep["cg"], prep["cw"]
     anchor = np.zeros((n, 3), np.float64)
     own = memb[cu]
@@ -381,16 +392,16 @@ def build_anchors(prep: dict, memb: np.ndarray, centers: np.ndarray,
 
 def build_anchor_dirs(prep: dict, memb: np.ndarray, centers: np.ndarray,
                       n: int, ratio: float = 0.5):
-    """B1 sector anchors: per-article direction toward its dominant neighbour.
+    """セクタアンカー: 記事毎の「優勢隣接銀河」の方向。
 
-    Returns (dir, conf). dir = unit vector toward the top-1 neighbour galaxy,
-    blended with top-2 when w2 >= ratio*w1 (articles tied to two galaxies sit
-    between them); conf = share of the article's cross-edge weight carried by
-    the blended neighbours = pull gain (diffuse "cosmopolitan" articles get a
-    weak pull and stay interior). Replaces the legacy summed-unit-vector
-    anchor, where opposing links cancelled and multi-direction articles lost
-    their anchor entirely (02 §O, D34). Vectorized over the sorted grouped
-    cross pairs: one argsort by (article, weight desc) + segment heads.
+    (dir, conf) を返す。dir = top-1 隣接銀河への単位ベクトルで、
+    w2 >= ratio*w1 のときは top-2 とブレンドする(2 銀河に跨る記事は
+    その間に座る); conf = ブレンドした隣接が担う、その記事のクロスエッジ
+    重量のシェア = バネの強さ(リンクが分散した「コスモポリタン」記事は
+    弱い引きで内部に留まる)。「全クロスリンクの単位ベクトル総和」方式
+    (--anchor-mode sum として保持)では逆向きリンクが相殺し、多方向の記事が
+    アンカーを完全に失う問題を解決する。ソート済みグループクロスペア上の
+    ベクトル化: (記事, 重量降順) の argsort 1 回 + セグメント先頭で処理する。
     """
     cu, cg, cw = prep["cu"], prep["cg"], prep["cw"]
     dirv = np.zeros((n, 3))
@@ -427,8 +438,8 @@ def build_anchor_dirs(prep: dict, memb: np.ndarray, centers: np.ndarray,
 
 
 def _rank_quantile(v: np.ndarray) -> np.ndarray:
-    """Within-galaxy rank quantile in [0, 1] (scale-free across galaxy sizes;
-    B2 replaces the fixed ext/20 saturation with this)."""
+    """銀河内ランク分位 [0, 1](銀河サイズに対してスケールフリー。
+    固定の ext/20 飽和の置き換え)。"""
     n = len(v)
     if n < 2:
         return np.zeros(n)
@@ -438,17 +449,14 @@ def _rank_quantile(v: np.ndarray) -> np.ndarray:
     return q
 
 
-def _now():
-    return datetime.datetime.now().isoformat(timespec="seconds")
-
-
 def cmd_merge(dirs: Dirs, lay_dir: str, memb: np.ndarray, n: int, G: int):
-    """Merge per-galaxy shards into article_positions.parquet (scan-free).
+    """銀河毎のシャードを article_positions.parquet へマージする(走査なし)。
 
-    Also REPAIRS the done-checkpoint: parallel jobs never share it (they race
-    on overwrites), so the union of {main checkpoint, job metas' done lists,
-    galaxies whose shard file exists} is the ground truth. Shard existence is
-    authoritative: a shard is written only after its galaxy completed.
+    done チェックポイントの修復(REPAIR)も行う: 並列ジョブはチェックポイントを
+    共有しない(上書きがレースするため)、よって {本体チェックポイント、
+    ジョブ meta の done リスト、シャードファイルが存在する銀河} の和集合が
+    真実である。シャードの実在が最優先の根拠: シャードはその銀河の完了後に
+    だけ書かれる。
     """
     shard_dir = os.path.join(lay_dir, "article_shards")
     ck_path = os.path.join(lay_dir, "layout_local_checkpoint.json")
@@ -492,8 +500,13 @@ def cmd_merge(dirs: Dirs, lay_dir: str, memb: np.ndarray, n: int, G: int):
           f"{os.path.join(lay_dir, 'article_positions.parquet')}")
 
 
-def main():
-    ap = argparse.ArgumentParser()
+def _build_parser():
+    """モジュール CLI の引数解析器(バッチ分割・preview・job-spec 起動用)。
+
+    既定値は wu/stages/layout.py の Param 宣言と一致させること
+    (test_pipeline_core のドリフト防止検査が照合する)。
+    """
+    ap = argparse.ArgumentParser(prog="python -m wu.layout.layout_local")
     ap.add_argument("--base", default="data")
     ap.add_argument("--galaxy-tag", default="res1_sub")
     ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
@@ -511,21 +524,21 @@ def main():
                          "and exit (no edge scans, no anchor computation)")
     ap.add_argument("--fr-mode", default="ml", choices=["ml", "flat"],
                     help="ml = multilevel-seeded FR for galaxies with n >= "
-                         "--ml-threshold (default); flat = legacy single-level "
-                         "FR (comparison arm)")
+                         "--ml-threshold (default); flat = single-level FR "
+                         "(comparison arm)")
     ap.add_argument("--ml-threshold", type=int, default=2000,
                     help="article count where the multilevel FR kicks in "
-                         "(smaller galaxies keep the exact legacy flat path)")
+                         "(smaller galaxies keep the exact flat path)")
     ap.add_argument("--ml-niter", type=int, default=100,
                     help="FR refine iterations on top of the multilevel seed "
                          "(the flat path keeps igraph's default 500)")
     ap.add_argument("--anchor-mode", default="sector", choices=["sector", "sum"],
-                    help="sector = B1 dominant-neighbour sector direction with "
-                         "confidence-scaled gain (default); sum = legacy "
-                         "summed-unit-vector anchor (comparison arm)")
+                    help="sector = dominant-neighbour sector direction with "
+                         "confidence-scaled gain (default); sum = summed-unit-"
+                         "vector anchor (comparison arm)")
     ap.add_argument("--fr-norm", default="p98", choices=["p98", "max"],
                     help="p98 = recentred + robust p98 scale with outlier clamp "
-                         "(B2-a, default); max = legacy max-norm (comparison arm)")
+                         "(default); max = max-norm (comparison arm)")
     ap.add_argument("--sector-ratio", type=float, default=0.5,
                     help="blend the top-2 neighbour direction when w2 >= ratio*w1")
     ap.add_argument("--iters", type=int, default=40)
@@ -535,13 +548,21 @@ def main():
     ap.add_argument("--preview-galaxy", type=int, default=None,
                     help="after the run, render a 3-view scatter of this galaxy's "
                          "article shard (layout/<run>/preview_galaxy_<id>.png)")
-    a = ap.parse_args()
+    return ap
+
+
+def main(a=None):
+    # a=None のときだけ CLI 引数を解析する(モジュール CLI 起動 = バッチ/
+    # preview/job-spec)。ステージからは Namespace を注入して呼ぶ
+    # (= 引数解析と処理本体の分離)。
+    if a is None:
+        a = _build_parser().parse_args()
     dirs = Dirs(a.base)
     lay_dir = str(dirs.layout_run(a.run))
     gpos_path = os.path.join(lay_dir, "galaxy_positions.parquet")
     if not a.prep and not os.path.exists(gpos_path):
         sys.exit(f"[local] {gpos_path} not found: run "
-                 f"`python scripts/layout_global.py --base {a.base} "
+                 f"`python -m wu run layout_global --base {a.base} "
                  f"--run {a.run}` first (the local layout needs this run's "
                  f"galaxy centers/radii)")
     shard_dir = os.path.join(lay_dir, "article_shards")
@@ -665,8 +686,8 @@ def main():
             pos_g = fr * (R * 0.92)
             ext_m = ext_deg[members].astype(np.float64)
             if a.anchor_mode == "sector":
-                # B1: sector direction + confidence gain; B2: rank-quantile
-                # radial band + hub-core correction (scale-free per galaxy)
+                # sector direction + confidence gain; rank-quantile radial
+                # band + hub-core correction (scale-free per galaxy)
                 av = anchor_dir[members]
                 cf = anchor_conf[members]
                 has = cf > 1e-9
@@ -679,7 +700,7 @@ def main():
                 gain = np.zeros(ng)
                 gain[has] = a.kappa * cf[has]
             else:
-                # legacy: summed-unit-vector anchor + fixed /20 band
+                # comparison arm: summed-unit-vector anchor + fixed /20 band
                 av = anchor[members]
                 avn = np.linalg.norm(av, axis=1)
                 has = avn > 1e-9

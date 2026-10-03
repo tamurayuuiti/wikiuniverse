@@ -1,3 +1,17 @@
+# wu/community/catalog.py — 銀河カタログの生成(data/final/ = レイアウト・ビューアのデータ契約)
+#
+# 責務:
+# - 既存成果物(membership/pairs/per_community/purity/clusters)から、表示とレイアウトが
+#   使う台帳を一括生成する: galaxies/macros/galaxy_pairs_topK/macro_pairs/catalog_meta。
+# - 銀河名のキュレーション(メタカテゴリ除外 → tf-idf → 語幹正規化 → 代表記事
+#   フォールバック)と display_class(galaxy/medium/dust)の分類を含む。
+#
+# 注意:
+# - main(a) は Namespace 注入でステージから呼ばれる(test_catalog が _stem_name
+#   含め担保)。正準実行は python -m wu run catalog。
+# - purity/clusters/per_community_<macro> は任意入力(欠けても縮退して動作する)ため、
+#   ステージ契約の inputs には必須分のみ宣言している(wu/stages/catalog.py 参照)。
+
 """Build the galaxy catalog — the data contract between analysis, layout and the viewer.
 
 Inputs (all produced by earlier stages; nothing heavy is recomputed):
@@ -25,22 +39,20 @@ suffixes such as "...stub items" are stem-normalized -> name_source
 then shows galaxy#<id>).
 
 Usage:
-  python scripts/build_galaxy_catalog.py --base data \
+  python -m wu run catalog --base data   # 参数 override: --set catalog.<key>=<value> \
       --galaxy-tag res1_sub --macro-tag res1 [--top-neighbors 8] [--top-pairs 30000]
 """
 from __future__ import annotations
 
-import argparse
 import datetime
 import os
 import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wu.dumpio import write_json  # noqa: E402
-from wu.paths import Dirs  # noqa: E402
+from ..dumpio import write_json  # noqa: E402
+from ..paths import Dirs  # noqa: E402
 import re  # noqa: E402
 
 # カテゴリ名のブラックリスト(技術・保守系。頻度フィルタをすり抜ける中頻度メタ)
@@ -102,14 +114,9 @@ def _parse_top3(s3: str):
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default="data")
-    ap.add_argument("--galaxy-tag", default="res1_sub")
-    ap.add_argument("--macro-tag", default="res1")
-    ap.add_argument("--top-neighbors", type=int, default=8)
-    ap.add_argument("--top-pairs", type=int, default=30000)
-    a = ap.parse_args()
+def main(a):
+    # a=None のときだけ CLI 引数を解析する(ステージからは Namespace を注入
+    # して呼ぶ = 引数解析と処理本体の分離。既存の CLI 挙動は不変)。
     dirs = Dirs(a.base)
     full = str(dirs.community_full)
     out_dir = str(dirs.final)
@@ -327,6 +334,3 @@ def main():
           f"violations={containment_violations}")
     print(f"[catalog] wrote -> {out_dir}")
 
-
-if __name__ == "__main__":
-    main()

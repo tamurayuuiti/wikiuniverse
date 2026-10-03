@@ -1,12 +1,12 @@
 // src/types/catalog.ts
-// データ契約の型定義(export_viewer_tiles.py のディスク契約と完全一致)。
+// データ契約の型定義(wu/publish.py のディスク契約と完全一致)。
 //
 // 責務:
 // - bootstrap.json(compact)/ タイルバイナリ+サイドカーの TS 型表現
 // - ローダとビューアの共有契約
 //
 // 注意:
-// - フィールド変更時は生成側 scripts/export_viewer_tiles.py と必ず同期する。
+// - フィールド変更時は生成側 wu/publish.py と必ず同期する。
 // - タイル内配列は rank 順(pos/titles/edges/cross すべて同一順)。
 // - deg はタイル内に存在しない → デコード時にエッジから算出する。
 
@@ -22,6 +22,7 @@ export type RawPair = [number, number, number]
 /** bootstrap.json 生フォーマット。 */
 export interface RawBootstrap {
   meta: {
+    schema_version?: number
     galaxy_tag: string
     layout_run: string
     n_articles: number

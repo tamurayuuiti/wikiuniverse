@@ -9,7 +9,7 @@
 // - recomposeTiles: z-compress スライダの in-place 再構成
 //
 // 注意:
-// - バイナリ布局は export_viewer_tiles.py と固定契約(変更時は両側同時改修):
+// - バイナリ布局は wu/publish.py と固定契約(変更時は両側同時改修):
 //   header u32×3(n, n_edges, n_cross) + pos f32 n*3 + edges u32 ne*2 + cross u32 nx*3。
 // - デコード時に範囲検証し、不正要素は捨てる(NaN/クラッシュ防御)。
 // - 追い出しは「描画を止める」のではなく「タイトル/エッジの参照を失わせる」だけ

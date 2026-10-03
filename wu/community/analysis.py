@@ -1,20 +1,20 @@
-"""Community detection + independence metrics + hierarchy test.
+"""コミュニティ検出 + 独立性指標 + 階層(L2)クラスタリングの共有ライブラリ。
 
-Metric definitions (matching the PoC spec):
-  N_c        nodes in community c
-  E_in_c     undirected unique edges with both ends in c
-  E_out_c    undirected unique edges with exactly one end in c (other end in
-             another community of the same subset)   [inter-community cut]
+指標定義(PoC 仕様に準拠):
+  N_c        コミュニティ c のノード数
+  E_in_c     両端が c 内にある無向一意エッジ数
+  E_out_c    片端のみが c 内にある無向一意エッジ数(他端は同一サブセット内の
+             別コミュニティ)   [コミュニティ間カット]
   out_ratio_c       = E_out_c / (E_in_c + E_out_c)
   conductance_c     = E_out_c / (2*E_in_c + E_out_c)          (= cut / vol(c))
   avg_degree_c      = 2*E_in_c / N_c
-  boundary_nodes_c  = nodes of c having >=1 edge leaving c (inter-community)
+  boundary_nodes_c  = c の外へ出るエッジを 1 本以上持つ c のノード数(コミュニティ間)
   boundary_node_ratio_c = boundary_nodes_c / N_c
-  E_ext_c    undirected unique links between nodes of c and nodes OUTSIDE the
-             subset (boundary pairs, deduped across directions)  [leakage]
-  boundary_any_nodes_c = nodes of c with inter-community OR outside-subset links
+  E_ext_c    c のノードとサブセット「外」のノードの間の無向一意リンク数
+             (境界ペア、方向を跨いで重複排除済み)  [リーク]
+  boundary_any_nodes_c = コミュニティ間 or サブセット外のリンクを持つ c のノード数
 
-All "edge counts" are unique undirected article links unless noted.
+注記のない「エッジ数」はすべて無向一意化された記事間リンクを指す。
 """
 from __future__ import annotations
 
@@ -35,15 +35,15 @@ except OSError:  # non-linux
 
 
 def trim():
-    """Return freed heap pages to the OS (critical in low-RAM sandboxes)."""
+    """解放されたヒープページを OS へ返す(低 RAM サンドボックスで必須)。"""
     gc.collect()
     if _LIBC is not None:
         _LIBC.malloc_trim(0)
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .dumpio import read_json, write_json
-from .stats import hub_flags
+from ..dumpio import read_json, write_json
+from ..stats import hub_flags
 
 SEED = 42
 
@@ -62,7 +62,7 @@ def load_subset(subset_dir: str):
 
 
 def undirected_unique(internal: np.ndarray) -> np.ndarray:
-    """Dedupe directed pairs into unique undirected int32 edges (low RAM)."""
+    """有向ペアを無向一意の int32 エッジへ重複排除する(低 RAM)。"""
     if len(internal) == 0:
         return np.zeros((0, 2), np.int32)
     a = internal[:, 0]
@@ -90,9 +90,9 @@ def undirected_unique(internal: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------- detection --
 
 def build_igraph_batched(n: int, edges: np.ndarray, weights=None, batch: int = 300_000):
-    """Memory-safe igraph construction. NOTE: python-igraph's sparse-matrix and
-    generator paths materialize giant python lists; batched add_edges + malloc_trim
-    keeps RSS bounded. edges may be a memmap."""
+    """メモリ安全な igraph 構築。注意: python-igraph のスパース行列/ジェネレータ経路は
+    巨大な Python リストを実体化するため、バッチ add_edges + malloc_trim で RSS を
+    抑える。edges は memmap でもよい。"""
     g = ig.Graph(n=n)
     m = len(edges)
     for i in range(0, m, batch):
@@ -108,8 +108,8 @@ def build_igraph_batched(n: int, edges: np.ndarray, weights=None, batch: int = 3
 
 def run_leiden(n: int, edges: np.ndarray, resolution: float = 1.0, seed: int = SEED,
                weights=None, engine: str = "igraph"):
-    """engine='igraph': native C Leiden (low RAM, ~58B/edge total; recommended).
-    engine='leidenalg': python leidenalg (copies graph internally, ~2x RAM)."""
+    """engine='igraph': ネイティブ C の Leiden(低 RAM、合計 ~58B/edge。推奨)。
+    engine='leidenalg': Python 実装(グラフを内部コピーするため RAM ~2 倍)。"""
     g = build_igraph_batched(n, edges, weights)
     if engine == "igraph":
         import random as _random
@@ -138,7 +138,7 @@ def run_leiden(n: int, edges: np.ndarray, resolution: float = 1.0, seed: int = S
 
 def community_metrics(n: int, E: np.ndarray, memb: np.ndarray,
                       node_stats: dict, nodes: dict):
-    """E: undirected unique edges (compact idx). Returns (per_comm dict arrays, globals)."""
+    """E: 無向一意エッジ(compact idx 順)。戻り値は (コミュニティ別指標の配列 dict, 全体指標)。"""
     t0 = time.time()
     C = int(memb.max()) + 1
     u, v = E[:, 0], E[:, 1]
@@ -232,7 +232,7 @@ def top_inter_pairs(E: np.ndarray, memb: np.ndarray, top_k: int = 20):
 
 
 def community_labels(n: int, E: np.ndarray, memb: np.ndarray, nodes: dict, per, top_n=3):
-    """Representative titles per community: highest internal-degree members."""
+    """コミュニティ別の代表タイトル: 内部次数が最も高い成員。"""
     deg = np.zeros(n, np.int64)
     if len(E):
         deg += np.bincount(E[:, 0], minlength=n)
@@ -289,7 +289,7 @@ def hub_analysis(n: int, E: np.ndarray, memb: np.ndarray, nodes: dict, node_stat
 # ---------------------------------------------------------------- hierarchy --
 
 def pair_matrix(E: np.ndarray, memb: np.ndarray):
-    """Return (a, b, w) arrays of the weighted inter-community graph."""
+    """重み付きコミュニティ間グラフの (a, b, w, C) を返す(端点ペア・重み・コミュニティ数)。"""
     C = int(memb.max()) + 1
     u, v = E[:, 0].astype(np.int64), E[:, 1].astype(np.int64)
     mu, mv = memb[u], memb[v]

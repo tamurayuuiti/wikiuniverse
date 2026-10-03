@@ -1,4 +1,23 @@
-"""Export viewer tiles + bootstrap JSON (LOD streaming prototype, §8).
+# wu/publish.py — Viewer 公開面の生成(data/spatial/ への出版)
+#
+# 責務:
+# - 座標 run(layout/<run>/)と銀河カタログ(final/)から、ビューアが読む公開面を
+#   生成する: bootstrap.json(宇宙+銀河ビューの一括 fetch)+ tiles/gal_XXXXXX.bin|.json
+#   (ズームした銀河のみ on-demand fetch)+ tiles_meta.json。
+# - URL 契約は run 名と無縁に固定(出版元 run は bootstrap の meta.layout_run に記録)。
+# - タイル bin 形式(契約): header u32×3(n, n_internal_edges, n_cross_links)+
+#   pos f32 n×3 + edges u32 ne×2 + cross u32 nx×3、全配列 rank 順。deg はクライアント算出。
+#   サイドカー json = タイトル(rank 順)。bin に文字列は入れない(数値のみ)。
+#
+# 注意:
+# - main(a) は Namespace 注入でステージから呼ばれる(正準実行は python -m wu run publish)。
+# - bootstrap の meta.schema_version がビューア側の許容チェックと対になる
+#   (形式を変える場合は SCHEMA_VERSION を上げ、viewer/src/data/bootstrap.ts の
+#   SUPPORTED_SCHEMA_VERSION と合わせて更新すること)。
+# - 銀河団ラベルは final/macro_label_overrides.json(手動キュレーション・任意)が
+#   既定導出(rep_titles 先頭 16 字)より優先される。
+
+"""Export viewer tiles + bootstrap JSON (LOD streaming; results/SUMMARY.md 参照).
 
 Per-galaxy self-contained tile (data/spatial/tiles/gal_XXXXXX.bin, little-endian):
   uint32  n_articles
@@ -16,17 +35,16 @@ so the universe+galaxy views need a single fetch; article data streams per tile.
 Macro labels default to macros.rep_titles[0][:16]; an optional hand-curated
 final/macro_label_overrides.json ({"macros": [{"macro_id": N, "label": "..."}]})
 takes precedence for non-empty labels. Template generation:
-  python scripts/audit_names.py --base data --dump-macro-labels
+  python -m wu run audit_names --base data  # --set audit_names.dump_macro_labels=true
 
 Usage:
-  python scripts/export_viewer_tiles.py --base data [--galaxy-tag res1_sub]
+  python -m wu run publish --base data  # 既定で正典 run(configs/publish.json)
       [--run <layout run>] [--cross-cap 8]
 (--run default = wu.paths.ACTIVE_LAYOUT_RUN. data/spatial/ is the published,
 run-name-independent viewer contract; the source run is recorded in bootstrap.json.)
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import sys
@@ -34,22 +52,20 @@ import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wu.dumpio import write_json  # noqa: E402
-from wu.paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
-from wu.stats import load_edges_mmap, load_titles  # noqa: E402
+from .dumpio import write_json  # noqa: E402
+from .paths import ACTIVE_LAYOUT_RUN, Dirs  # noqa: E402
+from .stats import load_edges_mmap, load_titles  # noqa: E402
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default="data")
-    ap.add_argument("--galaxy-tag", default="res1_sub")
-    ap.add_argument("--run", default=ACTIVE_LAYOUT_RUN,
-                    help="source layout run under data/layout "
-                         "(default: wu.paths.ACTIVE_LAYOUT_RUN)")
-    ap.add_argument("--cross-cap", type=int, default=8)
-    a = ap.parse_args()
+# 公開面(bootstrap/tiles)の契約バージョン。bin のフィールド構成や bootstrap の
+# 位置配列の意味を変える場合は +1 し、viewer 側の SUPPORTED_SCHEMA_VERSION と
+# 許容範囲を合わせて更新する(相互運用の要 = バージョン無し契約の反省)。
+SCHEMA_VERSION = 1
+
+
+def main(a):
+    # a=None のときだけ CLI 引数を解析する(ステージは Namespace 注入で呼ぶ)。
     dirs = Dirs(a.base)
     t0 = time.time()
     lay = str(dirs.layout_run(a.run))
@@ -173,7 +189,7 @@ def main():
             print(f"  tiles pass2 {i + len(blk):,}/{len(E):,} ({time.time()-t0:.0f}s)", flush=True)
     assert np.array_equal(e_fill, e_off[1:]) and np.array_equal(x_fill, x_off[1:])
 
-    # ---- write tiles (with per-galaxy index validation; 2026-09-27 NaN 事象の防御)
+    # ---- write tiles (per-galaxy index validation = NaN 混入事象の防御)
     sizes = np.bincount(memb, minlength=G)
     cls_code = {"galaxy": 0, "medium": 1, "dust": 2}
     for g in range(G):
@@ -223,7 +239,8 @@ def main():
         print(f"[boot] macro label overrides: {len(mac_labels)} applied "
               f"({os.path.basename(ovr_path)})")
     boot = {
-        "meta": {"galaxy_tag": a.galaxy_tag, "layout_run": a.run,
+        "meta": {"schema_version": SCHEMA_VERSION,
+                 "galaxy_tag": a.galaxy_tag, "layout_run": a.run,
                  "n_articles": n, "n_galaxies": G,
                  "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                  "cross_cap": a.cross_cap},
@@ -256,9 +273,6 @@ def main():
 
 def local_idx(rank, pids, gids, starts_arr):
     """記事 pid の銀河内ローカル索引。rank は順列 order の逆写像であること
-    (order 自体は非単調なので searchsorted は使えない — 2026-09-27 バグの根因)。"""
+    (order 自体は非単調なので searchsorted は使えない = 過去バグの根因)。"""
     return (rank[pids] - starts_arr[gids]).astype(np.uint32)
 
-
-if __name__ == "__main__":
-    main()

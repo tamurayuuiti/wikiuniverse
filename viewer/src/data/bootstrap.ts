@@ -13,6 +13,10 @@
 
 import type { BootstrapData, GalaxyMeta, RawBootstrap, TileIndex } from '@/types/catalog'
 
+// このビューアが解釈できる公開面契約のバージョン(wu/publish.py の
+// SCHEMA_VERSION と対になる。形式変更時は両方を合わせて更新する)。
+const SUPPORTED_SCHEMA_VERSION = 1
+
 // 黄金比ハッシュで [0,1) を返す。
 function hash01(i: number, salt = 0): number {
   const x = Math.sin((i + 1) * 12.9898 + salt * 78.233) * 43758.5453
@@ -29,6 +33,16 @@ export async function loadBootstrap(): Promise<BootstrapData> {
 
 // compact 形式を解析して表示用データへ変換する。
 export function parseBootstrap(raw: RawBootstrap): BootstrapData {
+  // 契約バージョンの許容チェック: 生成側(wu/publish.py の SCHEMA_VERSION)が
+  // このビューアの既知バージョンを超えていたら、位置配列の意味がずれて
+  // 静かに壊れ得るので明示的に警告する(読み込みは続ける = 前方互容の努力)。
+  // schema_version 無しの旧 bootstrap は version 1 として扱う。
+  const schemaVersion = raw.meta.schema_version ?? 1
+  if (schemaVersion > SUPPORTED_SCHEMA_VERSION) {
+    console.warn(
+      `[bootstrap] schema_version=${schemaVersion} はこのビューアの既知上限 ` +
+      `${SUPPORTED_SCHEMA_VERSION} を超えます(生成側が新しい。表示が壊れる可能性)`)
+  }
   const macros = raw.macros.map((m, i) => ({
     mid: i,
     x: m[0],

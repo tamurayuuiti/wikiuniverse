@@ -1,5 +1,5 @@
-"""Plots + markdown report generation (matplotlib Agg, English labels to avoid
-missing CJK fonts; narrative text is Japanese in report.md)."""
+"""プロット + Markdown レポートの生成(matplotlib Agg。CJK フォントの無い環境を
+避けるためプロットのラベルは英語、report.md の地の文は日本語)。"""
 from __future__ import annotations
 
 import os
@@ -129,8 +129,8 @@ def fmt(x, nd=3):
 
 
 def write_report(path: str, ctx: dict):
-    """ctx keys: subset_name, subset_meta, glob, per, labels, top_pairs, hub_rows,
-    hub_stats, hier, sweep, full_stats(optional), meta(extra provenance)."""
+    """ctx のキー: subset_name, subset_meta, glob, per, labels, top_pairs, hub_rows,
+    hub_stats, hier, sweep, full_stats(任意), meta(追加の来歴情報)。"""
     g = ctx["glob"]
     per = ctx["per"]
     sm = ctx.get("subset_meta", {})

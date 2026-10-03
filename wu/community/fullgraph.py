@@ -1,3 +1,18 @@
+# wu/community/fullgraph.py — フルグラフのコミュニティ検出(マクロ → 銀河の 2 段階 Leiden)
+#
+# 責務:
+# - 全グラフ(jawiki ns0 全体)のコミュニティ検出パイプラインの処理本体:
+#   dedup(無向一意化)/ detect(一括 Leiden = マクロ)/ subdivide(再帰分割 = 銀河)/
+#   metrics(指標)/ cluster(L2 銀河団)/ export(結合表)/ prune(次数予算剪定)。
+# - 各段階はディスクへ保存され再開可能(工程別サブコマンド制)。
+#
+# 注意:
+# - cmd_* 関数が処理本体で、ステージ(wu/stages/community.py)が参数付きで委譲する。
+#   正準実行: python -m wu run dedup|detect|subdivide|metrics|cluster|export
+#   (prune はレイアウト用グラフの実験腕 = experiment 分類)。
+# - 挙動は test_subdivide / test_catalog が担保する。
+# - tag 規約: res<R> = 一括マクロ、<tag>_sub(既定 res1_sub)= 2 段階の銀河。
+
 """Full-graph Leiden pipeline for the complete jawiki ns0 graph.
 
 Subcommands (each stage persists to disk; the pipeline is resumable):
@@ -25,17 +40,13 @@ Memory budget (32GB machine):
   metrics    ~3 GB (2 passes + induced-edge buffer ~0.7 GB)
 
 Usage (typical full sequence):
-  python scripts/run_full_leiden.py --base data dedup
-  python scripts/run_full_leiden.py --base data detect --resolutions 0.5,1.0,2.0
-  python scripts/run_full_leiden.py --base data subdivide --resolution 1.0
-  python scripts/run_full_leiden.py --base data metrics --tag res1_sub
-  python scripts/run_full_leiden.py --base data cluster --tag res1_sub
-  python scripts/run_full_leiden.py --base data export  --tag res1_sub
+  python -m wu run dedup detect subdivide metrics cluster export --base data
+  (各ステージの参数は wu/stages/community.py の Param 宣言。override は
+   --set <stage>.<key>=<value>。tag 規約: res<R> = マクロ / res<R>_sub = 銀河)
 Smoke: detect --max-edges 5000000 --force   (then rerun real detect with --force)
 """
 from __future__ import annotations
 
-import argparse
 import datetime
 import json
 import os
@@ -45,25 +56,13 @@ import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wu.dumpio import read_json, write_json  # noqa: E402
-from wu.paths import Dirs  # noqa: E402
-from wu.stats import load_edges_mmap, load_titles  # noqa: E402
+from ..dumpio import now_iso as _now, read_json, write_json  # noqa: E402,F401
+from ..paths import Dirs  # noqa: E402
+from ..stats import load_edges_mmap, load_titles  # noqa: E402
 
-SEED = 42
+from .analysis import SEED  # noqa: E402  # 乱数シードの単一の真実源
 SHIFT = 21  # compact idx < 2^21 = 2,097,152  (jawiki: 1,516,326 articles)
-
-
-def _safe_stdout():
-    try:
-        sys.stdout.reconfigure(errors="replace")
-    except Exception:
-        pass
-
-
-def _now():
-    return datetime.datetime.now().isoformat(timespec="seconds")
 
 
 def _res_tag(res: float) -> str:
@@ -252,15 +251,16 @@ def cmd_detect(dirs: Dirs, resolutions, max_edges: int = 0, seed: int = SEED,
 # ------------------------------------------------------------------ prune --
 
 def cmd_prune(dirs: Dirs, budget: int, mode: str = "smart", seed: int = SEED):
-    """Build a layout graph: degree-budget pruning of the undirected unique graph.
+    """レイアウト用グラフの構築: 無向一意グラフの次数予算剪定。
 
-    smart mode (recommended): keep an edge if its random rank < budget at either
-    endpoint OR either endpoint has undirected degree <= budget. Preserves
-    galaxy structure (low-degree spokes) while thinning hub<->hub highways.
-    Output: graph/edges_pruned_<mode><budget>.bin
-    RAM peak: ~4-5 GB at 108M edges (full arrays + lexsort workspace).
+    smart モード(推奨): どちらかの端点でランダム順位 < budget、または
+    どちらかの端点の無向次数 <= budget ならエッジを残す。
+    銀河構造(低次数のスポーク)を保ちつつ、ハブ同士の「銀河間高速道路」だけを
+    間引く。
+    出力: graph/edges_pruned_<mode><budget>.bin
+    RAM ピーク: 108M エッジで ~4-5 GB(フル配列 + lexsort 作業領域)。
     """
-    from wu.pipeline import prune_edges_degree_budget
+    from ..experiments.hubsup import prune_edges_degree_budget
 
     t0 = time.time()
     E_mm = _load_undirected(dirs)
@@ -291,7 +291,7 @@ def cmd_prune(dirs: Dirs, budget: int, mode: str = "smart", seed: int = SEED):
 
 def _partition_recursive(n_local: int, edges: np.ndarray, objective: str, resolution: float,
                          max_size: int, depth: int, seed: int):
-    """Leiden + recursive splitting of pieces still larger than max_size."""
+    """Leiden + max_size を超える断片の再帰分割。"""
     memb, mod, q = _leiden_once(n_local, edges, objective, resolution, seed=seed)
     info = {"modularity": mod, "quality": q}
     sizes = np.bincount(memb)
@@ -315,12 +315,12 @@ def _partition_recursive(n_local: int, edges: np.ndarray, objective: str, resolu
     return inv.astype(np.int32), info
 
 
-def cmd_subdivide(dirs: Dirs, tag: str, min_size: int = 100, max_galaxy: int = 20000,
+def cmd_subdivide(dirs: Dirs, tag: str, min_size: int = 100, max_galaxy: int = 10000,
                   sub_resolution: float = 1.0, sub_objective: str = "modularity",
                   depth: int = 4, seed: int = SEED, chunk: int = 4_000_000,
                   out_tag: str | None = None, edges_name: str | None = None):
-    """Two-stage refinement: split each macro community internally until every
-    piece is <= max_galaxy nodes. Bypasses the modularity resolution limit."""
+    """2 段階分割: 各マクロコミュニティの内部を、全ての断片が
+    <= max_galaxy ノードになるまで分割する。モジュラリティの解像度限界を回避する。"""
     t0 = time.time()
     outdir = _full_dir(dirs)
     memb_path = os.path.join(outdir, f"membership_{tag}.npy")
@@ -704,114 +704,3 @@ def cmd_export(dirs: Dirs, tag: str, with_clusters: bool = True):
 
 
 # --------------------------------------------------------------------- all --
-
-def cmd_all(dirs: Dirs, resolutions, primary: float, max_edges: int, seed: int):
-    if not os.path.exists(os.path.join(dirs.graph, "edges_undirected_unique.bin")):
-        cmd_dedup(dirs)
-    else:
-        print("[all] dedup: exists, skip")
-    cmd_detect(dirs, resolutions, max_edges=max_edges, seed=seed)
-    if max_edges:
-        print("[all] smoke mode: skipping subdivide/metrics/cluster/export")
-        return
-    ptag = f"res{_res_tag(primary)}"
-    cmd_subdivide(dirs, ptag)
-    stag = f"{ptag}_sub"
-    cmd_metrics(dirs, stag)
-    cmd_cluster(dirs, stag)
-    cmd_export(dirs, stag)
-
-
-def _tag_from_args(a) -> str:
-    if getattr(a, "tag", None):
-        return a.tag
-    if getattr(a, "resolution", None) is not None:
-        return f"res{_res_tag(a.resolution)}"
-    sys.exit("either --tag or --resolution is required")
-
-
-def main():
-    _safe_stdout()
-    ap = argparse.ArgumentParser(prog="run_full_leiden")
-    ap.add_argument("--base", default="data")
-    sub = ap.add_subparsers(dest="cmd", required=True)
-
-    p = sub.add_parser("dedup"); p.add_argument("--chunk", type=int, default=10_000_000)
-    p.add_argument("--edges-in", default="edges_ns0.bin",
-                   help="directed edge bin in graph/ (e.g. edges_body_directed.bin)")
-    p.add_argument("--out-name", default="edges_undirected_unique.bin")
-    p.add_argument("--meta-name", default="dedup_meta.json")
-
-    p = sub.add_parser("detect")
-    p.add_argument("--resolutions", default="0.5,1.0,2.0")
-    p.add_argument("--objective", default="modularity", choices=["modularity", "CPM"])
-    p.add_argument("--max-edges", type=int, default=0, help="smoke: only first N edges")
-    p.add_argument("--seed", type=int, default=SEED)
-    p.add_argument("--force", action="store_true")
-    p.add_argument("--edges", default=None, help="edge file in graph/ (default: edges_undirected_unique.bin)")
-    p.add_argument("--suffix", default="", help="tag suffix, e.g. _B40 -> membership_res1_B40.npy")
-
-    p = sub.add_parser("prune")
-    p.add_argument("--budget", type=int, required=True)
-    p.add_argument("--mode", default="smart", choices=["smart", "both"])
-    p.add_argument("--seed", type=int, default=SEED)
-
-    p = sub.add_parser("subdivide")
-    p.add_argument("--resolution", type=float, default=None)
-    p.add_argument("--tag", default=None)
-    p.add_argument("--edges", default=None)
-    p.add_argument("--min-size", type=int, default=100)
-    p.add_argument("--max-galaxy", type=int, default=20000)
-    p.add_argument("--sub-resolution", type=float, default=1.0)
-    p.add_argument("--sub-objective", default="modularity", choices=["modularity", "CPM"])
-    p.add_argument("--depth", type=int, default=4)
-    p.add_argument("--seed", type=int, default=SEED)
-    p.add_argument("--out-tag", default=None)
-
-    p = sub.add_parser("metrics")
-    p.add_argument("--resolution", type=float, default=None); p.add_argument("--tag", default=None)
-    p.add_argument("--edges", default=None, help="evaluation graph (default: raw unique edges)")
-    p.add_argument("--label", default=None, help="output file tag (default: same as input tag)")
-
-    p = sub.add_parser("cluster")
-    p.add_argument("--resolution", type=float, default=None); p.add_argument("--tag", default=None)
-    p.add_argument("--cluster-resolution", type=float, default=1.0)
-    p.add_argument("--seed", type=int, default=SEED)
-
-    p = sub.add_parser("export")
-    p.add_argument("--resolution", type=float, default=None); p.add_argument("--tag", default=None)
-
-    p = sub.add_parser("all")
-    p.add_argument("--resolutions", default="0.5,1.0,2.0")
-    p.add_argument("--primary", type=float, default=1.0)
-    p.add_argument("--max-edges", type=int, default=0)
-    p.add_argument("--seed", type=int, default=SEED)
-
-    a = ap.parse_args()
-    dirs = Dirs(a.base)
-    if a.cmd == "dedup":
-        cmd_dedup(dirs, chunk=a.chunk, edges_in=a.edges_in,
-                  out_name=a.out_name, meta_name=a.meta_name)
-    elif a.cmd == "detect":
-        cmd_detect(dirs, [float(x) for x in a.resolutions.split(",")],
-                   max_edges=a.max_edges, seed=a.seed, force=a.force, objective=a.objective,
-                   edges_name=a.edges, suffix=a.suffix)
-    elif a.cmd == "prune":
-        cmd_prune(dirs, budget=a.budget, mode=a.mode, seed=a.seed)
-    elif a.cmd == "subdivide":
-        cmd_subdivide(dirs, _tag_from_args(a), min_size=a.min_size, max_galaxy=a.max_galaxy,
-                      sub_resolution=a.sub_resolution, sub_objective=a.sub_objective,
-                      depth=a.depth, seed=a.seed, out_tag=a.out_tag, edges_name=a.edges)
-    elif a.cmd == "metrics":
-        cmd_metrics(dirs, _tag_from_args(a), edges_name=a.edges, label=a.label)
-    elif a.cmd == "cluster":
-        cmd_cluster(dirs, _tag_from_args(a), cluster_resolution=a.cluster_resolution, seed=a.seed)
-    elif a.cmd == "export":
-        cmd_export(dirs, _tag_from_args(a))
-    elif a.cmd == "all":
-        cmd_all(dirs, [float(x) for x in a.resolutions.split(",")],
-                primary=a.primary, max_edges=a.max_edges, seed=a.seed)
-
-
-if __name__ == "__main__":
-    main()

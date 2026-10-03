@@ -1,3 +1,13 @@
+# wu/community/purity.py — カテゴリ純度の計算(purity v2: tf-idf 命名・メタカテゴリ除外)
+#
+# 責務:
+# - リンク由来コミュニティ(銀河)がカテゴリ=主題とどれだけ一致するかを定量し、
+#   銀河名の材料(name 列)を生成する。出力は community/full/purity_<tag>.{parquet,json}。
+#
+# 注意:
+# - main(a) は Namespace 注入でステージから呼ばれる(test_catalog が挙動を担保)。
+#   正準実行は python -m wu run purity(入力は membership + categories 系成果物)。
+
 """E4 v2: Category purity of communities with meta-category filtering.
 
 Problem with v1: ubiquitous maintenance categories (すべてのスタブ記事, 存命人物,
@@ -15,11 +25,10 @@ v2 additions:
 Raw (unfiltered) stats are kept for comparability.
 
 Usage:
-  python scripts/community_purity.py --base data --tag res1_sub [--max-cat-freq 20000]
+  python -m wu run purity --base data --galaxy-tag res1_sub
 """
 from __future__ import annotations
 
-import argparse
 import datetime
 import json
 import os
@@ -27,23 +36,14 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wu.dumpio import write_json  # noqa: E402
-from wu.paths import Dirs  # noqa: E402
+from ..dumpio import write_json  # noqa: E402
+from ..paths import Dirs  # noqa: E402
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default="data")
-    ap.add_argument("--tag", required=True)
-    ap.add_argument("--top", type=int, default=15)
-    ap.add_argument("--max-cat-freq", type=int, default=20000,
-                    help="categories with more member articles are treated as meta "
-                         "and excluded from naming/filtered purity")
-    ap.add_argument("--name-th", type=float, default=0.30,
-                    help="top1_share_filt threshold for 'nameable' communities")
-    a = ap.parse_args()
+def main(a):
+    # a=None のときだけ CLI 引数を解析する(ステージからは Namespace を注入
+    # して呼ぶ = 引数解析と処理本体の分離。既存の CLI 挙動は不変)。
     dirs = Dirs(a.base)
 
     import pyarrow as pa
@@ -68,7 +68,7 @@ def main():
     idf = np.log(max(1, n) / np.maximum(1, cat_freq))
 
     def seg_stats(mask_pairs: np.ndarray, use_idf: bool):
-        """Return per-community segment arrays over filtered pairs."""
+        """フィルタ済みペア上のコミュニティ別セグメント配列を返す。"""
         cm, ct = comm[mask_pairs], cat[mask_pairs]
         key = cm * K + ct
         uk, cnt = np.unique(key, return_counts=True)
@@ -205,6 +205,3 @@ def main():
             break
     print(f"\nwrote {out_pq}")
 
-
-if __name__ == "__main__":
-    main()

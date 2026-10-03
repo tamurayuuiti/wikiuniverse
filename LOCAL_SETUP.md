@@ -28,21 +28,27 @@ wikiuniverse/
 ├── LOCAL_SETUP.md          # 本書
 ├── PROVENANCE.json         # 基準ダンプ(2026-09-02 版)の SHA-256(完全性検証用)
 ├── requirements.txt        # Python 依存(検証バージョン準拠)
+├── configs/                # 設定(追跡ファイル = 単一の真実源)
+│   ├── canonical.json      #   正式パイプラインの正準パラメータ
+│   └── publish.json        #   出版中の正典座標 run(ACTIVE_LAYOUT_RUN の真実源)
 ├── wu/                     # 本体パッケージ(純 Python)
-│   ├── paths.py            #   ★ データ配置の単一の真実源(Dirs + ACTIVE_LAYOUT_RUN)
+│   ├── paths.py            #   ★ データ配置の単一の真実源(Dirs)
+│   ├── pipeline/           #   パイプライン基盤(成果物契約/ステージ宣言/設定/ランナー)
+│   ├── stages/             #   ステージ実体(import 順 = 正式チェーン順)
 │   ├── dumpio.py           #   ダウンロード(resume/並列)・gz ストリーム
 │   ├── sqlparse.py         #   page/linktarget/redirect 解析 → ハッシュ表(parsed/)
 │   ├── xmlparse.py         #   pages-articles XML → 本文リンク抽出(body-edges)
 │   ├── catparse.py         #   categorylinks → 記事×カテゴリ対(categories)
 │   ├── buildedges.py       #   pagelinks → 解決済みエッジ(チェックポイント resume 可)
 │   ├── stats.py            #   全グラフ次数統計・ハブ top
-│   ├── subsets.py          #   BFS / ID窓 サブセット抽出(メガハブ除外付き)
-│   ├── analysis.py         #   Leiden(igraph/leidenalg)・指標・L2 階層化
-│   ├── pipeline.py         #   エンドツーエンド解析(sweep→一次選択→hub 処理→レポート)
-│   ├── report.py           #   プロット + Markdown レポート
-│   └── cli.py              #   サブコマンド(python -m wu.cli ...)
-├── scripts/                # フルグラフ系 9 本(run_full_leiden / layout_* / catalog / export 他)
-├── tests/                  # 合成データ自己テスト 6 本(スクリプト式・synth_data/ は実行時再生成)
+│   ├── publish.py          #   Viewer 公開面の生成(spatial/、SCHEMA_VERSION 付き)
+│   ├── community/          #   コミュニティ検出+カタログ本体(fullgraph/analysis/purity/catalog)
+│   ├── layout/             #   座標生成本体(layout_global/layout_local/parallel/recompose)
+│   ├── audit/              #   読み取り専用監査 3 本(tiles/names/layout)
+│   ├── experiments/        #   [実験] サブセット抽出・端到解析・ハブ抑制・レポート・
+│   │                       #   本文次数比較ツール(canonical チェーン外)
+│   └── cli.py              #   python -m wu <sub>(stages/plan/run + subset-id/subset-bfs/analyze)
+├── tests/                  # スクリプト式テスト 10 本 + fixture.py(共有合成データ)
 ├── viewer/                 # React+TS+three ビューア(v6)
 ├── notebooks/poc_colab.ipynb  # Colab 実行版 PoC(閲覧用)
 └── results/SUMMARY.md      # ★ 評価レポート(最新状態・テーマ別)
@@ -63,8 +69,9 @@ data/
 └── spatial/     # [成果=配信] ビューア公開面(bootstrap.json + tiles/)。URL は run 名と無縁
 ```
 
-- パスを触る改修は `wu/paths.py` の `Dirs` クラスと `ACTIVE_LAYOUT_RUN` に集約する
-  (ハードコード禁止の運用)。ファイル別の生成者/消費者/削除可否の完全版は
+- パスを触る改修は `wu/paths.py` の `Dirs` クラスと成果物レジストリ
+  (`wu/pipeline/artifacts.py`)に集約する(ハードコード禁止の運用)。
+  正典 run 名は `configs/publish.json`。ファイル別の生成者/消費者/削除可否の完全版は
   paths.py の docstring が正典。
 - community の tag 規約: `res<R>`=マクロ一括 / `res<R>_sub`=2 段階(銀河)/
   `_body`=本文リンクグラフ / `_B40` 等=剪定グラフ系。
@@ -106,7 +113,7 @@ python tests/test_catalog.py      # カタログ→レイアウト→タイル�
 
 ```bash
 cd wikiuniverse
-python -m wu.cli --base data download --files page,redirect,linktarget,pagelinks
+python -m wu --base data run download   # 既定4種(追加: --set download.files=…)
 # → data/dump/ に 4 ファイル(~1.13GB)。中断しても再実行で続きから取得。
 ```
 
@@ -148,13 +155,13 @@ sha256sum data/dump/*.gz   # Windows: certutil -hashfile <file> SHA256
 cd wikiuniverse
 
 # (1) ページ/リダイレクト/linktarget 解析 → data/parsed/(合計 ~1分)
-python -m wu.cli --base data parse --dump-date 2026-09-02
+python -m wu --base data run parse --set parse.dump_date=2026-09-02
 
 # (2) pagelinks 全行ストリーム解析 → data/graph/edges_ns0.bin(~2-5分)
-python -m wu.cli --base data edges
+python -m wu --base data run edges
 
 # (3) 全グラフ統計(~1分)
-python -m wu.cli --base data stats
+python -m wu --base data run stats
 ```
 
 ### 検証値(2026-09-02 版ダンプなら完全一致するはず)
@@ -178,11 +185,11 @@ python -m wu.cli --base data stats
 README「使い方(サブセット解析)」の通り `subset-bfs` → `analyze`。代表例(地理系 100k):
 
 ```bash
-python -m wu.cli --base data subset-bfs \
+python -m wu --base data subset-bfs \
   --seeds "東京都,大阪府,京都府,北海道,福岡県,愛知県,宮城県,広島県,新潟県,長野県,日本の地理,市町村" \
   --max-nodes 100000 --cap 60 --hops 4 --max-in-degree 10000 --name bfs_geo_100k
 
-python -m wu.cli --base data analyze --subset bfs_geo_100k \
+python -m wu --base data analyze --subset bfs_geo_100k \
   --resolutions 0.5,1.0,2.0 --engine igraph
 # 出力先: data/community/bfs_geo_100k/(--out-dir で変更可。場所はどこでもよい)
 ```
@@ -194,41 +201,33 @@ Leiden には乱択性があるため **membership の完全一致は保証さ�
 
 ## 6. フルパイプライン → 座標出版(run 運用)
 
-§4 のグラフ構築が済んだら、以下が本番データの一本道(各コマンドの詳細と期待値は
-README の該当セクション、実測結果は results/SUMMARY.md):
+§4 のグラフ構築が済んだら、以下が本番データの一本道。**正準エントリは
+`python -m wu run`**(ステージレジストリ + ランナー。実行計画の dry-run は
+`python -m wu plan …`、契約一覧は `python -m wu stages`、実行のたびに
+`data/manifests/` へ台帳が記録される)。実行経路はこれに一本化されている
+(バッチ分割・preview 等の細粒度操作だけモジュール CLI `python -m wu.layout.layout_local`)。
 
 ```bash
-# 1) コミュニティ検出(マクロ → 銀河の 2 段階)
-python scripts/run_full_leiden.py --base data dedup
-python scripts/run_full_leiden.py --base data detect --resolutions 1.0
-python scripts/run_full_leiden.py --base data subdivide --resolution 1.0 --max-galaxy 10000
-python scripts/run_full_leiden.py --base data metrics --tag res1_sub
-python scripts/run_full_leiden.py --base data cluster --tag res1_sub
-python scripts/run_full_leiden.py --base data export  --tag res1_sub
+# 1) コミュニティ検出(マクロ → 銀河の 2 段階)+ 純度 + 銀河カタログ
+python -m wu run dedup detect subdivide metrics cluster export purity catalog --base data
+#   tag 等の正準値はステージ定義の既定(res1 → res1_sub・max_galaxy 10000・
+#   purity v2・catalog topK)。変える場合は --set subdivide.max_galaxy=… 等で
 
-# 2) (任意) 本文リンク・カテゴリ: README「本文リンクグラフ」「カテゴリ整合性」
+# 2) (任意) 本文リンク・剪定腕: python -m wu run body_edges / prune --set …
 
-# 3) 銀河カタログ(data/final/ = データ契約)
-python scripts/build_galaxy_catalog.py --base data --galaxy-tag res1_sub --macro-tag res1
-
-# 3b) 銀河団ラベルのキュレーション: 正典コピー(リポジトリ追跡下)は
-#     results/macro_label_overrides.json。data/final/ へコピーすると (5) の出版時に
-#     適用される。編集し直す場合はテンプレ出力 → label 編集 → data/final/ に保存 →
-#     変更を正典コピーにも反映(両方まとめてコミット)
+# 3) 銀河団ラベルのキュレーション: 正典コピー(リポジトリ追跡下)は
+#    results/macro_label_overrides.json。data/final/ へコピーすると出版時に
+#    適用される。編集し直す場合はテンプレ出力 → label 編集 → data/final/ に保存 →
+#    変更を正典コピーにも反映(両方まとめてコミット)
 cp results/macro_label_overrides.json data/final/macro_label_overrides.json
-python scripts/audit_names.py --base data --dump-macro-labels   # テンプレ再生成(見直し用)
+python -m wu run audit_names --base data --set audit_names.dump_macro_labels=true
 
-# 4) 座標 run の生成(① マクロ+銀河 → ② 銀河内記事 → マージ)
-python scripts/layout_global.py      --base data --run <RUN> --macro-dim 3
-python scripts/run_local_parallel.py --base data --run <RUN>   # jobs 既定=CPU 数
-#   初回のみ共有事前計算(data/graph/local_prep/<tag>/、数分・全 run で共用)が走り、
-#   その後 LPT 分割の並列ジョブ → 走査なしマージ。フルランの目安は B0 基盤導入前で
-#   ~63分(jobs 8・2026-09-26 実測)、導入後の実測は knowledge/02 §O を更新予定
+# 4) 座標 run の生成(マクロ+銀河 → 銀河内記事 → 出版)を新 run 名で
+python -m wu run layout_global layout_local publish --base data --run <RUN>
+#   layout_local は並列ランチャ経由(事前計算 local_prep は初回のみ数分・全 run 共用、
+#   LPT 分割の並列ジョブ → 走査なしマージ)。フルランの目安 ~5分(jobs=CPU 数)
 
-# 5) 出版(spatial/ へ。ビューアは常にここを読む)
-python scripts/export_viewer_tiles.py --base data --run <RUN>
-
-# 6) 配信とビューア
+# 5) 配信とビューア
 python -m http.server 8000        # リポジトリルート(別ターミナル)
 cd viewer && npm install && npm run dev    # http://localhost:5173
 ```
@@ -238,14 +237,17 @@ cd viewer && npm install && npm run dev    # http://localhost:5173
 - run 名 = `data/layout/` 直下のディレクトリ名。**規約: `<YYYYMMDD>_<slug>`**
   (ASCII 小文字。日付は生成日、slug は「その run が何か」= 役割・主要パラメータ)。
   正確なパラメータと品質指標は各 run の `layout_meta.json` が正典。
-- **正典ポインタ**: `wu/paths.py` の `ACTIVE_LAYOUT_RUN`。全レイアウト系スクリプト
-  (layout_global / layout_local / run_local_parallel / export_viewer_tiles)の `--run`
+- **正典ポインタ**: `configs/publish.json` の `active_layout_run`(wu/paths.py の
+  `ACTIVE_LAYOUT_RUN` がここから読む)。全レイアウト系コマンド
+  (layout_global / layout_local / recompose / publish=export)の `--run`
   既定値であり、「いま公開中の座標」を指す。
-- 新しい座標 run を**採用**する手順: 4)→5) を新 run 名で実行 →
-  `wu/paths.py` の `ACTIVE_LAYOUT_RUN` を新 run 名に更新してコミット。
+- 新しい座標 run を**採用**する手順: 4) を新 run 名で実行 →
+  `configs/publish.json` を新 run 名に更新してコミット → `python -m wu run publish`
+  で再出版(ビューアは常に spatial/ を読むので URL は不変)。
   比較実験は run を並べるだけでよい(上書き事故が起きない)。
-- 既存 run の記事座標を再利用する場合は 4) の run_local_parallel の代わりに
-  `python scripts/recompose_articles.py --base data --from-run <旧RUN> --to-run <新RUN>`。
+- 既存 run の記事座標を再利用する場合は 4) の layout_local の代わりに
+  `python -m wu run recompose --set recompose.from_run=<旧RUN> --set recompose.to_run=<新RUN>`
+  (`--set recompose.from_run=<旧RUN> --set recompose.to_run=<新RUN>`)。
 - `article_shards/` と `layout_local_checkpoint.json` はマージ完了後削除してよい(キャッシュ)。
 - 退役した旧 run は `data/layout/` の外(リポジトリ直下 `archive/` など、Git 管理外の
   保管場所)へ移動すればよい。
@@ -262,7 +264,7 @@ cd viewer && npm install && npm run dev    # http://localhost:5173
 | Windows で RSS が高止まり | `malloc_trim` 不在のため。WSL2 なら Linux と同挙動 |
 | 数値が検証値と微妙に違う | ダンプが更新されている可能性(§3 の SHA-256 確認) |
 | ビューアがデータを取得できない | リポジトリルートで `python -m http.server 8000` が起動しているか(vite proxy の転送先)。file:// 直オープンは CORS で不可 |
-| 星の hover 名が `local#NN` になる | 記事が無いのではなく**タイトルが引けていない**状態。①`python scripts/audit_tiles.py --base data` でサイドカー(`spatial/tiles/gal_*.json`)の欠落・不足を計測(欠落があれば `export_viewer_tiles.py` を再実行)②データ側が 0 件ならビューア側のタイル LRU 追い出しが原因(浮上中銀河は `pinTiles` で保護・`Entry.titles` 参照で hover 名をキャッシュ状態から独立させ済み。DevTools の `[tile N] サイドカー…` 警告で判別) |
-| 銀河名が「〜のスタブ」等のまま | 保守サフィックスは語幹正規化済み(`build_galaxy_catalog.py` の `_stem_name`)。`python scripts/audit_names.py --base data` で再計測し、残存パターンがあれば `MAINT_SUFFIX_RE` か `NAME_BLACKLIST` に追加 → catalog + export 再実行(再 Leiden/再レイアウト不要) |
-| 銀河団ラベルが「ISBN」「地理座標系」等ハブ記事名になる | 既定導出(rep_titles 先頭 16 文字)の限界。リポジトリ同梱のキュレーション表(正典)`results/macro_label_overrides.json` を `data/final/` へコピー → `export_viewer_tiles.py` 再実行(§6 の 3b)。編集し直す場合: `python scripts/audit_names.py --base data --dump-macro-labels` → `final/macro_label_overrides.template.json` の label を編集 → `final/macro_label_overrides.json` として保存(正典コピーへの反映も忘れずに) |
-| 銀河団が平坦(円盤状)に見える / `layout_meta.json` の `galaxy_spill_count > 0` | `python scripts/audit_layout.py --base data --run <RUN>` で計測する(読み取り専用・再計算なし): ①spill 一覧(超過順、r/Rm・マクロ規模・銀河名などの文脈列付き)②マクロ毎の平坦度 + 重心配置率(medium + 孤立銀河の成員比)③両者の相関(円盤化 = 重心配置銀河の境界付近への集中という仮説の定量検証)。`layout_meta.json` の quality 数値と突合し、不一致は警告する |
+| 星の hover 名が `local#NN` になる | 記事が無いのではなく**タイトルが引けていない**状態。①`python -m wu run audit_tiles --base data` でサイドカー(`spatial/tiles/gal_*.json`)の欠落・不足を計測(欠落があれば `python -m wu run publish` を再実行)②データ側が 0 件ならビューア側のタイル LRU 追い出しが原因(浮上中銀河は `pinTiles` で保護・`Entry.titles` 参照で hover 名をキャッシュ状態から独立させ済み。DevTools の `[tile N] サイドカー…` 警告で判別) |
+| 銀河名が「〜のスタブ」等のまま | 保守サフィックスは語幹正規化済み(`wu/community/catalog.py` の `_stem_name`)。`python -m wu run audit_names --base data` で再計測し、残存パターンがあれば `MAINT_SUFFIX_RE` か `NAME_BLACKLIST` に追加 → `python -m wu run catalog publish` 再実行(再 Leiden/再レイアウト不要) |
+| 銀河団ラベルが「ISBN」「地理座標系」等ハブ記事名になる | 既定導出(rep_titles 先頭 16 文字)の限界。リポジトリ同梱のキュレーション表(正典)`results/macro_label_overrides.json` を `data/final/` へコピー → `python -m wu run publish` 再実行(§6 の 3b)。編集し直す場合: `python -m wu run audit_names --base data --set audit_names.dump_macro_labels=true` → `final/macro_label_overrides.template.json` の label を編集 → `final/macro_label_overrides.json` として保存(正典コピーへの反映も忘れずに) |
+| 銀河団が平坦(円盤状)に見える / `layout_meta.json` の `galaxy_spill_count > 0` | `python -m wu run audit_layout --base data --run <RUN>` で計測する(読み取り専用・再計算なし): ①spill 一覧(超過順、r/Rm・マクロ規模・銀河名などの文脈列付き)②マクロ毎の平坦度 + 重心配置率(medium + 孤立銀河の成員比)③両者の相関(円盤化 = 重心配置銀河の境界付近への集中という仮説の定量検証)。`layout_meta.json` の quality 数値と突合し、不一致は警告する |

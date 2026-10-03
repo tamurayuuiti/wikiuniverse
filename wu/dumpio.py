@@ -1,4 +1,4 @@
-"""Download + streaming decompression helpers for Wikimedia SQL dumps."""
+"""Wikimedia SQL ダンプのダウンロードとストリーミング解凍のヘルパ。"""
 from __future__ import annotations
 
 import gzip
@@ -24,7 +24,7 @@ FILES = {
 
 
 def download_file(url: str, dest: str, ua: str = DEFAULT_UA, log=print) -> str:
-    """Resumable single-file download."""
+    """resume 対応の単一ファイルダウンロード。"""
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     have = os.path.getsize(dest) if os.path.exists(dest) else 0
     headers = {"User-Agent": ua}
@@ -61,7 +61,7 @@ def download_file(url: str, dest: str, ua: str = DEFAULT_UA, log=print) -> str:
 
 
 def download_all(names, dump_dir: str, workers: int = 3, log=print):
-    """Download several dump files in parallel threads (per-connection speed is limited)."""
+    """複数のダンプファイルを並列スレッドでダウンロードする(1 接続あたりの速度に制限があるため)。"""
     os.makedirs(dump_dir, exist_ok=True)
     errs = []
 
@@ -94,16 +94,16 @@ def download_all(names, dump_dir: str, workers: int = 3, log=print):
 
 
 def open_gz_counting(path: str):
-    """Yield (decompressed_bytes_read_so_far_callable, fileobj)."""
+    """(これまでに読んだ解凍後バイト数の取得関数, ファイルオブジェクト)を返す。"""
     f = gzip.open(path, "rb")
     return f
 
 
 def stream_decompressed(path: str, chunk_bytes: int = 1 << 26, skip_to: int = 0):
-    """Yield (offset_after_chunk, chunk) of decompressed bytes.
+    """(チャンク後のオフセット, 解凍後バイトのチャンク)を yield する。
 
-    If skip_to > 0, fast-forwards (decompress & discard) to that decompressed
-    offset before yielding. Used for checkpointed resume.
+    skip_to > 0 のときは、指定の解凍後オフセットまで高速送り(解凍して破棄)
+    してから yield を始める。チェックポイント resume に使う。
     """
     off = 0
     with gzip.open(path, "rb") as f:
@@ -143,9 +143,16 @@ def sha256_of(path: str, limit: int | None = None) -> str:
     return h.hexdigest()[:16]
 
 
+def now_iso() -> str:
+    """現在時刻の ISO 文字列(秒精度)。meta 系の generated_at 用の
+    単一実装(時刻関数の重複定義を防ぐ)。"""
+    import datetime
+    return datetime.datetime.now().isoformat(timespec="seconds")
+
+
 def read_json(path, default=None):
-    """UTF-8 first; fall back to cp932 for files written on Windows before the
-    encoding fix (2026-09-25). Prints a warning when the fallback triggers."""
+    """UTF-8 優先で読み、UTF-8 強制以前に Windows で書き出されたファイルには
+    cp932 へフォールバックする。フォールバック時は警告を表示する。"""
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as f:

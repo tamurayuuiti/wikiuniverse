@@ -1,3 +1,10 @@
+# wu/audit/names.py — 銀河/銀河団の命名監査(読み取り専用・再計算なし)
+#
+# 責務: build_galaxy_catalog が実際に決めた名前(name_source 分布・保守ラベル残存・
+#   上位銀河の名前)と、ビューアに出る銀河団ラベル(既定導出 + オーバーライド)を報告する。
+#   --dump-macro-labels で編集可能なオーバーライド表のテンプレートを出力する。
+# 注意: 正準実行は python -m wu run audit_names(読み取り専用・再計算なし)。
+
 """Audit galaxy/macro naming in data/final/ — read-only, no recompute.
 
 `build_galaxy_catalog.py` decides every display name. This script reports what
@@ -27,20 +34,18 @@ names) to data/final/macro_label_overrides.template.json; export_viewer_tiles.py
 applies non-empty labels from macro_label_overrides.json at publish time.
 
 Usage:
-  python scripts/audit_names.py --base data [--top 25] [--dump-macro-labels]
+  python -m wu run audit_names --base data   (--set audit_names.top=N 等)
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
 import sys
 from collections import Counter
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wu.paths import Dirs  # noqa: E402
+from ..paths import Dirs  # noqa: E402
 
 # 「主題名ではなく保守ラベルに見える」名前の検出用(報告専用。除外はしない)。
 SUSPECT = {
@@ -57,14 +62,8 @@ SUSPECT = {
 }
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default="data")
-    ap.add_argument("--top", type=int, default=25)
-    ap.add_argument("--dump-macro-labels", action="store_true",
-                    help="write final/macro_label_overrides.template.json "
-                         "(editable macro-label override template)")
-    a = ap.parse_args()
+def main(a) -> int:
+    # a=None のときだけ CLI 引数を解析する(ステージは Namespace 注入で呼ぶ)。
     dirs = Dirs(a.base)
 
     import pyarrow.parquet as pq
@@ -179,7 +178,7 @@ def main() -> int:
                 json.dump(tmpl, f, ensure_ascii=False, indent=1)
             print(f"\n[names] テンプレート出力: {out_p} (実効マクロ {len(tmpl['macros'])} 件)")
             print("        label を編集して data/final/macro_label_overrides.json として保存し、")
-            print("        python scripts/export_viewer_tiles.py --base data を再実行してください。")
+            print("        python -m wu run publish --base data を再実行してください。")
     else:
         print(f"\n[names] macros.parquet が見つかりません: {mp}")
 
@@ -187,6 +186,3 @@ def main() -> int:
           "(スタブ系は語幹正規化後は 0 件になっているはず)。")
     return 0
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())

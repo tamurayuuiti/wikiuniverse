@@ -1,6 +1,6 @@
-"""Regression test for `subdivide` (scripts/run_full_leiden.py).
+"""Regression test for `subdivide` (wu/community/fullgraph.py).
 
-Guards against the duplicate-index scatter bug (2026-09-26): induced-edge
+Guards against the duplicate-index scatter bug: induced-edge
 bucketing must deliver the REAL subgraph to the per-community Leiden, so a
 dense chain community must split into coherent multi-node pieces -- never into
 singletons.
@@ -18,7 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
-from test_synthetic import BASE, build_fixtures  # noqa: E402
+from fixture import BASE, build_fixtures  # noqa: E402
 
 
 def main():
@@ -41,12 +41,7 @@ def main():
     build_edges(dirs.dump_file(FILES["pagelinks"]), dirs.parsed, dirs.edges_bin,
                 dirs.edges_ckpt, chunk_bytes=1 << 20)
 
-    sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "run_full_leiden", os.path.join(os.path.dirname(HERE), "scripts", "run_full_leiden.py"))
-    rfl = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(rfl)
+    import wu.community.fullgraph as rfl
 
     rfl.cmd_dedup(dirs)
     rfl.cmd_detect(dirs, [1.0], force=True)

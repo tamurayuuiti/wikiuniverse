@@ -1,16 +1,19 @@
-"""CLI entry point: python -m wu.cli <command> [options]
+"""CLI entry point: python -m wu <command> [options]
 
-Data layout (policy 2026-09-25, see wu/paths.py):
-  <base>/dump/  <base>/parsed/  <base>/graph/(+subsets/)  <base>/community/
+正式パイプラインの実行系はステージレジストリ経由(stages / plan / run)。
+取得・解析・コミュニティ検出・カタログ・座標・出版・監査はすべて
+`python -m wu run <stage>` で実行する(契約は wu/stages/ と wu/pipeline/)。
 
-Commands:
-  download   Download dump files (page, redirect, linktarget, pagelinks[, categorylinks])
-  parse      Build parsed artifacts from page/linktarget/redirect dumps
-  edges      Stream pagelinks -> resolved ns0 edge list (checkpointed)
-  stats      Full-graph degree/hub statistics
-  subset-id  Extract page-id-window subset (contrast/baseline use)
+研究・実験系コマンド(ステージ化していないもの):
+  subset-id  Extract page-id-window subset (対照/ベースライン用)
   subset-bfs Extract BFS subset from seed titles
   analyze    Leiden + metrics + hierarchy + report for one subset
+
+Pipeline (stage registry + config + runner; see wu/pipeline/):
+  stages     List registered stages with their input/output contracts
+  plan       Show the execution plan (run/skip/missing-input) without side effects
+  run        Execute stages (name... or "all") and record a manifest under
+             data/manifests/ (resume = existing outputs are skipped, --force to redo)
 """
 from __future__ import annotations
 
@@ -19,55 +22,12 @@ import datetime
 import os
 import sys
 
-from .dumpio import download_all, read_json, write_json
+from .dumpio import read_json
 from .paths import Dirs
 
 
-def cmd_download(a):
-    dirs = Dirs(a.base)
-    dirs.ensure(dirs.dump)
-    download_all(a.files.split(","), dirs.dump, workers=a.workers)
-
-
-def cmd_parse(a):
-    from .dumpio import FILES
-    from .sqlparse import (build_linktarget_artifacts, build_page_artifacts,
-                           build_redirect_artifacts)
-    dirs = Dirs(a.base)
-    dirs.ensure(dirs.parsed)
-    build_page_artifacts(dirs.dump_file(FILES["page"]), dirs.parsed, dirs.meta)
-    build_linktarget_artifacts(dirs.dump_file(FILES["linktarget"]), dirs.parsed, dirs.meta)
-    build_redirect_artifacts(dirs.dump_file(FILES["redirect"]), dirs.parsed, dirs.meta)
-    meta = read_json(dirs.meta, {}) or {}
-    meta["dump_date"] = a.dump_date or meta.get("dump_date") or "unknown"
-    meta["parsed_at"] = datetime.datetime.now().isoformat(timespec="seconds")
-    meta.setdefault("files", {})
-    for k in ("page", "redirect", "linktarget", "pagelinks"):
-        f = dirs.dump_file(FILES[k])
-        if os.path.exists(f):
-            meta["files"][k] = {"bytes": os.path.getsize(f), "name": FILES[k]}
-    meta.setdefault("layout", {"policy": "2026-09-25",
-                               "dirs": {"dump": dirs.dump, "parsed": dirs.parsed,
-                                        "graph": dirs.graph, "community": dirs.community}})
-    write_json(dirs.meta, meta)
-
-
-def cmd_edges(a):
-    from .buildedges import build_edges
-    from .dumpio import FILES
-    dirs = Dirs(a.base)
-    dirs.ensure(dirs.graph)
-    build_edges(dirs.dump_file(FILES["pagelinks"]), dirs.parsed,
-                dirs.edges_bin, dirs.edges_ckpt, chunk_bytes=a.chunk_bytes)
-
-
-def cmd_stats(a):
-    from .stats import full_stats
-    full_stats(Dirs(a.base))
-
-
 def cmd_subset_id(a):
-    from .subsets import extract_subset, select_id_window
+    from .experiments.subsets import extract_subset, select_id_window
     dirs = Dirs(a.base)
     pids = select_id_window(dirs.parsed, a.k, a.mode)
     name = a.name or f"idwin_{a.mode}_{a.k // 1000}k"
@@ -79,7 +39,7 @@ def cmd_subset_id(a):
 
 
 def cmd_subset_bfs(a):
-    from .subsets import bfs_nodes, extract_subset, title_to_pid
+    from .experiments.subsets import bfs_nodes, extract_subset, title_to_pid
     dirs = Dirs(a.base)
     seeds = [s.strip() for s in a.seeds.split(",") if s.strip()]
     seed_pids, missing = [], []
@@ -105,33 +65,8 @@ def cmd_subset_bfs(a):
     extract_subset(dirs.edges_bin, nodes, out, meta, parsed_dir=dirs.parsed)
 
 
-def cmd_categories(a):
-    from .catparse import build_category_artifacts
-    from .dumpio import FILES
-    dirs = Dirs(a.base)
-    dirs.ensure(dirs.graph)
-    build_category_artifacts(dirs.dump_file(FILES["categorylinks"]),
-                             dirs.dump_file(FILES["linktarget"]),
-                             dirs.parsed, dirs.graph, meta_path=dirs.meta)
-
-
-def cmd_body_edges(a):
-    from .xmlparse import build_body_edges
-    from .dumpio import FILES
-    dirs = Dirs(a.base)
-    dirs.ensure(dirs.graph)
-    xml = a.xml or dirs.dump_file(FILES[a.source])
-    if not os.path.exists(xml):
-        sys.exit(f"XML dump not found: {xml}\n"
-                 f"download: python -m wu.cli --base {a.base} download --files {a.source}")
-    build_body_edges(xml, dirs.parsed,
-                     os.path.join(dirs.graph, a.out_name),
-                     os.path.join(dirs.graph, "body_checkpoint.json"),
-                     limit_pages=a.limit_pages, strip_refs=a.strip_refs)
-
-
 def cmd_analyze(a):
-    from .pipeline import analyze_subset
+    from .experiments.subset_analysis import analyze_subset
     dirs = Dirs(a.base)
     subset_dir = a.subset_dir or dirs.subset(a.subset)
     out_dir = a.out_dir or dirs.community_run(os.path.basename(subset_dir.rstrip("/")))
@@ -149,6 +84,68 @@ def _dump_date(dirs: Dirs) -> str:
     return m.get("dump_date", "?")
 
 
+def cmd_stages(a):
+    """登録済みステージの一覧(分類・入出力契約・パラメータ)を表示する。"""
+    import wu.stages  # noqa: F401  (import によりステージが登録される)
+    from .pipeline.stage import all_stages
+    groups = {}
+    for st in all_stages():
+        groups.setdefault(st.group, []).append(st)
+    print("[wu] 登録済みステージ(group = canonical 正式 / optional 随伴 /"
+          " audit 読み取り専用監査 / experiment 研究・実験系):")
+    for g in ("canonical", "optional", "audit", "experiment"):
+        for st in groups.get(g, []):
+            print(f"\n  {st.name}  [{g}]  {st.title}")
+            if st.inputs:
+                print(f"    in : {', '.join(st.inputs)}")
+            if st.outputs:
+                print(f"    out: {', '.join(st.outputs)}")
+            for p in st.params:
+                ch = f" choices={list(p.choices)}" if p.choices else ""
+                print(f"    --{p.name.replace('_', '-')}"
+                      f" (既定 {p.default!r}{ch}): {p.help}")
+
+
+def _pipeline_args(a):
+    """plan/run 共通: 設定読み込み + 共有パラメータ解決。"""
+    import wu.stages  # noqa: F401
+    from .pipeline import config as pcfg
+    cfg = pcfg.load(a.config)
+    cfg = pcfg.apply_overrides(cfg, getattr(a, "overrides", None))
+    shared = pcfg.shared_params(cfg, {
+        "run": getattr(a, "run", None),
+        "galaxy_tag": getattr(a, "galaxy_tag", None),
+        "macro_tag": getattr(a, "macro_tag", None),
+        "dump_date": getattr(a, "dump_date", None),
+    })
+    return cfg, shared
+
+
+def cmd_plan(a):
+    """実行計画(実行/スキップ/入力不足)を表示する(dry-run。副作用なし)。"""
+    from .pipeline import runner
+    from .paths import Dirs
+    cfg, shared = _pipeline_args(a)
+    stages = runner.expand_targets(a.targets)
+    entries = runner.plan(stages, Dirs(a.base), cfg, shared, force=a.force)
+    print(runner.format_plan(entries))
+
+
+def cmd_run(a):
+    """ステージを実行し、実行台帳(manifest)を data/manifests/ へ記録する。"""
+    from .pipeline import runner
+    from .paths import Dirs
+    cfg, shared = _pipeline_args(a)
+    stages = runner.expand_targets(a.targets)
+    entries = runner.plan(stages, Dirs(a.base), cfg, shared, force=a.force)
+    print(runner.format_plan(entries))
+    label = a.label or "-".join(t for t in a.targets)[:40]
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    rc = runner.execute(entries, Dirs(a.base), cfg, shared, label,
+                        repo_root=repo_root)
+    sys.exit(rc)
+
+
 def main():
     # Windows コンソール(cp932 等)で日本語タイトル出力時にクラッシュしないための保険
     try:
@@ -159,13 +156,6 @@ def main():
     ap.add_argument("--base", default="data",
                     help="base dir; layout: dump/ parsed/ graph/ community/ (see wu/paths.py)")
     sub = ap.add_subparsers(dest="cmd", required=True)
-
-    p = sub.add_parser("download"); p.add_argument("--files", default="page,redirect,linktarget,pagelinks")
-    p.add_argument("--workers", type=int, default=3); p.set_defaults(fn=cmd_download)
-
-    p = sub.add_parser("parse"); p.add_argument("--dump-date", default=None); p.set_defaults(fn=cmd_parse)
-    p = sub.add_parser("edges"); p.add_argument("--chunk-bytes", type=int, default=1 << 24); p.set_defaults(fn=cmd_edges)
-    p = sub.add_parser("stats"); p.set_defaults(fn=cmd_stats)
 
     p = sub.add_parser("subset-id")
     p.add_argument("--k", type=int, default=10000); p.add_argument("--mode", default="late",
@@ -178,19 +168,6 @@ def main():
     p.add_argument("--max-in-degree", type=int, default=10000)
     p.add_argument("--seed", type=int, default=42); p.add_argument("--name", default=None)
     p.set_defaults(fn=cmd_subset_bfs)
-
-    p = sub.add_parser("categories"); p.set_defaults(fn=cmd_categories)
-
-    p = sub.add_parser("body-edges")
-    p.add_argument("--source", default="pages-articles",
-                   choices=["pages-articles", "pages-articles1"],
-                   help="which dump file key to use when --xml is not given")
-    p.add_argument("--xml", default=None, help="explicit path to pages-articles*.xml.bz2")
-    p.add_argument("--out-name", default="edges_body_directed.bin")
-    p.add_argument("--limit-pages", type=int, default=0, help="process at most N pages (0=all)")
-    p.add_argument("--strip-refs", action="store_true",
-                   help="also remove <ref>...</ref> citation links")
-    p.set_defaults(fn=cmd_body_edges)
 
     p = sub.add_parser("analyze")
     p.add_argument("--subset", default=None, help="subset name under <base>/graph/subsets/")
@@ -205,6 +182,37 @@ def main():
     p.add_argument("--hub-weight", default=None, help="'log' or 'deg<alpha>' e.g. deg1, deg0.5")
     p.add_argument("--engine", default="igraph", choices=["igraph", "leidenalg"])
     p.set_defaults(fn=cmd_analyze)
+
+    # ---- パイプライン基盤(stages/plan/run)。ステージ契約は wu/stages/ 参照 ----
+    p = sub.add_parser("stages", help="登録済みステージと入出力契約の一覧")
+    p.set_defaults(fn=cmd_stages)
+
+    def _add_pipe_args(sp, with_run_opts=True):
+        sp.add_argument("targets", nargs="+",
+                        help="ステージ名(複数可)または all(= canonical 全 chain)")
+        sp.add_argument("--config", default=None,
+                        help="設定 JSON(既定: なし = ステージ既定値のみ。"
+                             "リポジトリ同梱の正準設定は configs/canonical.json)")
+        sp.add_argument("--set", action="append", dest="overrides",
+                        metavar="STAGE.KEY=VALUE",
+                        help="パラメータ上書き(複数可。値は JSON リテラル解釈)")
+        sp.add_argument("--galaxy-tag", default=None)
+        sp.add_argument("--macro-tag", default=None)
+        sp.add_argument("--force", action="store_true",
+                        help="生成物があっても再実行する")
+        if with_run_opts:
+            sp.add_argument("--run", default=None,
+                            help="座標 run 名(既定: 正典 ACTIVE_LAYOUT_RUN)")
+            sp.add_argument("--label", default=None,
+                            help="manifest ファイル名用ラベル")
+
+    p = sub.add_parser("plan", help="実行計画の表示(dry-run、副作用なし)")
+    _add_pipe_args(p, with_run_opts=False)
+    p.set_defaults(fn=cmd_plan)
+
+    p = sub.add_parser("run", help="ステージ実行 + manifest 記録")
+    _add_pipe_args(p)
+    p.set_defaults(fn=cmd_run)
 
     a = ap.parse_args()
     a.fn(a)
