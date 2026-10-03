@@ -15,7 +15,8 @@
 //
 // 注意:
 // - ラベルテクスチャは銀河単位で遅延生成しキャッシュする(上限あり)。
-// - 球殻は近距離のみ表示(fade)、遠景ではクラスタだけ。
+// - 球殻 = 選択インジケータ(選択中の銀河のみ表示。生成は shells.ts へ分離 =
+//   将来の削除候補。マクロ球殻は廃止済み)。
 // - 測光: 塊スプライトとバンドルは通常ブレンド(重なりが線色へ収束し白飛びしない)。
 //   バンドルは次数由来のハブ抑制 ink を頂点色へ焼き、ハブ交差点の放射状白飛びを縛る。
 // - ベール消灯はフォーカス重みと包含距離(containVeil)の max: カメラが実体内に
@@ -27,6 +28,7 @@ import { LOD, EXPOSURE, screenPx, clumpAlpha, galaxyLabelAlpha, macroLabelAlpha,
 import { FOCUS, containVeil, dimOf, galaxyMember } from './focus'
 import type { FocusState } from './focus'
 import type { GalaxyTextureSet } from './galaxyTextures'
+import { makeShellLines, SHELL_OPACITY } from './shells'
 
 // ラベルプール上限。
 const LABEL_POOL = 42
@@ -59,12 +61,12 @@ export class UniverseLayer {
   // マクロ描画体。
   private macroClumps: THREE.Sprite[] = []
   private macroGlows: THREE.Sprite[] = []
-  private macroShells: THREE.LineSegments[] = []
   private macroLabels: THREE.Sprite[] = []
   private macroBundleMat: THREE.LineBasicMaterial
   private macroBundleLines: THREE.LineSegments
   // 銀河描画体。
   private galClumps: THREE.Sprite[] = []
+  // 球殻(選択インジケータ。生成と削除単位は shells.ts 参照)。
   private galShells: THREE.LineSegments[] = []
   private galHubs: THREE.Points[] = []
   // 銀河毎の視覚変奏(構築時に決定、update では参照のみ)。
@@ -120,10 +122,6 @@ export class UniverseLayer {
       gs.renderOrder = 2
       this.group.add(gs)
       this.macroGlows.push(gs)
-      const shell = this.makeShell(m.x, m.y, m.z, m.r, m.hue, 0.7, 0.22, 3)
-      shell.visible = false
-      this.group.add(shell)
-      this.macroShells.push(shell)
       const lm = new THREE.SpriteMaterial({
         map: this.makeLabelTexture(m.label, labelFont, '#fde8c9', 512),
         transparent: true,
@@ -269,8 +267,7 @@ export class UniverseLayer {
       this.galFlat.push(flat)
       this.galSizeK.push(sizeK)
       this.galOpK.push(opK)
-      const shell = this.makeShell(g.x, g.y, g.z, g.r, meta.hue, 0.75, 0.26, 2)
-      shell.visible = false
+      const shell = makeShellLines(g.x, g.y, g.z, g.r, meta.hue, 0.75, 0.3, 2)
       this.group.add(shell)
       this.galShells.push(shell)
       const hub = this.makeGalaxyHubs(g)
@@ -348,7 +345,7 @@ export class UniverseLayer {
   }
 
   // 毎フレーム更新(塊の自己相似 px・距離フェード・フォーカス測光・ラベル LOD)。
-  update(camera: THREE.PerspectiveCamera, tiles: Map<number, number>, shellsOn: boolean, labelsOn: boolean, focus: FocusState): void {
+  update(camera: THREE.PerspectiveCamera, tiles: Map<number, number>, selectedGid: number, labelsOn: boolean, focus: FocusState): void {
     this.camPos.copy(camera.position)
     const rect = this.getSize()
     this.innerH = rect.h
@@ -371,9 +368,6 @@ export class UniverseLayer {
       this.macroGlows[i].scale.setScalar(worldSize * 2.4)
       ;(this.macroClumps[i].material as THREE.SpriteMaterial).opacity = 0.92 * fade * vis
       ;(this.macroGlows[i].material as THREE.SpriteMaterial).opacity = 0.16 * fade * vis
-      const shMat = this.macroShells[i].material as THREE.LineBasicMaterial
-      shMat.opacity = 0.16 * vis
-      this.macroShells[i].visible = shellsOn && fade > 0.85 && d < m.r * 26 && shMat.opacity > 0.012
       const la = labelsOn ? macroLabelAlpha(px) * fade * dim : 0
       const lmat = this.macroLabels[i].material as THREE.SpriteMaterial
       lmat.opacity = la
@@ -403,9 +397,10 @@ export class UniverseLayer {
       s.scale.set(ws, ws * this.galFlat[i], 1)
       ;(s.material as THREE.SpriteMaterial).opacity = 0.9 * alpha * this.galOpK[i]
       s.visible = alpha > 0.02
+      // 球殻 = 選択インジケータ: 選択中の銀河のみ表示(潜入時は veil で消灯)。
       const gshMat = this.galShells[i].material as THREE.LineBasicMaterial
-      gshMat.opacity = 0.16 * dim * (1 - veil)
-      this.galShells[i].visible = shellsOn && emerge === 1 && tilePx > LOD.resolve * 0.8 && gshMat.opacity > 0.012
+      gshMat.opacity = SHELL_OPACITY * dim * (1 - veil)
+      this.galShells[i].visible = g.gid === selectedGid && gshMat.opacity > 0.012
       const hub = this.galHubs[i]
       const hmat = hub.material as THREE.ShaderMaterial
       hub.visible = emerge === 1 && tilePx > LOD.emerge
@@ -528,42 +523,6 @@ void main() {
     pts.frustumCulled = false
     pts.renderOrder = 5
     return pts
-  }
-
-  // ワイヤー球殻を生成する。
-  private makeShell(x: number, y: number, z: number, r: number, hue: number, sat: number, light: number, renderOrder: number): THREE.LineSegments {
-    const pts: number[] = []
-    const rings = 7
-    const segs = 48
-    for (let i = 1; i < rings; i++) {
-      const phi = (i / rings) * Math.PI
-      const rr = r * Math.sin(phi)
-      const yy = r * Math.cos(phi) * 0.6
-      for (let j = 0; j < segs; j++) {
-        const t0 = (j / segs) * Math.PI * 2
-        const t1 = ((j + 1) / segs) * Math.PI * 2
-        pts.push(x + rr * Math.cos(t0), y + yy, z + rr * Math.sin(t0))
-        pts.push(x + rr * Math.cos(t1), y + yy, z + rr * Math.sin(t1))
-      }
-    }
-    const meridians = 9
-    for (let k = 0; k < meridians; k++) {
-      const th = (k / meridians) * Math.PI * 2
-      for (let j = 0; j < 24; j++) {
-        const p0 = (j / 24) * Math.PI
-        const p1 = ((j + 1) / 24) * Math.PI
-        pts.push(x + r * Math.sin(p0) * Math.cos(th), y + r * Math.cos(p0) * 0.6, z + r * Math.sin(p0) * Math.sin(th))
-        pts.push(x + r * Math.sin(p1) * Math.cos(th), y + r * Math.cos(p1) * 0.6, z + r * Math.sin(p1) * Math.sin(th))
-      }
-    }
-    const geo = new THREE.BufferGeometry()
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3))
-    tmpColor.setHSL(hue, sat, light)
-    const mat = new THREE.LineBasicMaterial({ color: tmpColor, transparent: true, opacity: 0.16, depthWrite: false })
-    const ls = new THREE.LineSegments(geo, mat)
-    ls.frustumCulled = false
-    ls.renderOrder = renderOrder
-    return ls
   }
 
   // 銀河名ラベルプールを更新する(px 上位 N、距離 LOD α × フォーカス dim)。

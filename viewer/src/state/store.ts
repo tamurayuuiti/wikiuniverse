@@ -61,8 +61,6 @@ export interface Toggles {
   edges: boolean
   cross: boolean
   labels: boolean
-  shells: boolean
-  dust: boolean
 }
 
 // 潜入フォーカスの読み取り値(HUD 表示用)。
@@ -115,7 +113,7 @@ export const useStore = create<ViewerState & ViewerActions>((set, get) => ({
   selection: { kind: 'none' },
   hover: null,
   panel: { kind: 'overview', galaxies: 0, macros: 0 },
-  toggles: { stars: true, edges: true, cross: true, labels: true, shells: true, dust: true },
+  toggles: { stars: true, edges: true, cross: true, labels: true },
   zSquash: 1,
   zoomLabel: 'universe',
   focusInfo: null,

@@ -187,8 +187,9 @@ export class ViewerCore {
     // StarField 同期(星・内部エッジ・クロスアーク・ego、フォーカス減光込み)。
     this.stars.group.visible = s.toggles.stars
     if (s.toggles.stars) this.stars.sync(this.camera, tiles, dt, s.toggles.cross, focus)
-    // 骨格更新(塊 px・ラベル・フェード・フォーカス測光)。
-    this.uni.update(this.camera, tiles, s.toggles.shells, s.toggles.labels, focus)
+    // 骨格更新(塊 px・ラベル・フェード・フォーカス測光・選択球殻)。
+    const selGid = s.selection.kind === 'none' ? -1 : s.selection.gid
+    this.uni.update(this.camera, tiles, selGid, s.toggles.labels, focus)
     this.uni.tick(this.time)
     // エッジ tier α(距離帯 × 潜入フェード: 焦点内では飾り線が実アークに主役を譲る)。
     this.uni.setBundleAlphas(

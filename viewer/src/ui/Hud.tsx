@@ -89,10 +89,6 @@ export function Hud({ commands }: Props) {
           <input type="checkbox" checked={toggles.labels} onChange={e => setToggle('labels', e.target.checked)} />
           ラベル
         </label>
-        <label className="hud-check">
-          <input type="checkbox" checked={toggles.shells} onChange={e => setToggle('shells', e.target.checked)} />
-          球殻
-        </label>
       </div>
       <div className="hud-group">
         <span className="hud-stat">z {zSquash.toFixed(2)}</span>
